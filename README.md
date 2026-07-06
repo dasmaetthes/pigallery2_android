@@ -4,6 +4,8 @@ A modern and native Android companion application designed specifically for brow
 
 This client delivers a fluid and beautifully designed user interface, allowing you to easily browse your directories, query saved albums, view recognized faces, and rediscover your memories with ease.
 
+<img src="https://github.com/dasmaetthes/pigallery2_android/blob/main/.github/images/pigallery_1.png?raw=true" alt="drawing" width="200"/> <img src="https://github.com/dasmaetthes/pigallery2_android/blob/main/.github/images/pigallery_2.png?raw=true" alt="drawing" width="200"/> <img src="https://github.com/dasmaetthes/pigallery2_android/blob/main/.github/images/pigallery_3.png?raw=true" alt="drawing" width="200"/> <img src="https://github.com/dasmaetthes/pigallery2_android/blob/main/.github/images/pigallery_4.png?raw=true" alt="drawing" width="200"/>
+
 ---
 
 ## 🌟 Key Features
