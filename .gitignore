@@ -16,4 +16,10 @@
 local.properties
 .env
 debug.keystore
-/.github
+.github/
+gradle/
+node_modules/
+gradlew.bat
+gradlew
+my-upload-key.jks
+
