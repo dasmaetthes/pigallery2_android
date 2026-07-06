@@ -19,7 +19,7 @@ This client delivers a fluid and beautifully designed user interface, allowing y
   - Camera, model, and lens type.
   - ISO, Exposure, Focal Length, and Aperture.
   - Keywords, and detected faces.
-- **Smart Query Albums:** Seamless access to saved albums created within the PiGallery2 web interface, supporting customizable item sorting.
+- **Smart Albums:** Seamless access to saved albums created within the PiGallery2 web interface, supporting customizable item sorting.
 - **People & Face Recognition:** Browse a structured grid of recognized people.
   - Manage and mark favorite people.
   - Note that it doesn’t perform face recognition on its own.
