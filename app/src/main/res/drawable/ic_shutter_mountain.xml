@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Background Black -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M0,0h108v108h-108z" />
+
+    <!-- Outer circle of the aperture -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4"
+        android:pathData="M 54,6 A 48,48 0 1,0 54,102 A 48,48 0 1,0 54,6" />
+
+    <!-- 6 Curved Aperture Blades using rotated groups -->
+    <group android:pivotX="54" android:pivotY="54" android:rotation="0">
+        <path android:strokeColor="#FFFFFF" android:strokeWidth="3" android:strokeLineCap="round" android:pathData="M 54,6 A 40,40 0 0,0 28,34" />
+    </group>
+    <group android:pivotX="54" android:pivotY="54" android:rotation="60">
+        <path android:strokeColor="#FFFFFF" android:strokeWidth="3" android:strokeLineCap="round" android:pathData="M 54,6 A 40,40 0 0,0 28,34" />
+    </group>
+    <group android:pivotX="54" android:pivotY="54" android:rotation="120">
+        <path android:strokeColor="#FFFFFF" android:strokeWidth="3" android:strokeLineCap="round" android:pathData="M 54,6 A 40,40 0 0,0 28,34" />
+    </group>
+    <group android:pivotX="54" android:pivotY="54" android:rotation="180">
+        <path android:strokeColor="#FFFFFF" android:strokeWidth="3" android:strokeLineCap="round" android:pathData="M 54,6 A 40,40 0 0,0 28,34" />
+    </group>
+    <group android:pivotX="54" android:pivotY="54" android:rotation="240">
+        <path android:strokeColor="#FFFFFF" android:strokeWidth="3" android:strokeLineCap="round" android:pathData="M 54,6 A 40,40 0 0,0 28,34" />
+    </group>
+    <group android:pivotX="54" android:pivotY="54" android:rotation="300">
+        <path android:strokeColor="#FFFFFF" android:strokeWidth="3" android:strokeLineCap="round" android:pathData="M 54,6 A 40,40 0 0,0 28,34" />
+    </group>
+
+    <!-- Frame with Mountains -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineJoin="round"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="
+            M 24,70
+            L 24,34
+            L 84,34
+            L 84,70
+            L 74,70
+            L 60,50
+            L 48,65
+            L 34,45
+            L 24,70
+            Z" />
+
+    <!-- Sun -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 67,42 a 4.5,4.5 0 1 0 9,0 a 4.5,4.5 0 1 0 -9,0" />
+
+</vector>

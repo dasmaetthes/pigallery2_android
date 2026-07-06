@@ -1,0 +1,6 @@
+{
+  "name": "PiGallery2",
+  "description": "A native Android client for PiGallery2 photo and video galleries.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
