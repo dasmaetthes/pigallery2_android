@@ -2367,7 +2367,7 @@ fun AboutDialog(onDismiss: () -> Unit) {
                 val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
                 Button(
                     onClick = {
-                        uriHandler.openUri("https://github.com/bpatrik/pigallery2") // Update this link to the actual repo later
+                        uriHandler.openUri("https://github.com/dasmaetthes/pigallery2_android")
                     },
                     modifier = Modifier
                         .fillMaxWidth()
