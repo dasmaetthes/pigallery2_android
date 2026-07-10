@@ -15,6 +15,7 @@ import com.example.data.ApiSubFolderCache
 import com.example.data.PiGalleryApi
 import com.example.data.PreferencesManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -90,6 +91,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     private val _activeMediaList = MutableStateFlow<List<ApiMedia>>(emptyList())
     val activeMediaList: StateFlow<List<ApiMedia>> = _activeMediaList.asStateFlow()
+    
+    val videoFinished = MutableSharedFlow<Unit>(replay = 0)
+
+    fun emitVideoFinished() {
+        viewModelScope.launch { videoFinished.emit(Unit) }
+    }
 
     // Albums List State
     private val _albumsState = MutableStateFlow<AlbumsUiState>(AlbumsUiState.Loading)

@@ -155,6 +155,7 @@ fun LoginScreen(
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()
+                            .tvFocus(scale = 1.02f, shape = RoundedCornerShape(4.dp))
                             .testTag("server_url_input"),
                         colors = OutlinedTextFieldDefaults.colors()
                     )
@@ -173,6 +174,7 @@ fun LoginScreen(
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()
+                            .tvFocus(scale = 1.02f, shape = RoundedCornerShape(4.dp))
                             .testTag("username_input")
                     )
 
@@ -201,6 +203,7 @@ fun LoginScreen(
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()
+                            .tvFocus(scale = 1.02f, shape = RoundedCornerShape(4.dp))
                             .testTag("password_input")
                     )
 
@@ -208,7 +211,10 @@ fun LoginScreen(
 
                     // Insecure SSL Checkbox
                     Row(
-                        modifier = Modifier.fillMaxWidth().clickable { allowInsecureSsl = !allowInsecureSsl },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .tvFocus(scale = 1.02f, shape = RoundedCornerShape(8.dp))
+                            .clickable { allowInsecureSsl = !allowInsecureSsl },
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         androidx.compose.material3.Checkbox(
@@ -231,6 +237,7 @@ fun LoginScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(50.dp)
+                            .tvFocus(scale = 1.04f, shape = RoundedCornerShape(12.dp))
                             .testTag("connect_button"),
                         shape = RoundedCornerShape(12.dp)
                     ) {
@@ -256,7 +263,9 @@ fun LoginScreen(
                             username = ""
                             password = ""
                         },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .tvFocus(scale = 1.04f, shape = RoundedCornerShape(12.dp)),
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Text("Fill with Public Demo Server")

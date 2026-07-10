@@ -1,4 +1,9 @@
 package com.example.ui
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.text.style.TextAlign
 
 import androidx.activity.compose.BackHandler
@@ -26,12 +31,14 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.foundation.focusable
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
@@ -86,6 +93,92 @@ import com.example.data.ApiAlbum
 import com.example.data.ApiDirectory
 import com.example.data.ApiMedia
 import com.example.data.ApiSubFolder
+import androidx.compose.ui.composed
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.animation.core.animateFloatAsState
+
+import android.content.pm.PackageManager
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AdaptivePullToRefreshBox(
+    isRefreshing: Boolean,
+    onRefresh: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable BoxScope.() -> Unit
+) {
+    val context = LocalContext.current
+    val isTv = context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+    if (isTv) {
+        Box(modifier = modifier, content = content)
+    } else {
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = onRefresh,
+            modifier = modifier,
+            content = content
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+fun Modifier.tvFocus(
+    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(12.dp),
+    scale: Float = 1.1f,
+    showBorder: Boolean = true
+): Modifier = this.composed {
+    var isFocused by remember { mutableStateOf(false) }
+    val animatedScale by animateFloatAsState(
+        targetValue = if (isFocused) scale else 1.0f,
+        label = "tv_focus_scale"
+    )
+    
+    val borderModifier = if (showBorder && isFocused) {
+        Modifier.border(4.dp, MaterialTheme.colorScheme.primary, shape)
+    } else {
+        Modifier
+    }
+
+    this
+        .onFocusChanged { isFocused = it.isFocused }
+        .then(borderModifier)
+        .graphicsLayer {
+            scaleX = animatedScale
+            scaleY = animatedScale
+            // Removed shadowElevation to avoid gray border effect in dark mode
+            this.shape = shape
+            clip = true
+        }
+}
+
+fun Modifier.tvSlider(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
+    steps: Int = 0
+): Modifier = this.onPreviewKeyEvent { event ->
+    if (event.type == KeyEventType.KeyDown) {
+        val stepSize = if (steps > 0) (valueRange.endInclusive - valueRange.start) / (steps + 1) else (valueRange.endInclusive - valueRange.start) / 10f
+        when (event.key) {
+            Key.DirectionLeft -> {
+                onValueChange((value - stepSize).coerceIn(valueRange))
+                true
+            }
+            Key.DirectionRight -> {
+                onValueChange((value + stepSize).coerceIn(valueRange))
+                true
+            }
+            else -> false
+        }
+    } else {
+        // Consume ACTION_UP for left/right
+        if (event.key == Key.DirectionLeft || event.key == Key.DirectionRight) {
+            true
+        } else {
+            false
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -482,7 +575,7 @@ fun GalleryTabContent(viewModel: GalleryViewModel) {
             HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
 
             val isRefreshing = galleryState is GalleryUiState.Loading
-            PullToRefreshBox(
+            AdaptivePullToRefreshBox(
                 isRefreshing = isRefreshing,
                 onRefresh = { viewModel.loadCurrentDirectory() },
                 modifier = Modifier.weight(1f).fillMaxWidth()
@@ -650,7 +743,7 @@ fun AlbumsTabContent(viewModel: GalleryViewModel) {
         // Render current album's content
         Column(modifier = Modifier.fillMaxSize()) {
             val isRefreshing = albumContentState is GalleryUiState.Loading
-            PullToRefreshBox(
+            AdaptivePullToRefreshBox(
                 isRefreshing = isRefreshing,
                 onRefresh = { selectedAlbum?.let { viewModel.selectAlbum(it) } },
                 modifier = Modifier.weight(1f).fillMaxWidth()
@@ -689,7 +782,7 @@ fun AlbumsTabContent(viewModel: GalleryViewModel) {
     } else {
         // Render Album list
         val isRefreshing = albumsState is AlbumsUiState.Loading
-        PullToRefreshBox(
+        AdaptivePullToRefreshBox(
             isRefreshing = isRefreshing,
             onRefresh = { viewModel.loadAlbums() },
             modifier = Modifier.fillMaxSize()
@@ -713,6 +806,19 @@ fun AlbumsTabContent(viewModel: GalleryViewModel) {
 
                         val spacingDp = spacing.dp
                         val cornerRadiusDp = cornerRadius.dp
+                        
+                        val isTv = LocalContext.current.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+                        val firstItemFocusRequester = remember { FocusRequester() }
+                        
+                        LaunchedEffect(albums) {
+                            if (isTv && albums.isNotEmpty()) {
+                                try {
+                                    kotlinx.coroutines.delay(100)
+                                    firstItemFocusRequester.requestFocus()
+                                } catch (e: Exception) {}
+                            }
+                        }
+                        
                         LazyVerticalGrid(
                             columns = GridCells.Fixed(itemsPerRow),
                             contentPadding = PaddingValues(16.dp),
@@ -720,8 +826,10 @@ fun AlbumsTabContent(viewModel: GalleryViewModel) {
                             horizontalArrangement = Arrangement.spacedBy(spacingDp),
                             modifier = Modifier.fillMaxSize()
                         ) {
-                            items(albums) { album ->
+                            items(count = albums.size, key = { index -> "album_${albums[index].name}_${albums[index].id}" }) { index -> val album = albums[index]
+                                val focusModifier = if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
                                 AlbumCard(
+                                    modifier = focusModifier,
                                     album = album,
                                     viewModel = viewModel,
                                     cornerRadius = cornerRadiusDp,
@@ -775,6 +883,18 @@ fun RediscoverTabContent(viewModel: GalleryViewModel) {
                 
                     val spacingDp = spacing.dp
                     val cornerRadiusDp = cornerRadius.dp
+                    val isTv = LocalContext.current.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+                    val firstItemFocusRequester = remember { FocusRequester() }
+                    
+                    LaunchedEffect(grouped) {
+                        if (isTv && grouped.isNotEmpty()) {
+                            try {
+                                kotlinx.coroutines.delay(100)
+                                firstItemFocusRequester.requestFocus()
+                            } catch (e: Exception) {}
+                        }
+                    }
+
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(itemsPerRow.toInt()),
                         modifier = Modifier.fillMaxSize(),
@@ -787,14 +907,21 @@ fun RediscoverTabContent(viewModel: GalleryViewModel) {
                             val currentYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
                             val diff = currentYear - year
                             
+                            val isFirstYear = year == grouped.keys.first()
+                            
                             // Header
                             item(span = { GridItemSpan(itemsPerRow.toInt()) }) {
                                 Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
                                     val hasMore = mediaList.size > itemsPerRow.toInt()
+                                    
+                                    val focusModifier = if (isFirstYear) Modifier.focusRequester(firstItemFocusRequester) else Modifier
+                                    
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .then(if (hasMore) Modifier.clickable { expandedYears[year] = !isExpanded } else Modifier),
+                                            .then(focusModifier)
+                                            .tvFocus(shape = RoundedCornerShape(8.dp), showBorder = true)
+                                            .then(if (hasMore) Modifier.clickable { expandedYears[year] = !isExpanded } else Modifier.focusable()),
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
@@ -1086,7 +1213,16 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                     viewModel.setItemsPerRowPortrait(it.toInt())
                                 },
                                 valueRange = 1f..6f,
-                                steps = 4
+                                steps = 4,
+                                modifier = Modifier.tvSlider(
+                                    value = itemsPerRowPortrait,
+                                    onValueChange = {
+                                        itemsPerRowPortrait = it
+                                        viewModel.setItemsPerRowPortrait(it.toInt())
+                                    },
+                                    valueRange = 1f..6f,
+                                    steps = 4
+                                )
                             )
                         }
 
@@ -1110,7 +1246,16 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                     viewModel.setItemsPerRowLandscape(it.toInt())
                                 },
                                 valueRange = 2f..10f,
-                                steps = 7
+                                steps = 7,
+                                modifier = Modifier.tvSlider(
+                                    value = itemsPerRowLandscape,
+                                    onValueChange = {
+                                        itemsPerRowLandscape = it
+                                        viewModel.setItemsPerRowLandscape(it.toInt())
+                                    },
+                                    valueRange = 2f..10f,
+                                    steps = 7
+                                )
                             )
                         }
 
@@ -1134,7 +1279,16 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                     viewModel.setSpacing(it.toInt())
                                 },
                                 valueRange = 0f..24f,
-                                steps = 24
+                                steps = 24,
+                                modifier = Modifier.tvSlider(
+                                    value = spacing,
+                                    onValueChange = {
+                                        spacing = it
+                                        viewModel.setSpacing(it.toInt())
+                                    },
+                                    valueRange = 0f..24f,
+                                    steps = 24
+                                )
                             )
                         }
 
@@ -1158,7 +1312,16 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                     viewModel.setCornerRadius(it.toInt())
                                 },
                                 valueRange = 0f..32f,
-                                steps = 32
+                                steps = 32,
+                                modifier = Modifier.tvSlider(
+                                    value = cornerRadius,
+                                    onValueChange = {
+                                        cornerRadius = it
+                                        viewModel.setCornerRadius(it.toInt())
+                                    },
+                                    valueRange = 0f..32f,
+                                    steps = 32
+                                )
                             )
                         }
 
@@ -1237,7 +1400,13 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                  value = daysRange.toFloat(),
                                  onValueChange = { viewModel.setRediscoverDays(it.toInt()) },
                                  valueRange = 1f..14f,
-                                 steps = 13
+                                 steps = 13,
+                                 modifier = Modifier.tvSlider(
+                                     value = daysRange.toFloat(),
+                                     onValueChange = { viewModel.setRediscoverDays(it.toInt()) },
+                                     valueRange = 1f..14f,
+                                     steps = 13
+                                 )
                              )
                         }
 
@@ -1255,7 +1424,13 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                  value = slideDuration.toFloat(),
                                  onValueChange = { viewModel.setSlideshowDuration(it.toInt()) },
                                  valueRange = 1f..10f,
-                                 steps = 8
+                                 steps = 8,
+                                 modifier = Modifier.tvSlider(
+                                     value = slideDuration.toFloat(),
+                                     onValueChange = { viewModel.setSlideshowDuration(it.toInt()) },
+                                     valueRange = 1f..10f,
+                                     steps = 8
+                                 )
                              )
                         }
 
@@ -1482,6 +1657,7 @@ fun ThumbnailOverlay(
 
 @Composable
 fun AlbumCard(
+    modifier: Modifier = Modifier,
     album: ApiAlbum,
     viewModel: GalleryViewModel,
     cornerRadius: Dp,
@@ -1494,9 +1670,11 @@ fun AlbumCard(
     val cardRatio = if (aspectRatio > 0f) aspectRatio else 1f
 
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .aspectRatio(cardRatio)
+            .clip(RoundedCornerShape(cornerRadius))
+            .tvFocus(shape = RoundedCornerShape(cornerRadius))
             .clickable { onClick() },
         shape = RoundedCornerShape(cornerRadius),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -1568,6 +1746,7 @@ fun RediscoverMediaItem(
             .fillMaxWidth()
             .aspectRatio(cardRatio)
             .clip(RoundedCornerShape(cornerRadius))
+            .tvFocus(shape = RoundedCornerShape(cornerRadius))
             .combinedClickable(
                 onClick = {
                     if (isSelectMode) {
@@ -1711,7 +1890,19 @@ fun GalleryContentGrid(
         }
     }
 
-                    LazyVerticalGrid(
+    val isTv = LocalContext.current.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+    val firstItemFocusRequester = remember { FocusRequester() }
+    
+    LaunchedEffect(subfolders, mediaList) {
+        if (isTv && (subfolders.isNotEmpty() || mediaList.isNotEmpty())) {
+            try {
+                kotlinx.coroutines.delay(100)
+                firstItemFocusRequester.requestFocus()
+            } catch (e: Exception) {}
+        }
+    }
+
+    LazyVerticalGrid(
         columns = GridCells.Fixed(itemsPerRow),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(spacingDp),
@@ -1719,16 +1910,22 @@ fun GalleryContentGrid(
         modifier = Modifier.fillMaxSize()
     ) {
         // Render Subfolders
-        items(subfolders) { folder ->
+        items(count = subfolders.size, key = { index -> "folder_${subfolders[index].path}" }) { index -> val folder = subfolders[index]
             val coverUrl = viewModel.getFolderCoverUrl(folder)
+            
+            val focusModifier = if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
             
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(1f)
+                    .clip(RoundedCornerShape(cornerRadiusDp))
+                    .then(focusModifier)
                     .then(
                         if (!isSelectMode) {
-                            Modifier.clickable { onFolderClick(folder) }
+                            Modifier
+                                .tvFocus(shape = RoundedCornerShape(cornerRadiusDp))
+                                .clickable { onFolderClick(folder) }
                         } else {
                             Modifier.graphicsLayer(alpha = 0.4f)
                         }
@@ -1815,6 +2012,7 @@ fun GalleryContentGrid(
             }
 
         // Render Media grid
+        val hasSubfolders = subfolders.isNotEmpty()
         groupedMedia.forEach { (monthYear, mediaItems) ->
             item(span = { GridItemSpan(maxLineSpan) }) {
                 Text(
@@ -1825,10 +2023,14 @@ fun GalleryContentGrid(
                     modifier = Modifier.padding(start = 4.dp, top = 24.dp, bottom = 8.dp, end = 4.dp).fillMaxWidth()
                 )
             }
-            items(mediaItems) { media ->
+            items(count = mediaItems.size, key = { index -> "media_${mediaItems[index].id ?: mediaItems[index].name}" }) { index -> val media = mediaItems[index]
             val isSelected = selectedMediaForShare.contains(media)
 
+            val isFirstOverallMedia = !hasSubfolders && monthYear == groupedMedia.keys.first() && index == 0
+            val focusModifier = if (isFirstOverallMedia) Modifier.focusRequester(firstItemFocusRequester) else Modifier
+
             val cardModifier = Modifier
+                .then(focusModifier)
                 .fillMaxWidth()
                 .let { modifier ->
                     val ratio = aspectRatio
@@ -1839,6 +2041,7 @@ fun GalleryContentGrid(
                     }
                 }
                 .clip(RoundedCornerShape(cornerRadiusDp))
+                .tvFocus(shape = RoundedCornerShape(cornerRadiusDp))
                 .combinedClickable(
                     onClick = {
                         if (isSelectMode) {
@@ -2182,7 +2385,7 @@ fun PersonsTabContent(viewModel: GalleryViewModel) {
     if (selectedPerson != null) {
         // Render current person's content
         val isRefreshing = personContentState is GalleryUiState.Loading
-        PullToRefreshBox(
+        AdaptivePullToRefreshBox(
             isRefreshing = isRefreshing,
             onRefresh = { selectedPerson?.let { viewModel.selectPerson(it) } },
             modifier = Modifier.fillMaxSize()
@@ -2220,7 +2423,7 @@ fun PersonsTabContent(viewModel: GalleryViewModel) {
     } else {
         // Render persons list
         val isRefreshing = personsState is PersonsUiState.Loading
-        PullToRefreshBox(
+        AdaptivePullToRefreshBox(
             isRefreshing = isRefreshing,
             onRefresh = { viewModel.loadPersons() },
             modifier = Modifier.fillMaxSize()
@@ -2241,6 +2444,19 @@ fun PersonsTabContent(viewModel: GalleryViewModel) {
                         EmptyStateView("No persons found", "No faces detected or server hasn't scanned persons yet.")
                     } else {
                         val spacingDp = spacing.dp
+                        
+                        val isTv = LocalContext.current.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+                        val firstItemFocusRequester = remember { FocusRequester() }
+                        
+                        LaunchedEffect(state.persons) {
+                            if (isTv && state.persons.isNotEmpty()) {
+                                try {
+                                    kotlinx.coroutines.delay(100)
+                                    firstItemFocusRequester.requestFocus()
+                                } catch (e: Exception) {}
+                            }
+                        }
+                        
                         LazyVerticalGrid(
                             columns = GridCells.Fixed(itemsPerRow),
                             modifier = Modifier.fillMaxSize(),
@@ -2248,8 +2464,10 @@ fun PersonsTabContent(viewModel: GalleryViewModel) {
                             horizontalArrangement = Arrangement.spacedBy(spacingDp),
                             verticalArrangement = Arrangement.spacedBy(spacingDp)
                         ) {
-                            items(state.persons, key = { it.name }) { person ->
+                            items(count = state.persons.size, key = { index -> state.persons[index].name }) { index -> val person = state.persons[index]
+                                val focusModifier = if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
                                 PersonItem(
+                                    modifier = focusModifier,
                                     person = person,
                                     viewModel = viewModel,
                                     onClick = { viewModel.selectPerson(person) }
@@ -2264,7 +2482,7 @@ fun PersonsTabContent(viewModel: GalleryViewModel) {
 }
 
 @Composable
-fun PersonItem(person: com.example.data.ApiPerson, viewModel: GalleryViewModel, onClick: () -> Unit) {
+fun PersonItem(modifier: Modifier = Modifier, person: com.example.data.ApiPerson, viewModel: GalleryViewModel, onClick: () -> Unit) {
     val serverUrl = viewModel.prefs.serverUrl ?: ""
     val apiPrefix = viewModel.prefs.apiPrefix
     val thumbnailUrl = "${serverUrl}${apiPrefix}/person/${person.name}/thumbnail"
@@ -2284,9 +2502,11 @@ fun PersonItem(person: com.example.data.ApiPerson, viewModel: GalleryViewModel, 
         .build()
 
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .aspectRatio(cardRatio)
+            .clip(RoundedCornerShape(cornerRadius.dp))
+            .tvFocus(shape = RoundedCornerShape(cornerRadius.dp))
             .clickable { onClick() },
         shape = RoundedCornerShape(cornerRadius.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -2352,7 +2572,7 @@ fun AboutDialog(onDismiss: () -> Unit) {
                     val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
                     packageInfo.versionName
                 } catch (e: Exception) {
-                    "1.0"
+                    "1.1"
                 }
                 Text("Version $version", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(16.dp))
