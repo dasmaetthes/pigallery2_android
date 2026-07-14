@@ -525,7 +525,7 @@ fun MediaViewerDialog(
                             )
                         }
 
-                        if (currentMedia.metadata?.gps != null && onOpenMap != null) {
+                        if (currentMedia.metadata?.gps != null && onOpenMap != null && !isTv) {
                             IconButton(
                                 onClick = {
                                     onOpenMap(currentMedia)

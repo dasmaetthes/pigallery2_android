@@ -189,6 +189,7 @@ fun GalleryScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val isTv = context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
     val activeTab by viewModel.activeTab.collectAsState()
     val pathHistory by viewModel.pathHistory.collectAsState()
     val selectedMedia by viewModel.selectedMedia.collectAsState()
@@ -408,7 +409,7 @@ fun GalleryScreen(
                         val hasGeotagged = remember(mapMediaList) {
                             mapMediaList.any { it.metadata?.gps != null }
                         }
-                        val showMapButton = when(activeTab) {
+                        val showMapButton = !isTv && when(activeTab) {
                             ActiveTab.GALLERY -> hasGeotagged
                             ActiveTab.ALBUMS -> selectedAlbum != null && hasGeotagged
                             ActiveTab.PERSONS -> selectedPerson != null && hasGeotagged
@@ -598,21 +599,8 @@ fun GalleryScreen(
 
         }
     }
-
-    // Fullscreen view popup dialog
-    selectedMedia?.let { media ->
-        MediaViewerDialog(
-            media = media,
-            viewModel = viewModel,
-            onDismiss = { viewModel.selectMedia(null) },
-            onOpenMap = { clickedMedia ->
-                mapInitialMediaId = clickedMedia.id?.toString()
-                showMapDialog = true
-            },
-            isMapOpen = showMapDialog
-        )
-    }
 }
+
     if (showAboutDialog) {
         AboutDialog(onDismiss = { showAboutDialog = false })
     }
@@ -627,7 +615,7 @@ fun GalleryScreen(
             }
         )
     }
-    if (showMapDialog) {
+    if (showMapDialog && !isTv) {
         MapBrowserDialog(
             mediaList = mapMediaList,
             viewModel = viewModel,
@@ -638,7 +626,23 @@ fun GalleryScreen(
             }
         )
     }
+
+    // Fullscreen view popup dialog
+    selectedMedia?.let { media ->
+        MediaViewerDialog(
+            media = media,
+            viewModel = viewModel,
+            onDismiss = { viewModel.selectMedia(null) },
+            onOpenMap = { clickedMedia ->
+                mapInitialMediaId = clickedMedia.id?.toString()
+                showMapDialog = true
+                viewModel.selectMedia(null)
+            },
+            isMapOpen = showMapDialog
+        )
+    }
 }
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -2676,7 +2680,7 @@ fun AboutDialog(onDismiss: () -> Unit) {
                     val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
                     packageInfo.versionName
                 } catch (e: Exception) {
-                    "1.2"
+                    "2.0"
                 }
                 Text("Version $version", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(16.dp))
