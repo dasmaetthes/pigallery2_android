@@ -26,7 +26,7 @@ This client delivers a fluid and beautifully designed user interface, allowing y
   - Manage and mark favorite people.
   - Note that it doesn’t perform face recognition on its own.
 - **Rediscover:** Revisit randomly selected moments from your library..
-
+- **Android TV:** Fully support for Android TV 
 
 ---
 

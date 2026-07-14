@@ -21,5 +21,5 @@ gradle/
 node_modules/
 gradlew.bat
 gradlew
-my-upload-key.jks
+pigallery2-release-key.jks
 
