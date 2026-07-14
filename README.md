@@ -11,6 +11,14 @@ This client delivers a fluid and beautifully designed user interface, allowing y
 ## 🌟 Key Features
 
 - **Folder & Directory Browsing:** Securely connect to your PiGallery2 server to browse your photo and video collection in its original directory structure.
+- **Advanced Query Builder:** Craft complex searches using a dedicated visual query builder to filter media by keywords, date ranges, file types, and other advanced metadata parameters.
+- **Interactive Map View:** Explore geotagged photos and videos on an interactive map.
+  - Easily view the locations where your memories were captured.
+  - **Fullscreen Media Integration:** Clicking on a Mapbox image preview instantly opens the rich fullscreen media viewer for full fidelity viewing.
+  - *Note: To ensure a smooth, TV-friendly interface, interactive maps are automatically disabled when running on Android TV.*
+- **Android TV Optimized:** Full-featured support for Android TV devices.
+  - Optimized layouts and robust D-pad navigation support.
+  - Disables performance-heavy map views on Android TV to keep the focus on smooth media presentation and navigation.
 - **Customizable Layouts & Grid Control:** Adjust column count, image aspect ratios, grid item spacing, and corner roundedness in real-time to match your visual preferences.
 - **Rich Media Viewer:**
   - Intuitive zoom-to-span and panning gestures for high-resolution images.
@@ -21,12 +29,11 @@ This client delivers a fluid and beautifully designed user interface, allowing y
   - Camera, model, and lens type.
   - ISO, Exposure, Focal Length, and Aperture.
   - Keywords, and detected faces.
-- **Smart Albums:** Seamless access to saved albums created within the PiGallery2 web interface, supporting customizable item sorting.
+- **Albums:** Seamless access to saved albums created within the PiGallery2 web interface, supporting customizable item sorting.
 - **People & Face Recognition:** Browse a structured grid of recognized people.
   - Manage and mark favorite people.
   - Note that it doesn’t perform face recognition on its own.
-- **Rediscover:** Revisit randomly selected moments from your library..
-- **Android TV:** Fully support for Android TV 
+- **Rediscover:** Revisit randomly selected moments from your library.
 
 ---
 
