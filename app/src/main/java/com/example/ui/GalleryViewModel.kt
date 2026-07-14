@@ -15,6 +15,9 @@ import com.example.data.ApiSubFolderCache
 import com.example.data.PiGalleryApi
 import com.example.data.PreferencesManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -63,7 +66,7 @@ enum class ActiveTab {
 
 class GalleryViewModel(application: Application) : AndroidViewModel(application) {
     val prefs = PreferencesManager(application)
-    private val api = PiGalleryApi(application)
+    val api = PiGalleryApi(application)
 
     // Active Navigation Tab
     private val _activeTab = MutableStateFlow(ActiveTab.GALLERY)
@@ -90,6 +93,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     private val _activeMediaList = MutableStateFlow<List<ApiMedia>>(emptyList())
     val activeMediaList: StateFlow<List<ApiMedia>> = _activeMediaList.asStateFlow()
+    
+    val videoFinished = MutableSharedFlow<Unit>(replay = 0)
+
+    fun emitVideoFinished() {
+        viewModelScope.launch { videoFinished.emit(Unit) }
+    }
 
     // Albums List State
     private val _albumsState = MutableStateFlow<AlbumsUiState>(AlbumsUiState.Loading)
@@ -603,16 +612,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     val queryJson = api.serializeQuery(query)
                     api.search(server, queryJson, cookies, apiPrefix)
                 } else if (isFlattened.value) {
-                    // Fetch flattened directory content
-                    val query = mapOf(
-                        "type" to 102, // directory (not position 106!)
-                        "value" to if (path.isEmpty()) "." else path,
-                        "matchType" to 2 // contains/like (recursive)
-                    )
-                    val queryJson = api.serializeQuery(query)
-                    val rawDir = api.search(server, queryJson, cookies, apiPrefix)
-                    // Flatten it: remove sub-folders from display so only media items show!
-                    rawDir.copy(directories = emptyList())
+                    // Fetch flattened directory content recursively to avoid missing images or search limits
+                    val rootDir = api.getGalleryContent(server, path, cookies, apiPrefix)
+                    val allMedia = fetchAllMediaRecursively(server, path, cookies, apiPrefix)
+                    val uniqueMedia = allMedia.distinctBy { it.id }
+                    rootDir.copy(directories = emptyList(), media = uniqueMedia)
                 } else {
                     // Normal folder fetch
                     api.getGalleryContent(server, path, cookies, apiPrefix)
@@ -624,6 +628,35 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             } catch (e: Exception) {
                 _galleryState.value = GalleryUiState.Error(e.localizedMessage ?: "Failed to fetch gallery content")
             }
+        }
+    }
+
+    private suspend fun fetchAllMediaRecursively(
+        serverUrl: String,
+        path: String,
+        cookies: String,
+        apiPrefix: String
+    ): List<ApiMedia> = kotlinx.coroutines.coroutineScope {
+        try {
+            val directory = api.getGalleryContent(serverUrl, path, cookies, apiPrefix)
+            val currentMedia = directory.media ?: emptyList()
+            val subDirs = directory.directories ?: emptyList()
+            
+            if (subDirs.isEmpty()) {
+                return@coroutineScope currentMedia
+            }
+            
+            val deferredMediaList = subDirs.map { subFolder ->
+                async(Dispatchers.IO) {
+                    fetchAllMediaRecursively(serverUrl, subFolder.path, cookies, apiPrefix)
+                }
+            }
+            
+            val subFoldersMedia = deferredMediaList.awaitAll().flatten()
+            currentMedia + subFoldersMedia
+        } catch (e: Exception) {
+            android.util.Log.e("GalleryViewModel", "Error fetching recursively for path $path: ${e.localizedMessage}")
+            emptyList()
         }
     }
 
@@ -1146,15 +1179,28 @@ fun loadAlbums() {
 
     // --- URL Construction and Media Resolution ---
     fun getThumbnailUrl(media: ApiMedia): String {
-        val sanitizedBase = prefs.serverUrl.trimEnd('/')
+        val base = prefs.serverUrl.let { if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it }
+        val sanitizedBase = base.trimEnd('/')
         val apiPrefix = prefs.apiPrefix
         val relativePath = encodePath(getMediaFullPath(media))
         val suffix = prefs.thumbnailPathSuffix
         return "$sanitizedBase$apiPrefix/gallery/content/${relativePath}/$suffix"
     }
 
+    fun getPreloadMediaUrl(media: ApiMedia): String? {
+        if (media.isVideo) return null
+        val suffix = prefs.preloadPathSuffix
+        if (suffix.isBlank()) return null
+        val base = prefs.serverUrl.let { if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it }
+        val sanitizedBase = base.trimEnd('/')
+        val apiPrefix = prefs.apiPrefix
+        val relativePath = encodePath(getMediaFullPath(media))
+        return "$sanitizedBase$apiPrefix/gallery/content/${relativePath}/$suffix"
+    }
+
     fun getOriginalMediaUrl(media: ApiMedia): String {
-        val sanitizedBase = prefs.serverUrl.trimEnd('/')
+        val base = prefs.serverUrl.let { if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it }
+        val sanitizedBase = base.trimEnd('/')
         val apiPrefix = prefs.apiPrefix
         val relativePath = encodePath(getMediaFullPath(media))
         return if (media.isVideo) {

@@ -31,6 +31,16 @@ import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 import okhttp3.OkHttpClient
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+
+tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -39,17 +49,24 @@ class MainActivity : ComponentActivity() {
         val imageLoader = ImageLoader.Builder(this)
             .memoryCache {
                 MemoryCache.Builder(this)
-                    .maxSizePercent(0.25)
+                    .maxSizePercent(0.40) // Increased memory cache to 40% for faster thumbnail scrolling and image retention
                     .build()
             }
             .diskCache {
                 DiskCache.Builder()
                     .directory(this.cacheDir.resolve("image_cache"))
-                    .maxSizeBytes(500L * 1024L * 1024L) // 500MB fixed size
+                    .maxSizeBytes(1024L * 1024L * 1024L) // 1GB disk cache
                     .build()
             }
+            .respectCacheHeaders(false) // Cache images aggressively even if the server returns no-cache/no-store headers
             .okHttpClient {
+                val dispatcher = okhttp3.Dispatcher().apply {
+                    maxRequests = 128
+                    maxRequestsPerHost = 32 // Drastically increases parallel connections for smooth thumbnail loading
+                }
                 val builder = OkHttpClient.Builder()
+                    .dispatcher(dispatcher)
+                    .connectionPool(okhttp3.ConnectionPool(50, 5, java.util.concurrent.TimeUnit.MINUTES))
                 
                 // We use a custom TrustManager if allowInsecureSsl is enabled
                 // But since it can change, we check it per request? No, it's easier to just use an insecure client
@@ -116,7 +133,7 @@ class MainActivity : ComponentActivity() {
             val view = LocalView.current
             if (!view.isInEditMode) {
                 SideEffect {
-                    val window = (view.context as android.app.Activity).window
+                    val window = view.context.findActivity()?.window ?: return@SideEffect
                     window.statusBarColor = android.graphics.Color.TRANSPARENT
                     window.navigationBarColor = android.graphics.Color.TRANSPARENT
                     val insetsController = WindowCompat.getInsetsController(window, view)

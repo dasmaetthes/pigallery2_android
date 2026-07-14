@@ -1,4 +1,9 @@
 package com.example.ui
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.text.style.TextAlign
 
 import androidx.activity.compose.BackHandler
@@ -26,12 +31,14 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.foundation.focusable
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
@@ -45,6 +52,7 @@ import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.MoreVert
@@ -54,6 +62,7 @@ import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Cloud
@@ -86,6 +95,92 @@ import com.example.data.ApiAlbum
 import com.example.data.ApiDirectory
 import com.example.data.ApiMedia
 import com.example.data.ApiSubFolder
+import androidx.compose.ui.composed
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.animation.core.animateFloatAsState
+
+import android.content.pm.PackageManager
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AdaptivePullToRefreshBox(
+    isRefreshing: Boolean,
+    onRefresh: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable BoxScope.() -> Unit
+) {
+    val context = LocalContext.current
+    val isTv = context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+    if (isTv) {
+        Box(modifier = modifier, content = content)
+    } else {
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = onRefresh,
+            modifier = modifier,
+            content = content
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+fun Modifier.tvFocus(
+    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(12.dp),
+    scale: Float = 1.1f,
+    showBorder: Boolean = true
+): Modifier = this.composed {
+    var isFocused by remember { mutableStateOf(false) }
+    val animatedScale by animateFloatAsState(
+        targetValue = if (isFocused) scale else 1.0f,
+        label = "tv_focus_scale"
+    )
+    
+    val borderModifier = if (showBorder && isFocused) {
+        Modifier.border(4.dp, MaterialTheme.colorScheme.primary, shape)
+    } else {
+        Modifier
+    }
+
+    this
+        .onFocusChanged { isFocused = it.isFocused }
+        .then(borderModifier)
+        .graphicsLayer {
+            scaleX = animatedScale
+            scaleY = animatedScale
+            // Removed shadowElevation to avoid gray border effect in dark mode
+            this.shape = shape
+            clip = true
+        }
+}
+
+fun Modifier.tvSlider(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
+    steps: Int = 0
+): Modifier = this.onPreviewKeyEvent { event ->
+    if (event.type == KeyEventType.KeyDown) {
+        val stepSize = if (steps > 0) (valueRange.endInclusive - valueRange.start) / (steps + 1) else (valueRange.endInclusive - valueRange.start) / 10f
+        when (event.key) {
+            Key.DirectionLeft -> {
+                onValueChange((value - stepSize).coerceIn(valueRange))
+                true
+            }
+            Key.DirectionRight -> {
+                onValueChange((value + stepSize).coerceIn(valueRange))
+                true
+            }
+            else -> false
+        }
+    } else {
+        // Consume ACTION_UP for left/right
+        if (event.key == Key.DirectionLeft || event.key == Key.DirectionRight) {
+            true
+        } else {
+            false
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -114,10 +209,39 @@ fun GalleryScreen(
     val isFlattened by viewModel.isFlattened.collectAsState()
     val searchSuggestions by viewModel.searchSuggestions.collectAsState()
     var showAboutDialog by remember { mutableStateOf(false) }
-    
+    var showQueryBuilder by remember { mutableStateOf(false) }
+    var showMapDialog by remember { mutableStateOf(false) }
+    var mapInitialMediaId by remember { mutableStateOf<String?>(null) }
+
+    // Collect states to determine list of media for map-based browsing
+    val galleryState by viewModel.galleryState.collectAsState()
+    val albumContentState by viewModel.albumContentState.collectAsState()
+    val personContentState by viewModel.personContentState.collectAsState()
+
     // Album Tab sub-navigation states
     val selectedAlbum by viewModel.selectedAlbum.collectAsState()
     val selectedPerson by viewModel.selectedPerson.collectAsState()
+
+    val mapMediaList = remember(activeTab, galleryState, albumContentState, personContentState, selectedAlbum, selectedPerson) {
+        when (activeTab) {
+            ActiveTab.GALLERY -> {
+                if (galleryState is GalleryUiState.Success) {
+                    (galleryState as GalleryUiState.Success).directory.media ?: emptyList()
+                } else emptyList()
+            }
+            ActiveTab.ALBUMS -> {
+                if (selectedAlbum != null && albumContentState is GalleryUiState.Success) {
+                    (albumContentState as GalleryUiState.Success).directory.media ?: emptyList()
+                } else emptyList()
+            }
+            ActiveTab.PERSONS -> {
+                if (selectedPerson != null && personContentState is GalleryUiState.Success) {
+                    (personContentState as GalleryUiState.Success).directory.media ?: emptyList()
+                } else emptyList()
+            }
+            else -> emptyList()
+        }
+    }
 
     // Handle system back navigation nicely
     BackHandler(enabled = true) {
@@ -245,6 +369,15 @@ fun GalleryScreen(
                         }
                     } else {
                         if (activeTab == ActiveTab.GALLERY) {
+                            if (isSearchActive) {
+                                IconButton(onClick = { showQueryBuilder = true }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Tune,
+                                        contentDescription = "Advanced Search Builder",
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
                             // Search Button
                             IconButton(onClick = { 
                                 if (isSearchActive && searchQuery.isNotEmpty()) {
@@ -272,6 +405,24 @@ fun GalleryScreen(
                             }
                         }
                         
+                        val hasGeotagged = remember(mapMediaList) {
+                            mapMediaList.any { it.metadata?.gps != null }
+                        }
+                        val showMapButton = when(activeTab) {
+                            ActiveTab.GALLERY -> hasGeotagged
+                            ActiveTab.ALBUMS -> selectedAlbum != null && hasGeotagged
+                            ActiveTab.PERSONS -> selectedPerson != null && hasGeotagged
+                            else -> false
+                        }
+                        if (showMapButton) {
+                            IconButton(onClick = { showMapDialog = true }) {
+                                Icon(
+                                    imageVector = Icons.Default.Map,
+                                    contentDescription = "Map View"
+                                )
+                            }
+                        }
+
                         if (activeTab == ActiveTab.GALLERY || activeTab == ActiveTab.ALBUMS || activeTab == ActiveTab.PERSONS) {
                             // Sorting Menu Button
                             var showSortDialog by remember { mutableStateOf(false) }
@@ -453,12 +604,39 @@ fun GalleryScreen(
         MediaViewerDialog(
             media = media,
             viewModel = viewModel,
-            onDismiss = { viewModel.selectMedia(null) }
+            onDismiss = { viewModel.selectMedia(null) },
+            onOpenMap = { clickedMedia ->
+                mapInitialMediaId = clickedMedia.id?.toString()
+                showMapDialog = true
+            },
+            isMapOpen = showMapDialog
         )
     }
 }
     if (showAboutDialog) {
         AboutDialog(onDismiss = { showAboutDialog = false })
+    }
+    if (showQueryBuilder) {
+        AdvancedQueryBuilderDialog(
+            viewModel = viewModel,
+            onDismissRequest = { showQueryBuilder = false },
+            onSearchApplied = { query ->
+                viewModel.updateSearchQueryText(query)
+                viewModel.executeSearch()
+                showQueryBuilder = false
+            }
+        )
+    }
+    if (showMapDialog) {
+        MapBrowserDialog(
+            mediaList = mapMediaList,
+            viewModel = viewModel,
+            initialMediaId = mapInitialMediaId,
+            onDismiss = {
+                showMapDialog = false
+                mapInitialMediaId = null
+            }
+        )
     }
 }
 
@@ -482,7 +660,7 @@ fun GalleryTabContent(viewModel: GalleryViewModel) {
             HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
 
             val isRefreshing = galleryState is GalleryUiState.Loading
-            PullToRefreshBox(
+            AdaptivePullToRefreshBox(
                 isRefreshing = isRefreshing,
                 onRefresh = { viewModel.loadCurrentDirectory() },
                 modifier = Modifier.weight(1f).fillMaxWidth()
@@ -650,7 +828,7 @@ fun AlbumsTabContent(viewModel: GalleryViewModel) {
         // Render current album's content
         Column(modifier = Modifier.fillMaxSize()) {
             val isRefreshing = albumContentState is GalleryUiState.Loading
-            PullToRefreshBox(
+            AdaptivePullToRefreshBox(
                 isRefreshing = isRefreshing,
                 onRefresh = { selectedAlbum?.let { viewModel.selectAlbum(it) } },
                 modifier = Modifier.weight(1f).fillMaxWidth()
@@ -689,7 +867,7 @@ fun AlbumsTabContent(viewModel: GalleryViewModel) {
     } else {
         // Render Album list
         val isRefreshing = albumsState is AlbumsUiState.Loading
-        PullToRefreshBox(
+        AdaptivePullToRefreshBox(
             isRefreshing = isRefreshing,
             onRefresh = { viewModel.loadAlbums() },
             modifier = Modifier.fillMaxSize()
@@ -713,6 +891,19 @@ fun AlbumsTabContent(viewModel: GalleryViewModel) {
 
                         val spacingDp = spacing.dp
                         val cornerRadiusDp = cornerRadius.dp
+                        
+                        val isTv = LocalContext.current.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+                        val firstItemFocusRequester = remember { FocusRequester() }
+                        
+                        LaunchedEffect(albums) {
+                            if (isTv && albums.isNotEmpty()) {
+                                try {
+                                    kotlinx.coroutines.delay(100)
+                                    firstItemFocusRequester.requestFocus()
+                                } catch (e: Exception) {}
+                            }
+                        }
+                        
                         LazyVerticalGrid(
                             columns = GridCells.Fixed(itemsPerRow),
                             contentPadding = PaddingValues(16.dp),
@@ -720,8 +911,10 @@ fun AlbumsTabContent(viewModel: GalleryViewModel) {
                             horizontalArrangement = Arrangement.spacedBy(spacingDp),
                             modifier = Modifier.fillMaxSize()
                         ) {
-                            items(albums) { album ->
+                            items(count = albums.size, key = { index -> "album_${albums[index].name}_${albums[index].id}" }) { index -> val album = albums[index]
+                                val focusModifier = if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
                                 AlbumCard(
+                                    modifier = focusModifier,
                                     album = album,
                                     viewModel = viewModel,
                                     cornerRadius = cornerRadiusDp,
@@ -775,6 +968,18 @@ fun RediscoverTabContent(viewModel: GalleryViewModel) {
                 
                     val spacingDp = spacing.dp
                     val cornerRadiusDp = cornerRadius.dp
+                    val isTv = LocalContext.current.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+                    val firstItemFocusRequester = remember { FocusRequester() }
+                    
+                    LaunchedEffect(grouped) {
+                        if (isTv && grouped.isNotEmpty()) {
+                            try {
+                                kotlinx.coroutines.delay(100)
+                                firstItemFocusRequester.requestFocus()
+                            } catch (e: Exception) {}
+                        }
+                    }
+
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(itemsPerRow.toInt()),
                         modifier = Modifier.fillMaxSize(),
@@ -787,14 +992,28 @@ fun RediscoverTabContent(viewModel: GalleryViewModel) {
                             val currentYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
                             val diff = currentYear - year
                             
+                            val isFirstYear = year == grouped.keys.first()
+                            
                             // Header
                             item(span = { GridItemSpan(itemsPerRow.toInt()) }) {
+                                var isFocused by remember { mutableStateOf(false) }
                                 Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
                                     val hasMore = mediaList.size > itemsPerRow.toInt()
+                                    
+                                    val focusModifier = if (isFirstYear) Modifier.focusRequester(firstItemFocusRequester) else Modifier
+                                    
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .then(if (hasMore) Modifier.clickable { expandedYears[year] = !isExpanded } else Modifier),
+                                            .then(focusModifier)
+                                            .onFocusChanged { isFocused = it.isFocused }
+                                            .tvFocus(shape = RoundedCornerShape(8.dp), showBorder = true)
+                                            .then(if (hasMore) Modifier.clickable { expandedYears[year] = !isExpanded } else Modifier.focusable())
+                                            .background(
+                                                color = if (isFocused) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f),
+                                                shape = RoundedCornerShape(8.dp)
+                                            )
+                                            .padding(horizontal = 16.dp, vertical = 12.dp),
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
@@ -803,18 +1022,19 @@ fun RediscoverTabContent(viewModel: GalleryViewModel) {
                                                 text = if (diff == 1) "1 Year Ago ($year)" else "$diff Years Ago ($year)",
                                                 style = MaterialTheme.typography.titleMedium,
                                                 fontWeight = FontWeight.ExtraBold,
-                                                color = MaterialTheme.colorScheme.primary
+                                                color = if (isFocused) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary
                                             )
                                             Text(
                                                 text = "${mediaList.size} items",
                                                 fontSize = 12.sp,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                                color = if (isFocused) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                                             )
                                         }
                                         if (hasMore) {
                                             Icon(
                                                 imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                                                contentDescription = if (isExpanded) "Collapse" else "Expand"
+                                                contentDescription = if (isExpanded) "Collapse" else "Expand",
+                                                tint = if (isFocused) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
                                             )
                                         }
                                     }
@@ -847,6 +1067,7 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
 
     // Suffix states
     var thumbnailSuffix by remember { mutableStateOf(viewModel.prefs.thumbnailPathSuffix) }
+    var preloadSuffix by remember { mutableStateOf(viewModel.prefs.preloadPathSuffix) }
     var videoSuffix by remember { mutableStateOf(viewModel.prefs.videoPathSuffix) }
 
     // Visual states
@@ -1086,7 +1307,16 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                     viewModel.setItemsPerRowPortrait(it.toInt())
                                 },
                                 valueRange = 1f..6f,
-                                steps = 4
+                                steps = 4,
+                                modifier = Modifier.tvSlider(
+                                    value = itemsPerRowPortrait,
+                                    onValueChange = {
+                                        itemsPerRowPortrait = it
+                                        viewModel.setItemsPerRowPortrait(it.toInt())
+                                    },
+                                    valueRange = 1f..6f,
+                                    steps = 4
+                                )
                             )
                         }
 
@@ -1110,7 +1340,16 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                     viewModel.setItemsPerRowLandscape(it.toInt())
                                 },
                                 valueRange = 2f..10f,
-                                steps = 7
+                                steps = 7,
+                                modifier = Modifier.tvSlider(
+                                    value = itemsPerRowLandscape,
+                                    onValueChange = {
+                                        itemsPerRowLandscape = it
+                                        viewModel.setItemsPerRowLandscape(it.toInt())
+                                    },
+                                    valueRange = 2f..10f,
+                                    steps = 7
+                                )
                             )
                         }
 
@@ -1134,7 +1373,16 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                     viewModel.setSpacing(it.toInt())
                                 },
                                 valueRange = 0f..24f,
-                                steps = 24
+                                steps = 24,
+                                modifier = Modifier.tvSlider(
+                                    value = spacing,
+                                    onValueChange = {
+                                        spacing = it
+                                        viewModel.setSpacing(it.toInt())
+                                    },
+                                    valueRange = 0f..24f,
+                                    steps = 24
+                                )
                             )
                         }
 
@@ -1158,7 +1406,16 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                     viewModel.setCornerRadius(it.toInt())
                                 },
                                 valueRange = 0f..32f,
-                                steps = 32
+                                steps = 32,
+                                modifier = Modifier.tvSlider(
+                                    value = cornerRadius,
+                                    onValueChange = {
+                                        cornerRadius = it
+                                        viewModel.setCornerRadius(it.toInt())
+                                    },
+                                    valueRange = 0f..32f,
+                                    steps = 32
+                                )
                             )
                         }
 
@@ -1237,7 +1494,13 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                  value = daysRange.toFloat(),
                                  onValueChange = { viewModel.setRediscoverDays(it.toInt()) },
                                  valueRange = 1f..14f,
-                                 steps = 13
+                                 steps = 13,
+                                 modifier = Modifier.tvSlider(
+                                     value = daysRange.toFloat(),
+                                     onValueChange = { viewModel.setRediscoverDays(it.toInt()) },
+                                     valueRange = 1f..14f,
+                                     steps = 13
+                                 )
                              )
                         }
 
@@ -1245,9 +1508,9 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                         HorizontalDivider()
                         Spacer(modifier = Modifier.height(16.dp))
 
-                        // Slideshow Duration
+                        // Slideshow & Map Timeline Duration
                         Column {
-                             Text(text = "Slideshow Duration", style = MaterialTheme.typography.bodyMedium)
+                             Text(text = "Slideshow & Map Timeline Duration", style = MaterialTheme.typography.bodyMedium)
                              Spacer(modifier = Modifier.height(8.dp))
                              val slideDuration by viewModel.slideshowDuration.collectAsState()
                              Text(text = "$slideDuration ${if (slideDuration == 1) "second" else "seconds"}")
@@ -1255,7 +1518,13 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                  value = slideDuration.toFloat(),
                                  onValueChange = { viewModel.setSlideshowDuration(it.toInt()) },
                                  valueRange = 1f..10f,
-                                 steps = 8
+                                 steps = 8,
+                                 modifier = Modifier.tvSlider(
+                                     value = slideDuration.toFloat(),
+                                     onValueChange = { viewModel.setSlideshowDuration(it.toInt()) },
+                                     valueRange = 1f..10f,
+                                     steps = 8
+                                 )
                              )
                         }
 
@@ -1366,7 +1635,17 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                 thumbnailSuffix = it
                                 viewModel.prefs.thumbnailPathSuffix = it
                             },
-                            label = { Text("Thumbnail Path Suffix") },
+                            label = { Text("Thumbnail Path Suffix (e.g., 320)") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = preloadSuffix,
+                            onValueChange = {
+                                preloadSuffix = it
+                                viewModel.prefs.preloadPathSuffix = it
+                            },
+                            label = { Text("Fullscreen Preload Size Suffix (e.g., 720; empty to disable)") },
                             modifier = Modifier.fillMaxWidth()
                         )
                         Spacer(modifier = Modifier.height(8.dp))
@@ -1382,52 +1661,52 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                     }
                 }
 
-                // --- Storage Settings ---
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "Speicher",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        
-                        val cacheSize by viewModel.cacheSize.collectAsState()
-                        LaunchedEffect(selectedSettingsTab) {
-                            if (selectedSettingsTab == 2) {
-                                viewModel.updateCacheSize()
-                            }
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column {
-                                Text(
-                                    text = "Cache-Speicher",
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                                Text(
-                                    text = "Aktuell belegt: $cacheSize",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Button(
-                                onClick = { viewModel.clearCaches() },
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
-                            ) {
-                                Text("Leeren")
-                            }
-                        }
+        // --- Storage Settings ---
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "Storage",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                val cacheSize by viewModel.cacheSize.collectAsState()
+                LaunchedEffect(selectedSettingsTab) {
+                    if (selectedSettingsTab == 2) {
+                        viewModel.updateCacheSize()
                     }
                 }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Cache",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "Currently used: $cacheSize",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Button(
+                        onClick = { viewModel.clearCaches() },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                    ) {
+                        Text("Clear")
+                    }
+                }
+            }
+        }
 
 
             }
@@ -1482,6 +1761,7 @@ fun ThumbnailOverlay(
 
 @Composable
 fun AlbumCard(
+    modifier: Modifier = Modifier,
     album: ApiAlbum,
     viewModel: GalleryViewModel,
     cornerRadius: Dp,
@@ -1494,9 +1774,11 @@ fun AlbumCard(
     val cardRatio = if (aspectRatio > 0f) aspectRatio else 1f
 
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .aspectRatio(cardRatio)
+            .clip(RoundedCornerShape(cornerRadius))
+            .tvFocus(shape = RoundedCornerShape(cornerRadius))
             .clickable { onClick() },
         shape = RoundedCornerShape(cornerRadius),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -1568,6 +1850,7 @@ fun RediscoverMediaItem(
             .fillMaxWidth()
             .aspectRatio(cardRatio)
             .clip(RoundedCornerShape(cornerRadius))
+            .tvFocus(shape = RoundedCornerShape(cornerRadius))
             .combinedClickable(
                 onClick = {
                     if (isSelectMode) {
@@ -1711,7 +1994,19 @@ fun GalleryContentGrid(
         }
     }
 
-                    LazyVerticalGrid(
+    val isTv = LocalContext.current.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+    val firstItemFocusRequester = remember { FocusRequester() }
+    
+    LaunchedEffect(subfolders, mediaList) {
+        if (isTv && (subfolders.isNotEmpty() || mediaList.isNotEmpty())) {
+            try {
+                kotlinx.coroutines.delay(100)
+                firstItemFocusRequester.requestFocus()
+            } catch (e: Exception) {}
+        }
+    }
+
+    LazyVerticalGrid(
         columns = GridCells.Fixed(itemsPerRow),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(spacingDp),
@@ -1719,16 +2014,22 @@ fun GalleryContentGrid(
         modifier = Modifier.fillMaxSize()
     ) {
         // Render Subfolders
-        items(subfolders) { folder ->
+        items(count = subfolders.size, key = { index -> "folder_${subfolders[index].path}" }) { index -> val folder = subfolders[index]
             val coverUrl = viewModel.getFolderCoverUrl(folder)
+            
+            val focusModifier = if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
             
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(1f)
+                    .clip(RoundedCornerShape(cornerRadiusDp))
+                    .then(focusModifier)
                     .then(
                         if (!isSelectMode) {
-                            Modifier.clickable { onFolderClick(folder) }
+                            Modifier
+                                .tvFocus(shape = RoundedCornerShape(cornerRadiusDp))
+                                .clickable { onFolderClick(folder) }
                         } else {
                             Modifier.graphicsLayer(alpha = 0.4f)
                         }
@@ -1815,6 +2116,7 @@ fun GalleryContentGrid(
             }
 
         // Render Media grid
+        val hasSubfolders = subfolders.isNotEmpty()
         groupedMedia.forEach { (monthYear, mediaItems) ->
             item(span = { GridItemSpan(maxLineSpan) }) {
                 Text(
@@ -1825,10 +2127,14 @@ fun GalleryContentGrid(
                     modifier = Modifier.padding(start = 4.dp, top = 24.dp, bottom = 8.dp, end = 4.dp).fillMaxWidth()
                 )
             }
-            items(mediaItems) { media ->
+            items(count = mediaItems.size, key = { index -> "media_${mediaItems[index].id ?: mediaItems[index].name}" }) { index -> val media = mediaItems[index]
             val isSelected = selectedMediaForShare.contains(media)
 
+            val isFirstOverallMedia = !hasSubfolders && monthYear == groupedMedia.keys.first() && index == 0
+            val focusModifier = if (isFirstOverallMedia) Modifier.focusRequester(firstItemFocusRequester) else Modifier
+
             val cardModifier = Modifier
+                .then(focusModifier)
                 .fillMaxWidth()
                 .let { modifier ->
                     val ratio = aspectRatio
@@ -1839,6 +2145,7 @@ fun GalleryContentGrid(
                     }
                 }
                 .clip(RoundedCornerShape(cornerRadiusDp))
+                .tvFocus(shape = RoundedCornerShape(cornerRadiusDp))
                 .combinedClickable(
                     onClick = {
                         if (isSelectMode) {
@@ -2182,7 +2489,7 @@ fun PersonsTabContent(viewModel: GalleryViewModel) {
     if (selectedPerson != null) {
         // Render current person's content
         val isRefreshing = personContentState is GalleryUiState.Loading
-        PullToRefreshBox(
+        AdaptivePullToRefreshBox(
             isRefreshing = isRefreshing,
             onRefresh = { selectedPerson?.let { viewModel.selectPerson(it) } },
             modifier = Modifier.fillMaxSize()
@@ -2220,7 +2527,7 @@ fun PersonsTabContent(viewModel: GalleryViewModel) {
     } else {
         // Render persons list
         val isRefreshing = personsState is PersonsUiState.Loading
-        PullToRefreshBox(
+        AdaptivePullToRefreshBox(
             isRefreshing = isRefreshing,
             onRefresh = { viewModel.loadPersons() },
             modifier = Modifier.fillMaxSize()
@@ -2241,6 +2548,19 @@ fun PersonsTabContent(viewModel: GalleryViewModel) {
                         EmptyStateView("No persons found", "No faces detected or server hasn't scanned persons yet.")
                     } else {
                         val spacingDp = spacing.dp
+                        
+                        val isTv = LocalContext.current.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+                        val firstItemFocusRequester = remember { FocusRequester() }
+                        
+                        LaunchedEffect(state.persons) {
+                            if (isTv && state.persons.isNotEmpty()) {
+                                try {
+                                    kotlinx.coroutines.delay(100)
+                                    firstItemFocusRequester.requestFocus()
+                                } catch (e: Exception) {}
+                            }
+                        }
+                        
                         LazyVerticalGrid(
                             columns = GridCells.Fixed(itemsPerRow),
                             modifier = Modifier.fillMaxSize(),
@@ -2248,8 +2568,10 @@ fun PersonsTabContent(viewModel: GalleryViewModel) {
                             horizontalArrangement = Arrangement.spacedBy(spacingDp),
                             verticalArrangement = Arrangement.spacedBy(spacingDp)
                         ) {
-                            items(state.persons, key = { it.name }) { person ->
+                            items(count = state.persons.size, key = { index -> state.persons[index].name }) { index -> val person = state.persons[index]
+                                val focusModifier = if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
                                 PersonItem(
+                                    modifier = focusModifier,
                                     person = person,
                                     viewModel = viewModel,
                                     onClick = { viewModel.selectPerson(person) }
@@ -2264,7 +2586,7 @@ fun PersonsTabContent(viewModel: GalleryViewModel) {
 }
 
 @Composable
-fun PersonItem(person: com.example.data.ApiPerson, viewModel: GalleryViewModel, onClick: () -> Unit) {
+fun PersonItem(modifier: Modifier = Modifier, person: com.example.data.ApiPerson, viewModel: GalleryViewModel, onClick: () -> Unit) {
     val serverUrl = viewModel.prefs.serverUrl ?: ""
     val apiPrefix = viewModel.prefs.apiPrefix
     val thumbnailUrl = "${serverUrl}${apiPrefix}/person/${person.name}/thumbnail"
@@ -2284,9 +2606,11 @@ fun PersonItem(person: com.example.data.ApiPerson, viewModel: GalleryViewModel, 
         .build()
 
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .aspectRatio(cardRatio)
+            .clip(RoundedCornerShape(cornerRadius.dp))
+            .tvFocus(shape = RoundedCornerShape(cornerRadius.dp))
             .clickable { onClick() },
         shape = RoundedCornerShape(cornerRadius.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -2352,7 +2676,7 @@ fun AboutDialog(onDismiss: () -> Unit) {
                     val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
                     packageInfo.versionName
                 } catch (e: Exception) {
-                    "1.0"
+                    "1.2"
                 }
                 Text("Version $version", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(16.dp))

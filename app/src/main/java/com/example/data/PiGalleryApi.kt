@@ -120,13 +120,20 @@ data class ApiAlbumCache(
     val coverDirectory: String?
 )
 
+data class ApiGPSData(
+    val latitude: Double,
+    val longitude: Double,
+    val altitude: Double? = null
+)
+
 data class ApiMediaMetadata(
     val size: ApiSize? = null,
     val creationDate: Long? = null,
     val cameraData: ApiCameraData? = null,
     val keywords: List<String>? = null,
     val faces: List<ApiFace>? = null,
-    val duration: Double? = null
+    val duration: Double? = null,
+    val gps: ApiGPSData? = null
 )
 
 data class ApiCameraData(
@@ -240,11 +247,32 @@ class PiGalleryApi(private val context: android.content.Context) {
 
         val duration = (metaMap["duration"] as? Number ?: metaMap["u"] as? Number)?.toDouble()
 
-        return ApiMediaMetadata(size, creationDate, cameraData, keywords, faces, duration)
+        val positionDataMap = metaMap["positionData"] as? Map<*, *> ?: metaMap["p"] as? Map<*, *>
+        val gpsRaw = positionDataMap?.let { it["GPSData"] ?: it["g"] ?: it["gps"] }
+            ?: metaMap["gps"]
+            ?: metaMap["g"]
+
+        val gps = if (gpsRaw is Map<*, *>) {
+            val lat = (gpsRaw["latitude"] as? Number ?: gpsRaw["lat"] as? Number ?: gpsRaw["la"] as? Number)?.toDouble()
+            val lon = (gpsRaw["longitude"] as? Number ?: gpsRaw["lng"] as? Number ?: gpsRaw["lon"] as? Number ?: gpsRaw["lo"] as? Number)?.toDouble()
+            val alt = (gpsRaw["altitude"] as? Number ?: gpsRaw["alt"] as? Number ?: gpsRaw["al"] as? Number)?.toDouble()
+            if (lat != null && lon != null) {
+                ApiGPSData(lat, lon, alt)
+            } else null
+        } else if (gpsRaw is List<*>) {
+            val lat = (gpsRaw.getOrNull(0) as? Number)?.toDouble()
+            val lon = (gpsRaw.getOrNull(1) as? Number)?.toDouble()
+            val alt = (gpsRaw.getOrNull(2) as? Number)?.toDouble()
+            if (lat != null && lon != null) {
+                ApiGPSData(lat, lon, alt)
+            } else null
+        } else null
+
+        return ApiMediaMetadata(size, creationDate, cameraData, keywords, faces, duration, gps)
     }
 
     private val prefs = PreferencesManager(context)
-    private val client: OkHttpClient
+    val client: OkHttpClient
 
     init {
         val builder = OkHttpClient.Builder()

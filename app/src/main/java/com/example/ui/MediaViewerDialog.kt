@@ -7,6 +7,7 @@ import androidx.compose.ui.graphics.vector.path
 
 import android.app.DownloadManager
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Environment
 import android.widget.MediaController
@@ -18,6 +19,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -46,6 +48,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.geometry.Size
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.filter
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -72,8 +76,12 @@ import com.example.data.ApiMedia
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.first
 import java.io.File
 import java.io.IOException
+import androidx.compose.ui.input.key.*
+import androidx.compose.ui.focus.*
+import androidx.compose.foundation.focusable
 
 
 
@@ -168,12 +176,24 @@ val ApertureIcon: ImageVector
 fun MediaViewerDialog(
     media: ApiMedia,
     viewModel: GalleryViewModel,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onOpenMap: ((ApiMedia) -> Unit)? = null,
+    isMapOpen: Boolean = false
 ) {
     val context = LocalContext.current
+    val isTv = context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
     val configuration = LocalConfiguration.current
     val cookies = viewModel.getCookiesHeader()
     val activeMediaList by viewModel.activeMediaList.collectAsState()
+
+    val coroutineScope = rememberCoroutineScope()
+    val scope = coroutineScope
+    val focusRequester = remember { FocusRequester() }
+    val topBarFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
 
     // Decouple list for robust swiping
     val mediaList = if (activeMediaList.isNotEmpty()) activeMediaList else listOf(media)
@@ -192,13 +212,20 @@ fun MediaViewerDialog(
     var showMetadata by remember { mutableStateOf(false) }
     var showBars by remember { mutableStateOf(true) }
     var showFaceRegions by remember { mutableStateOf(false) }
+    var isVideoPlaying by remember(currentMedia) { mutableStateOf(true) }
+    var showMoreMenu by remember { mutableStateOf(false) }
     
     val slideshowDuration = viewModel.slideshowDuration.collectAsState().value
     var isSlideshowPlaying by remember { mutableStateOf(false) }
+    
+    var interactionCount by remember { mutableStateOf(0) }
+    var topBarFocused by remember { mutableStateOf(false) }
+    var bottomBarFocused by remember { mutableStateOf(false) }
+    val isControlsFocused = topBarFocused || bottomBarFocused || showMoreMenu
 
     // Auto-hide bars after 4 seconds of inactivity
-    LaunchedEffect(showBars, isSlideshowPlaying) {
-        if (showBars && !isSlideshowPlaying) {
+    LaunchedEffect(showBars, isSlideshowPlaying, interactionCount, isControlsFocused) {
+        if (showBars && !isSlideshowPlaying && !isControlsFocused) {
             kotlinx.coroutines.delay(4000)
             showBars = false
         }
@@ -212,7 +239,7 @@ fun MediaViewerDialog(
             if (i != pagerState.currentPage) {
                 val prefetchMedia = mediaList[i]
                 if (!prefetchMedia.isVideo) {
-                    val prefetchUrl = viewModel.getOriginalMediaUrl(prefetchMedia)
+                    val prefetchUrl = viewModel.getPreloadMediaUrl(prefetchMedia) ?: viewModel.getOriginalMediaUrl(prefetchMedia)
                     val request = ImageRequest.Builder(context)
                         .data(prefetchUrl)
                         .addHeader("Cookie", cookies)
@@ -223,9 +250,17 @@ fun MediaViewerDialog(
         }
     }
 
+    var videoCompletionTrigger by remember { mutableStateOf(0L) }
+
     LaunchedEffect(isSlideshowPlaying) {
         while (isSlideshowPlaying) {
-            kotlinx.coroutines.delay(slideshowDuration * 1000L)
+            val currentMedia = mediaList.getOrNull(pagerState.currentPage)
+            if (currentMedia != null && currentMedia.isVideo) {
+                androidx.compose.runtime.snapshotFlow { videoCompletionTrigger }.filter { it > 0L }.first()
+                videoCompletionTrigger = 0L
+            } else {
+                kotlinx.coroutines.delay(slideshowDuration * 1000L)
+            }
             if (pagerState.currentPage < mediaList.size - 1) {
                 pagerState.animateScrollToPage(pagerState.currentPage + 1)
             } else {
@@ -261,13 +296,19 @@ fun MediaViewerDialog(
         (contextActivity as? android.app.Activity)?.window
     }
 
+    // Keep screen on when slideshow is playing
+    DisposableEffect(isSlideshowPlaying, window) {
+        if (isSlideshowPlaying) {
+            window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
     DisposableEffect(window) {
         window?.let { win ->
             WindowCompat.setDecorFitsSystemWindows(win, false)
-            WindowInsetsControllerCompat(win, win.decorView).let { controller ->
-                controller.hide(WindowInsetsCompat.Type.systemBars())
-                controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            }
         }
         onDispose {
             window?.let { win ->
@@ -278,7 +319,26 @@ fun MediaViewerDialog(
         }
     }
 
+    DisposableEffect(showBars, window, isMapOpen) {
+        window?.let { win ->
+            val controller = WindowInsetsControllerCompat(win, win.decorView)
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            if (isMapOpen) {
+                controller.show(WindowInsetsCompat.Type.systemBars())
+            } else {
+                if (showBars) {
+                    controller.show(WindowInsetsCompat.Type.systemBars())
+                } else {
+                    controller.hide(WindowInsetsCompat.Type.systemBars())
+                }
+            }
+        }
+        onDispose { }
+    }
+
     val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    
+    androidx.activity.compose.BackHandler { onDismiss() }
 
     Box(
         modifier = Modifier
@@ -290,6 +350,55 @@ fun MediaViewerDialog(
                     modifier = Modifier
                         .weight(if (showMetadata && isLandscape) 0.6f else 1f)
                         .fillMaxHeight()
+                        .focusRequester(focusRequester)
+                        .focusable()
+                        .onKeyEvent { keyEvent ->
+                            if (keyEvent.type == KeyEventType.KeyDown) {
+                                interactionCount++
+                                when (keyEvent.key) {
+                                    Key.DirectionLeft -> {
+                                        if (pagerState.currentPage > 0) {
+                                            coroutineScope.launch {
+                                                pagerState.animateScrollToPage(pagerState.currentPage - 1)
+                                            }
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    }
+                                    Key.DirectionRight -> {
+                                        if (pagerState.currentPage < mediaList.size - 1) {
+                                            coroutineScope.launch {
+                                                pagerState.animateScrollToPage(pagerState.currentPage + 1)
+                                            }
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    }
+                                    Key.DirectionUp -> {
+                                        if (showBars) {
+                                            try {
+                                                topBarFocusRequester.requestFocus()
+                                            } catch (e: Exception) {
+                                                // Ignore if not attached
+                                            }
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    }
+                                    Key.DirectionCenter, Key.Enter, Key.Spacebar -> {
+                                        showBars = !showBars
+                                        true
+                                    }
+                                    else -> false
+                                }
+                            } else {
+                                false
+                            }
+                        }
+                        .focusable()
                 ) {
                     HorizontalPager(
                         state = pagerState,
@@ -304,6 +413,9 @@ fun MediaViewerDialog(
                             context = context,
                             rotation = pageRotation,
                             showFaceRegions = showFaceRegions,
+                            isVideoPlaying = if (page == pagerState.currentPage) isVideoPlaying else false,
+                            onVideoPlayingChange = { if (page == pagerState.currentPage) isVideoPlaying = it },
+                            onVideoCompletion = { videoCompletionTrigger = System.currentTimeMillis() },
                             onToggleBars = {
                                 showBars = !showBars
                             }
@@ -372,22 +484,40 @@ fun MediaViewerDialog(
                 exit = slideOutVertically { -it },
                 modifier = Modifier.align(Alignment.TopCenter)
             ) {
-                TopAppBar(
-                    title = { },
-                    windowInsets = WindowInsets.safeDrawing,
-                    navigationIcon = {
-                        IconButton(onClick = onDismiss) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Close",
-                                tint = Color.White
-                            )
-                        }
-                    },
-                    actions = {
-                        IconButton(onClick = {
-                            showMetadata = !showMetadata
-                        }) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color.Black.copy(alpha = 0.5f))
+                        .windowInsetsPadding(WindowInsets.statusBars)
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .focusGroup()
+                        .onFocusChanged { topBarFocused = it.hasFocus },
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .focusRequester(topBarFocusRequester)
+                            .focusProperties { down = focusRequester; right = FocusRequester.Default }
+                            .tvFocus(shape = androidx.compose.foundation.shape.CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close",
+                            tint = Color.White
+                        )
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = {
+                                showMetadata = !showMetadata
+                            },
+                            modifier = Modifier
+                                .focusProperties { down = focusRequester; left = FocusRequester.Default }
+                                .tvFocus(shape = androidx.compose.foundation.shape.CircleShape)
+                        ) {
                             Icon(
                                 imageVector = Icons.Default.Info,
                                 contentDescription = "Metadata",
@@ -395,27 +525,60 @@ fun MediaViewerDialog(
                             )
                         }
 
-                        IconButton(onClick = {
-                            viewModel.shareSingleMedia(context, currentMedia)
-                        }) {
-                            Icon(
-                                imageVector = Icons.Default.Share,
-                                contentDescription = "Share",
-                                tint = Color.White
-                            )
+                        if (currentMedia.metadata?.gps != null && onOpenMap != null) {
+                            IconButton(
+                                onClick = {
+                                    onOpenMap(currentMedia)
+                                },
+                                modifier = Modifier
+                                    .focusProperties { down = focusRequester }
+                                    .tvFocus(shape = androidx.compose.foundation.shape.CircleShape)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Map,
+                                    contentDescription = "Show on Map",
+                                    tint = Color.White
+                                )
+                            }
                         }
-                        IconButton(onClick = {
-                            downloadFile(context, mediaUrl, currentMedia.name, cookies)
-                        }) {
-                            Icon(
-                                imageVector = Icons.Default.Download,
-                                contentDescription = "Download",
-                                tint = Color.White
-                            )
+
+                        if (!isTv) {
+                            IconButton(
+                                onClick = {
+                                    viewModel.shareSingleMedia(context, currentMedia)
+                                },
+                                modifier = Modifier
+                                    .focusProperties { down = focusRequester }
+                                    .tvFocus(shape = androidx.compose.foundation.shape.CircleShape)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Share,
+                                    contentDescription = "Share",
+                                    tint = Color.White
+                                )
+                            }
+                            IconButton(
+                                onClick = {
+                                    downloadFile(context, mediaUrl, currentMedia.name, cookies)
+                                },
+                                modifier = Modifier
+                                    .focusProperties { down = focusRequester }
+                                    .tvFocus(shape = androidx.compose.foundation.shape.CircleShape)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Download,
+                                    contentDescription = "Download",
+                                    tint = Color.White
+                                )
+                            }
                         }
                         
-                        var showMoreMenu by remember { mutableStateOf(false) }
-                        IconButton(onClick = { showMoreMenu = true }) {
+                        IconButton(
+                            onClick = { showMoreMenu = true },
+                            modifier = Modifier
+                                .focusProperties { down = focusRequester }
+                                .tvFocus(shape = androidx.compose.foundation.shape.CircleShape)
+                        ) {
                             Icon(Icons.Default.MoreVert, contentDescription = "More Options", tint = Color.White)
                         }
                         androidx.compose.material3.DropdownMenu(
@@ -423,6 +586,7 @@ fun MediaViewerDialog(
                             onDismissRequest = { showMoreMenu = false }
                         ) {
                             androidx.compose.material3.DropdownMenuItem(
+                                modifier = Modifier.tvFocus(),
                                 text = { androidx.compose.material3.Text(if (isSlideshowPlaying) "Stop Diashow" else "Start Diashow") },
                                 onClick = {
                                     isSlideshowPlaying = !isSlideshowPlaying
@@ -438,6 +602,7 @@ fun MediaViewerDialog(
                             )
                             if (!currentMedia.isVideo) {
                                 androidx.compose.material3.DropdownMenuItem(
+                                    modifier = Modifier.tvFocus(),
                                     text = { androidx.compose.material3.Text("Rotate") },
                                     onClick = {
                                         val page = pagerState.currentPage
@@ -452,6 +617,7 @@ fun MediaViewerDialog(
                                     }
                                 )
                                 androidx.compose.material3.DropdownMenuItem(
+                                    modifier = Modifier.tvFocus(),
                                     text = { androidx.compose.material3.Text(if (showFaceRegions) "Hide Face Regions" else "Show Face Regions") },
                                     onClick = {
                                         showFaceRegions = !showFaceRegions
@@ -464,14 +630,25 @@ fun MediaViewerDialog(
                                         )
                                     }
                                 )
+                            } else {
+                                androidx.compose.material3.DropdownMenuItem(
+                                    modifier = Modifier.tvFocus(),
+                                    text = { androidx.compose.material3.Text(if (isVideoPlaying) "Pause Video" else "Play Video") },
+                                    onClick = {
+                                        isVideoPlaying = !isVideoPlaying
+                                        showMoreMenu = false
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = if (isVideoPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                            contentDescription = null
+                                        )
+                                    }
+                                )
                             }
                         }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = Color.Black.copy(alpha = 0.6f),
-                        titleContentColor = Color.White
-                    )
-                )
+                    }
+                }
             }
 
             // Bottom Bar Overlay
@@ -486,7 +663,8 @@ fun MediaViewerDialog(
                         .fillMaxWidth()
                         .background(Color.Black.copy(alpha = 0.6f))
                         .windowInsetsPadding(WindowInsets.safeDrawing)
-                        .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 32.dp),
+                        .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 32.dp)
+                        .onFocusChanged { bottomBarFocused = it.hasFocus },
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -531,8 +709,9 @@ fun MediaViewerDialog(
                     }
                 }
             }
+            
         }
-}
+    }
 
 @Composable
 fun MetadataContent(media: ApiMedia, onClose: () -> Unit) {
@@ -555,7 +734,9 @@ fun MetadataContent(media: ApiMedia, onClose: () -> Unit) {
             )
             IconButton(
                 onClick = onClose,
-                modifier = Modifier.size(24.dp)
+                modifier = Modifier
+                    .size(24.dp)
+                    .tvFocus(shape = androidx.compose.foundation.shape.CircleShape)
             ) {
                 Icon(
                     imageVector = Icons.Default.Close,
@@ -570,7 +751,8 @@ fun MetadataContent(media: ApiMedia, onClose: () -> Unit) {
 
         MetadataRow(icon = Icons.Outlined.InsertDriveFile, label = "Filename", value = media.name)
         media.parentPath?.let {
-            MetadataRow(icon = Icons.Outlined.Folder, label = "Folder", value = it)
+            val cleanedPath = it.replace(Regex("/{2,}"), "/")
+            MetadataRow(icon = Icons.Outlined.Folder, label = "Folder", value = cleanedPath)
         }
 
         val size = media.metadata?.size
@@ -605,7 +787,12 @@ fun MetadataContent(media: ApiMedia, onClose: () -> Unit) {
             }
         }
         
-        val keywords = media.metadata?.keywords
+        media.metadata?.gps?.let { gps ->
+            val gpsStr = String.format(java.util.Locale.US, "%.6f, %.6f", gps.latitude, gps.longitude)
+            MetadataRow(icon = Icons.Outlined.LocationOn, label = "GPS Coordinates", value = gpsStr)
+        }
+        
+        val keywords = media.metadata?.keywords?.distinct()
         if (!keywords.isNullOrEmpty()) {
             MetadataBlock(icon = Icons.Outlined.Label, label = "Keywords", value = keywords.joinToString(", "))
         }
@@ -628,6 +815,9 @@ fun MediaViewerItem(
     context: Context,
     rotation: Float,
     showFaceRegions: Boolean,
+    isVideoPlaying: Boolean,
+    onVideoPlayingChange: (Boolean) -> Unit,
+    onVideoCompletion: () -> Unit,
     onToggleBars: () -> Unit
 ) {
     val mediaUrl = viewModel.getOriginalMediaUrl(media)
@@ -660,14 +850,38 @@ fun MediaViewerItem(
             var isPreparing by remember { mutableStateOf(true) }
             var isBuffering by remember { mutableStateOf(false) }
             var hasError by remember { mutableStateOf(false) }
+            
+            val initialAspectRatio = remember(media) {
+                val w = media.metadata?.size?.width?.toFloat()
+                val h = media.metadata?.size?.height?.toFloat()
+                if (w != null && h != null && w > 0f && h > 0f) w / h else null
+            }
+            var videoAspectRatio by remember(media) { mutableStateOf(initialAspectRatio) }
 
-            Box(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
                 AndroidView(
                     factory = { ctx ->
-                        VideoView(ctx).apply {
-                            val mediaController = MediaController(ctx)
-                            mediaController.setAnchorView(this)
-                            setMediaController(mediaController)
+                        val frameLayout = android.widget.FrameLayout(ctx).apply {
+                            layoutParams = android.view.ViewGroup.LayoutParams(
+                                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                                android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                            )
+                            setBackgroundColor(android.graphics.Color.BLACK)
+                        }
+
+                        val videoView = VideoView(ctx).apply {
+                            val lp = android.widget.FrameLayout.LayoutParams(
+                                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                                android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+                            ).apply {
+                                gravity = android.view.Gravity.CENTER
+                            }
+                            layoutParams = lp
+                            isFocusable = false
+                            isFocusableInTouchMode = false
 
                             if (cookies.isNotEmpty()) {
                                 setVideoURI(Uri.parse(mediaUrl), mapOf("Cookie" to cookies))
@@ -675,8 +889,13 @@ fun MediaViewerItem(
                                 setVideoURI(Uri.parse(mediaUrl))
                             }
 
-                            setOnPreparedListener {
+                            setOnPreparedListener { mp ->
                                 isPreparing = false
+                                val w = mp.videoWidth
+                                val h = mp.videoHeight
+                                if (w > 0 && h > 0) {
+                                    videoAspectRatio = w.toFloat() / h.toFloat()
+                                }
                                 start()
                             }
                             setOnInfoListener { _, what, _ ->
@@ -690,12 +909,29 @@ fun MediaViewerItem(
                             setOnCompletionListener {
                                 isPreparing = false
                                 isBuffering = false
+                                onVideoPlayingChange(false)
+                                onVideoCompletion()
+                                viewModel.emitVideoFinished()
                             }
                             setOnErrorListener { _, _, _ ->
                                 hasError = true
                                 isPreparing = false
                                 isBuffering = false
+                                onVideoPlayingChange(false)
                                 false
+                            }
+                        }
+
+                        frameLayout.addView(videoView)
+                        frameLayout
+                    },
+                    update = { view ->
+                        val videoView = view.getChildAt(0) as? VideoView
+                        videoView?.let { vv ->
+                            if (isVideoPlaying && !vv.isPlaying) {
+                                vv.start()
+                            } else if (!isVideoPlaying && vv.isPlaying) {
+                                vv.pause()
                             }
                         }
                     },
@@ -743,10 +979,20 @@ fun MediaViewerItem(
                 }
             }
         } else {
+            val originalUrl = viewModel.getOriginalMediaUrl(media)
+            val preloadUrl = viewModel.getPreloadMediaUrl(media)
+            val thumbnailUrl = viewModel.getThumbnailUrl(media)
+
+            var currentUrl by remember(media) {
+                mutableStateOf(preloadUrl ?: originalUrl)
+            }
+
             // Image View with Pinch to Zoom & dynamic Client-Side Rotation
             val builder = ImageRequest.Builder(context)
-                .data(mediaUrl)
-                .placeholderMemoryCacheKey(viewModel.getThumbnailUrl(media))
+                .data(currentUrl)
+                .placeholderMemoryCacheKey(
+                    if (currentUrl == preloadUrl) thumbnailUrl else (preloadUrl ?: thumbnailUrl)
+                )
                 .crossfade(true)
 
             if (cookies.isNotEmpty()) {
@@ -762,6 +1008,14 @@ fun MediaViewerItem(
                 contentScale = ContentScale.Fit,
                 onSuccess = { state ->
                     intrinsicSize = state.painter.intrinsicSize
+                    if (currentUrl == preloadUrl) {
+                        currentUrl = originalUrl
+                    }
+                },
+                onError = {
+                    if (currentUrl == preloadUrl) {
+                        currentUrl = originalUrl
+                    }
                 },
                 modifier = Modifier
                     .fillMaxSize()

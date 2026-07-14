@@ -19,6 +19,7 @@ class PreferencesManager(context: Context) {
         
         // New configs
         private const val KEY_THUMBNAIL_PATH_SUFFIX = "thumbnail_path_suffix"
+        private const val KEY_PRELOAD_PATH_SUFFIX = "preload_path_suffix"
         private const val KEY_VIDEO_PATH_SUFFIX = "video_path_suffix"
         private const val KEY_SHOW_DIR_ITEM_COUNT = "show_dir_item_count"
         private const val KEY_ITEMS_PER_ROW = "items_per_row"
@@ -73,6 +74,10 @@ class PreferencesManager(context: Context) {
     var thumbnailPathSuffix: String
         get() = prefs.getString(KEY_THUMBNAIL_PATH_SUFFIX, "320") ?: "320"
         set(value) = prefs.edit().putString(KEY_THUMBNAIL_PATH_SUFFIX, value).apply()
+
+    var preloadPathSuffix: String
+        get() = prefs.getString(KEY_PRELOAD_PATH_SUFFIX, "720") ?: "720"
+        set(value) = prefs.edit().putString(KEY_PRELOAD_PATH_SUFFIX, value).apply()
 
     var videoPathSuffix: String
         get() = prefs.getString(KEY_VIDEO_PATH_SUFFIX, "") ?: ""

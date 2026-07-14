@@ -115,8 +115,128 @@ class SearchQueryParser {
             return TextSearch(SearchQueryTypes.ANY_TEXT, value, TextSearchQueryMatchTypes.LIKE, isNegated)
         }
 
+        private fun parseDateToMillis(dateStr: String, isEndOfRange: Boolean): Long? {
+            val trimmed = dateStr.trim()
+            // Try YYYY-MM-DD
+            val ymdRegex = Regex("^(\\d{4})-(\\d{2})-(\\d{2})$")
+            val ymdMatch = ymdRegex.matchEntire(trimmed)
+            if (ymdMatch != null) {
+                val y = ymdMatch.groupValues[1].toInt()
+                val m = ymdMatch.groupValues[2].toInt() - 1 // 0-based in Calendar
+                val d = ymdMatch.groupValues[3].toInt()
+                val cal = java.util.Calendar.getInstance()
+                cal.clear()
+                cal.set(java.util.Calendar.YEAR, y)
+                cal.set(java.util.Calendar.MONTH, m)
+                cal.set(java.util.Calendar.DAY_OF_MONTH, d)
+                if (isEndOfRange) {
+                    cal.set(java.util.Calendar.HOUR_OF_DAY, 23)
+                    cal.set(java.util.Calendar.MINUTE, 59)
+                    cal.set(java.util.Calendar.SECOND, 59)
+                    cal.set(java.util.Calendar.MILLISECOND, 999)
+                } else {
+                    cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                    cal.set(java.util.Calendar.MINUTE, 0)
+                    cal.set(java.util.Calendar.SECOND, 0)
+                    cal.set(java.util.Calendar.MILLISECOND, 0)
+                }
+                return cal.timeInMillis
+            }
+
+            // Try YYYY-MM
+            val ymRegex = Regex("^(\\d{4})-(\\d{2})$")
+            val ymMatch = ymRegex.matchEntire(trimmed)
+            if (ymMatch != null) {
+                val y = ymMatch.groupValues[1].toInt()
+                val m = ymMatch.groupValues[2].toInt() - 1
+                val cal = java.util.Calendar.getInstance()
+                cal.clear()
+                cal.set(java.util.Calendar.YEAR, y)
+                cal.set(java.util.Calendar.MONTH, m)
+                if (isEndOfRange) {
+                    val maxDay = cal.getActualMaximum(java.util.Calendar.DAY_OF_MONTH)
+                    cal.set(java.util.Calendar.DAY_OF_MONTH, maxDay)
+                    cal.set(java.util.Calendar.HOUR_OF_DAY, 23)
+                    cal.set(java.util.Calendar.MINUTE, 59)
+                    cal.set(java.util.Calendar.SECOND, 59)
+                    cal.set(java.util.Calendar.MILLISECOND, 999)
+                } else {
+                    cal.set(java.util.Calendar.DAY_OF_MONTH, 1)
+                    cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                    cal.set(java.util.Calendar.MINUTE, 0)
+                    cal.set(java.util.Calendar.SECOND, 0)
+                    cal.set(java.util.Calendar.MILLISECOND, 0)
+                }
+                return cal.timeInMillis
+            }
+
+            // Try YYYY
+            val yRegex = Regex("^(\\d{4})$")
+            val yMatch = yRegex.matchEntire(trimmed)
+            if (yMatch != null) {
+                val y = yMatch.groupValues[1].toInt()
+                val cal = java.util.Calendar.getInstance()
+                cal.clear()
+                cal.set(java.util.Calendar.YEAR, y)
+                if (isEndOfRange) {
+                    cal.set(java.util.Calendar.MONTH, java.util.Calendar.DECEMBER)
+                    cal.set(java.util.Calendar.DAY_OF_MONTH, 31)
+                    cal.set(java.util.Calendar.HOUR_OF_DAY, 23)
+                    cal.set(java.util.Calendar.MINUTE, 59)
+                    cal.set(java.util.Calendar.SECOND, 59)
+                    cal.set(java.util.Calendar.MILLISECOND, 999)
+                } else {
+                    cal.set(java.util.Calendar.MONTH, java.util.Calendar.JANUARY)
+                    cal.set(java.util.Calendar.DAY_OF_MONTH, 1)
+                    cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                    cal.set(java.util.Calendar.MINUTE, 0)
+                    cal.set(java.util.Calendar.SECOND, 0)
+                    cal.set(java.util.Calendar.MILLISECOND, 0)
+                }
+                return cal.timeInMillis
+            }
+
+            // Fallback to numeric
+            return trimmed.toLongOrNull()
+        }
+
         private fun parseRangeQuery(text: String): RangeSearch? {
-            // Simplified range query parsing (date, rating, resolution, person_count)
+            // First check if it is date querying with custom formats
+            val dateRegex = Regex("^date(!?[:=]|!?[<>]=?)([^.]+)(?:\\.\\.([^.]+))?\$", RegexOption.IGNORE_CASE)
+            val dateMatch = dateRegex.find(text)
+            if (dateMatch != null) {
+                val relation = dateMatch.groupValues[1]
+                val rawA = dateMatch.groupValues[2]
+                val rawB = if (dateMatch.groupValues.size > 3 && dateMatch.groupValues[3].isNotEmpty()) dateMatch.groupValues[3] else null
+
+                var negate = false
+                var rel = relation
+                if (rel.startsWith("!")) {
+                    negate = true
+                    rel = rel.substring(1)
+                }
+
+                val a = parseDateToMillis(rawA, isEndOfRange = false)
+                val b = rawB?.let { parseDateToMillis(it, isEndOfRange = true) }
+
+                if (a != null) {
+                    when (rel) {
+                        ":", "=" -> {
+                            val endVal = b ?: parseDateToMillis(rawA, isEndOfRange = true) ?: a
+                            return RangeSearch(SearchQueryTypes.DATE, min = a, max = endVal, negate = negate)
+                        }
+                        ">=" -> return RangeSearch(SearchQueryTypes.DATE, min = a, negate = negate)
+                        ">" -> return RangeSearch(SearchQueryTypes.DATE, min = a + 1, negate = negate)
+                        "<=" -> {
+                            val endVal = parseDateToMillis(rawA, isEndOfRange = true) ?: a
+                            return RangeSearch(SearchQueryTypes.DATE, max = endVal, negate = negate)
+                        }
+                        "<" -> return RangeSearch(SearchQueryTypes.DATE, max = a - 1, negate = negate)
+                    }
+                }
+            }
+
+            // Simplified range query parsing (date fallback, rating, resolution, person_count)
             // Example: rating:4..6, rating:4, rating>3
             val keywords = listOf(
                 Pair(SearchQueryTypes.DATE, "date"),
