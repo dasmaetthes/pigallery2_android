@@ -19,7 +19,7 @@ This client delivers a fluid and beautifully designed user interface, allowing y
     - Optimised layouts and robust D-pad navigation support.
     - Performance-heavy map views are disabled on Android TV to keep the focus on smooth media presentation and navigation.
 - **Customisable layouts and grid control:** Adjust the number of columns, image aspect ratios, grid item spacing and corner roundedness.
-- Rich Media Viewer: Intuitive zoom-to-span and panning gestures for high-resolution images.
+- **Rich Media Viewer:** Intuitive zoom-to-span and panning gestures for high-resolution images.
     - Face recognition overlays highlight detected people in images.
 	-  Share images instantly via messenger 
 - **Comprehensive Metadata Explorer:** A metadata panel displaying full EXIF details, including:
