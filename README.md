@@ -10,36 +10,33 @@ This client delivers a fluid and beautifully designed user interface, allowing y
 
 ## 🌟 Key Features
 
-- **Folder & Directory Browsing:** Securely connect to your PiGallery2 server to browse your photo and video collection in its original directory structure.
-- **Advanced Query Builder:** Craft complex searches using a dedicated visual query builder to filter media by keywords, date ranges, file types, and other advanced metadata parameters.
+- **Folder and directory browsing:** Securely connect to your PiGallery2 server and browse your photo and video collection within its original directory structure.
+- **Advanced Query Builder:** Use the visual query builder to create complex searches and filter media by keywords, date ranges, file types and other advanced metadata parameters.
 - **Interactive Map View:** Explore geotagged photos and videos on an interactive map.
-  - Easily view the locations where your memories were captured.
-  - **Fullscreen Media Integration:** Clicking on a Mapbox image preview instantly opens the rich fullscreen media viewer for full fidelity viewing.
-  - *Note: To ensure a smooth, TV-friendly interface, interactive maps are automatically disabled when running on Android TV.*
-- **Android TV Optimized:** Full-featured support for Android TV devices.
-  - Optimized layouts and robust D-pad navigation support.
-  - Disables performance-heavy map views on Android TV to keep the focus on smooth media presentation and navigation.
-- **Customizable Layouts & Grid Control:** Adjust column count, image aspect ratios, grid item spacing, and corner roundedness in real-time to match your visual preferences.
-- **Rich Media Viewer:**
-  - Intuitive zoom-to-span and panning gestures for high-resolution images.
-  - Video player with integrated media controls.
-  - Face recognition overlays on images highlighting detected people.
-  - Instant sharing progress with background network-file processing.
-- **Comprehensive Metadata Explorer:** An metadata panel displaying full EXIF details including:
-  - Camera, model, and lens type.
-  - ISO, Exposure, Focal Length, and Aperture.
-  - Keywords, and detected faces.
-- **Albums:** Seamless access to saved albums created within the PiGallery2 web interface, supporting customizable item sorting.
-- **People & Face Recognition:** Browse a structured grid of recognized people.
-  - Manage and mark favorite people.
-  - Note that it doesn’t perform face recognition on its own.
-- **Rediscover:** Revisit randomly selected moments from your library.
+	- Easily view the locations where your memories were captured.
+	- Please note that to ensure a smooth, TV-friendly interface, interactive maps are automatically disabled when running on Android TV.
+- **Android TV Optimised:** Full support for all Android TV features.
+    - Optimised layouts and robust D-pad navigation support.
+    - Performance-heavy map views are disabled on Android TV to keep the focus on smooth media presentation and navigation.
+- **Customisable layouts and grid control:** Adjust the number of columns, image aspect ratios, grid item spacing and corner roundedness.
+- **Rich Media Viewer:** Intuitive zoom-to-span and panning gestures for high-resolution images.
+    - Face recognition overlays highlight detected people in images.
+	-  Share images instantly via messenger 
+- **Comprehensive Metadata Explorer:** A metadata panel displaying full EXIF details, including:
+	- camera model and lens type
+	- ISO, exposure, focal length and aperture
+    - Keywords and detected faces
+- **Albums:** Seamless access to saved albums created within the PiGallery2 web interface with customisable item sorting.
+- **People & Face Recognition:** Browse a structured grid of recognised people.
+	- Manage and mark favourite people.
+	- Please note that it does not perform face recognition independently.
+- **Rediscover:** Revisit a randomly selected moments from your library.
 
 ---
 
 ## 🛠️ Built with Open Source Software
 
-This application leverages industry-standard, high-performance modern Android libraries:
+This application leverages modern Android libraries:
 
 - **Jetpack Compose & Material 3** — Modern declarative UI toolkit with adaptive components and dynamic theming.
 - **Kotlin & Kotlin Coroutines** — Type-safe, expressive programming language with robust asynchronous state management.
@@ -52,4 +49,4 @@ This application leverages industry-standard, high-performance modern Android li
 ## 💡 Inspiration & Credits
 
 - **Inspired by:** **[pigallery2_android_test](https://github.com/Lakjdf/pigallery2_android_test)** by Lakjdf.
-- **Developed with AI:** This application was developed, polished, and optimized with the assistance of advanced AI models.
+- **Developed with AI:** This application was developed and optimized with the assistance of advanced AI models.
