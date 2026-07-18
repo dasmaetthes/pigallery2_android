@@ -97,7 +97,6 @@ import com.example.data.ApiMedia
 import com.example.data.ApiSubFolder
 import androidx.compose.ui.composed
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.animation.core.animateFloatAsState
 
 import android.content.pm.PackageManager
 
@@ -126,14 +125,9 @@ fun AdaptivePullToRefreshBox(
 @OptIn(ExperimentalMaterial3Api::class)
 fun Modifier.tvFocus(
     shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(12.dp),
-    scale: Float = 1.1f,
     showBorder: Boolean = true
 ): Modifier = this.composed {
     var isFocused by remember { mutableStateOf(false) }
-    val animatedScale by animateFloatAsState(
-        targetValue = if (isFocused) scale else 1.0f,
-        label = "tv_focus_scale"
-    )
     
     val borderModifier = if (showBorder && isFocused) {
         Modifier.border(4.dp, MaterialTheme.colorScheme.primary, shape)
@@ -145,8 +139,6 @@ fun Modifier.tvFocus(
         .onFocusChanged { isFocused = it.isFocused }
         .then(borderModifier)
         .graphicsLayer {
-            scaleX = animatedScale
-            scaleY = animatedScale
             // Removed shadowElevation to avoid gray border effect in dark mode
             this.shape = shape
             clip = true
@@ -1001,7 +993,7 @@ fun RediscoverTabContent(viewModel: GalleryViewModel) {
                             // Header
                             item(span = { GridItemSpan(itemsPerRow.toInt()) }) {
                                 var isFocused by remember { mutableStateOf(false) }
-                                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                                Column(modifier = Modifier.padding(vertical = 8.dp)) {
                                     val hasMore = mediaList.size > itemsPerRow.toInt()
                                     
                                     val focusModifier = if (isFirstYear) Modifier.focusRequester(firstItemFocusRequester) else Modifier
@@ -1011,13 +1003,13 @@ fun RediscoverTabContent(viewModel: GalleryViewModel) {
                                             .fillMaxWidth()
                                             .then(focusModifier)
                                             .onFocusChanged { isFocused = it.isFocused }
+                                            .clip(RoundedCornerShape(8.dp))
                                             .tvFocus(shape = RoundedCornerShape(8.dp), showBorder = true)
                                             .then(if (hasMore) Modifier.clickable { expandedYears[year] = !isExpanded } else Modifier.focusable())
                                             .background(
-                                                color = if (isFocused) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f),
-                                                shape = RoundedCornerShape(8.dp)
+                                                color = if (isFocused) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
                                             )
-                                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                                            .padding(horizontal = 8.dp, vertical = 12.dp),
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
@@ -1584,29 +1576,6 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         
-                        var allowInsecureSsl by remember { mutableStateOf(viewModel.prefs.allowInsecureSsl) }
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth().clickable { 
-                                allowInsecureSsl = !allowInsecureSsl
-                                viewModel.prefs.allowInsecureSsl = allowInsecureSsl
-                            }
-                        ) {
-                            androidx.compose.material3.Switch(
-                                checked = allowInsecureSsl,
-                                onCheckedChange = { 
-                                    allowInsecureSsl = it
-                                    viewModel.prefs.allowInsecureSsl = it
-                                }
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(
-                                text = "Allow insecure SSL (bad/no cert)",
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
                         Button(
                             onClick = { viewModel.logout() },
                             modifier = Modifier.fillMaxWidth(),
@@ -2680,7 +2649,7 @@ fun AboutDialog(onDismiss: () -> Unit) {
                     val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
                     packageInfo.versionName
                 } catch (e: Exception) {
-                    "2.0"
+                    "2.1"
                 }
                 Text("Version $version", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(16.dp))

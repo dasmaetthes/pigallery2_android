@@ -820,6 +820,9 @@ fun MediaViewerItem(
     onVideoCompletion: () -> Unit,
     onToggleBars: () -> Unit
 ) {
+    val isTv = remember(context) {
+        context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+    }
     val mediaUrl = viewModel.getOriginalMediaUrl(media)
 
     // Pinch to Zoom states (for images)
@@ -987,13 +990,25 @@ fun MediaViewerItem(
                 mutableStateOf(preloadUrl ?: originalUrl)
             }
 
+            var preloadDrawable by remember(media) {
+                mutableStateOf<android.graphics.drawable.Drawable?>(null)
+            }
+
             // Image View with Pinch to Zoom & dynamic Client-Side Rotation
             val builder = ImageRequest.Builder(context)
                 .data(currentUrl)
-                .placeholderMemoryCacheKey(
-                    if (currentUrl == preloadUrl) thumbnailUrl else (preloadUrl ?: thumbnailUrl)
-                )
                 .crossfade(true)
+
+            if (currentUrl == originalUrl) {
+                builder.size(coil.size.Size.ORIGINAL)
+                if (preloadDrawable != null) {
+                    builder.placeholder(preloadDrawable)
+                } else {
+                    builder.placeholderMemoryCacheKey(preloadUrl ?: thumbnailUrl)
+                }
+            } else {
+                builder.placeholderMemoryCacheKey(thumbnailUrl)
+            }
 
             if (cookies.isNotEmpty()) {
                 builder.addHeader("Cookie", cookies)
@@ -1008,12 +1023,13 @@ fun MediaViewerItem(
                 contentScale = ContentScale.Fit,
                 onSuccess = { state ->
                     intrinsicSize = state.painter.intrinsicSize
-                    if (currentUrl == preloadUrl) {
+                    preloadDrawable = state.result.drawable
+                    if (currentUrl == preloadUrl && !isTv) {
                         currentUrl = originalUrl
                     }
                 },
                 onError = {
-                    if (currentUrl == preloadUrl) {
+                    if (currentUrl == preloadUrl && !isTv) {
                         currentUrl = originalUrl
                     }
                 },

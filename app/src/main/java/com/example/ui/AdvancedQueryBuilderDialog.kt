@@ -44,9 +44,8 @@ fun AdvancedQueryBuilderDialog(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     
-    // Initialize with one empty row, or try parsing the existing searchQuery back into rows
-    val initialQuery = viewModel.searchQuery.value
-    var rows by remember {
+    val initialQuery by viewModel.searchQuery.collectAsState()
+    var rows by remember(initialQuery) {
         mutableStateOf(
             if (initialQuery.isNotEmpty()) {
                 // If there's an existing query, let's try to parse it into rows
