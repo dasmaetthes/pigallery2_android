@@ -278,6 +278,9 @@ fun MediaViewerDialog(
         val vv = activeVideoView
         if (vv != null) {
             if (isVideoPlaying && !pagerState.isScrollInProgress) {
+                if (vv.duration > 0 && vv.currentPosition >= vv.duration - 500) {
+                    vv.seekTo(0)
+                }
                 if (!vv.isPlaying) {
                     vv.start()
                 }
@@ -1083,18 +1086,31 @@ fun MediaViewerItem(
         contentAlignment = Alignment.Center
     ) {
         if (media.isVideo) {
-            var isPreparing by remember { mutableStateOf(true) }
-            var isBuffering by remember { mutableStateOf(false) }
-            var hasError by remember { mutableStateOf(false) }
+            var isPreparing by remember(media.id) { mutableStateOf(true) }
+            var isBuffering by remember(media.id) { mutableStateOf(false) }
+            var hasError by remember(media.id) { mutableStateOf(false) }
 
-            var currentVideoView by remember { mutableStateOf<VideoView?>(null) }
+            var currentVideoView by remember(media.id) { mutableStateOf<VideoView?>(null) }
 
-            DisposableEffect(isVideoPlaying, currentVideoView) {
-                if (!isVideoPlaying) {
-                    currentVideoView?.pause()
+            LaunchedEffect(isVideoPlaying, currentVideoView) {
+                val vv = currentVideoView
+                if (vv != null) {
+                    if (isVideoPlaying) {
+                        if (!vv.isPlaying) {
+                            vv.start()
+                        }
+                    } else {
+                        if (vv.isPlaying) {
+                            vv.pause()
+                        }
+                    }
                 }
+            }
+
+            DisposableEffect(media.id) {
                 onDispose {
                     currentVideoView?.pause()
+                    currentVideoView?.stopPlayback()
                     onDisposeVideo?.invoke()
                 }
             }
@@ -1155,7 +1171,8 @@ fun MediaViewerItem(
                             setOnInfoListener { _, what, _ ->
                                 if (what == 701) { // MediaPlayer.MEDIA_INFO_BUFFERING_START
                                     isBuffering = true
-                                } else if (what == 702) { // MediaPlayer.MEDIA_INFO_BUFFERING_END
+                                } else if (what == 702 || what == 703) { // MEDIA_INFO_BUFFERING_END / MEDIA_INFO_VIDEO_RENDERING_START
+                                    isPreparing = false
                                     isBuffering = false
                                 }
                                 true
@@ -1182,6 +1199,7 @@ fun MediaViewerItem(
                         val videoView = view.getChildAt(0) as? VideoView
                         videoView?.let { vv ->
                             currentVideoView = vv
+                            onVideoPrepared(vv.duration, vv)
                             if (isVideoPlaying && !vv.isPlaying) {
                                 vv.start()
                             } else if (!isVideoPlaying && vv.isPlaying) {

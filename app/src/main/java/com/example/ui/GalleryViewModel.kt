@@ -188,6 +188,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val isFlattened = MutableStateFlow(false)
     val galleryViewMode = MutableStateFlow(GalleryViewMode.FOLDER)
 
+    private val directoryCache = java.util.concurrent.ConcurrentHashMap<String, ApiDirectory>()
+    private val cachedFlattenedMedia = java.util.concurrent.ConcurrentHashMap<String, List<ApiMedia>>()
+
     fun setGalleryViewMode(mode: GalleryViewMode) {
         galleryViewMode.value = mode
         _pathHistory.value = buildInitialPathStack(prefs.defaultRootPath)
@@ -665,7 +668,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     } else {
                         path
                     }
-                    val allMedia = fetchAllMediaRecursively(server, rootPath, cookies, apiPrefix)
+                    val allMedia = getOrFetchAllMedia(server, rootPath, cookies, apiPrefix)
                     val uniqueMedia = allMedia.distinctBy { it.id }
 
                     val filteredMedia = if (currentPath.startsWith("year:") && !currentPath.contains("month:")) {
@@ -694,7 +697,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     )
                 } else if (galleryViewMode.value == GalleryViewMode.DATE) {
                     val rootPath = prefs.defaultRootPath
-                    val allMedia = fetchAllMediaRecursively(server, rootPath, cookies, apiPrefix)
+                    val allMedia = getOrFetchAllMedia(server, rootPath, cookies, apiPrefix)
                     val uniqueMedia = allMedia.distinctBy { it.id }
                     
                     val currentPathStr = currentPath
@@ -805,6 +808,50 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    private suspend fun getOrFetchAllMedia(
+        serverUrl: String,
+        rootPath: String,
+        cookies: String,
+        apiPrefix: String
+    ): List<ApiMedia> {
+        val cacheKey = rootPath.ifEmpty { "ROOT" }
+        cachedFlattenedMedia[cacheKey]?.let { return it }
+
+        // 1. Try single PiGallery2 search request
+        try {
+            val searchDto = if (rootPath.isEmpty() || rootPath == prefs.defaultRootPath) {
+                com.example.data.search.TextSearch(
+                    type = com.example.data.search.SearchQueryTypes.ANY_TEXT,
+                    value = "",
+                    matchType = com.example.data.search.TextSearchQueryMatchTypes.LIKE
+                )
+            } else {
+                com.example.data.search.TextSearch(
+                    type = com.example.data.search.SearchQueryTypes.DIRECTORY,
+                    value = rootPath,
+                    matchType = com.example.data.search.TextSearchQueryMatchTypes.LIKE
+                )
+            }
+            val queryJson = api.serializeQuery(searchDto.toJson())
+            val searchResult = api.search(serverUrl, queryJson, cookies, apiPrefix)
+            if (searchResult.media != null && searchResult.media.isNotEmpty()) {
+                val uniqueMedia = searchResult.media.distinctBy { it.id }
+                cachedFlattenedMedia[cacheKey] = uniqueMedia
+                return uniqueMedia
+            }
+        } catch (e: Exception) {
+            android.util.Log.d("GalleryViewModel", "Search optimization fallback: ${e.message}")
+        }
+
+        // 2. Fall back to recursive fetching with per-folder caching
+        val recursiveMedia = fetchAllMediaRecursively(serverUrl, rootPath, cookies, apiPrefix)
+        val uniqueMedia = recursiveMedia.distinctBy { it.id }
+        if (uniqueMedia.isNotEmpty()) {
+            cachedFlattenedMedia[cacheKey] = uniqueMedia
+        }
+        return uniqueMedia
+    }
+
     private suspend fun fetchAllMediaRecursively(
         serverUrl: String,
         path: String,
@@ -812,7 +859,22 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         apiPrefix: String
     ): List<ApiMedia> = kotlinx.coroutines.coroutineScope {
         try {
-            val directory = api.getGalleryContent(serverUrl, path, cookies, apiPrefix)
+            val directory = directoryCache[path] ?: run {
+                val roomMedia = repo.getDirectory(path)
+                if (roomMedia != null && roomMedia.isNotEmpty()) {
+                    val dir = ApiDirectory(id = -1, name = path.substringAfterLast('/'), path = path, directories = emptyList(), media = roomMedia)
+                    directoryCache[path] = dir
+                    dir
+                } else {
+                    val fetched = api.getGalleryContent(serverUrl, path, cookies, apiPrefix)
+                    directoryCache[path] = fetched
+                    if (fetched.media != null) {
+                        repo.saveDirectory(path, fetched.media)
+                    }
+                    fetched
+                }
+            }
+
             val currentMedia = directory.media ?: emptyList()
             val subDirs = directory.directories ?: emptyList()
             
@@ -1458,6 +1520,8 @@ fun loadAlbums() {
     }
 
     fun logout() {
+        directoryCache.clear()
+        cachedFlattenedMedia.clear()
         prefs.clear()
         isLoggedIn.value = false
         savedServerUrl.value = ""
@@ -1536,6 +1600,9 @@ fun loadAlbums() {
             } catch (e: Exception) {
                 e.printStackTrace()
             }
+
+            directoryCache.clear()
+            cachedFlattenedMedia.clear()
 
             updateCacheSize()
         }
