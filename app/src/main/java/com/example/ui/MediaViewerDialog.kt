@@ -221,41 +221,64 @@ fun MediaViewerDialog(
     val currentMedia = mediaList.getOrNull(pagerState.currentPage) ?: media
     val mediaUrl = viewModel.getOriginalMediaUrl(currentMedia)
 
-    LaunchedEffect(pagerState.currentPage) {
-        val prefetchDistance = 2
-        for (i in 1..prefetchDistance) {
-            val nextPage = pagerState.currentPage + i
-            if (nextPage < mediaList.size) {
-                val nextMedia = mediaList[nextPage]
-                if (!nextMedia.isVideo) {
-                    val request = ImageRequest.Builder(context)
-                        .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
-                        .diskCachePolicy(coil.request.CachePolicy.ENABLED)
-                        .networkCachePolicy(coil.request.CachePolicy.ENABLED)
-                        .data(viewModel.getOriginalMediaUrl(nextMedia))
-                        .apply {
-                            if (cookies.isNotEmpty()) setHeader("Cookie", cookies)
-                        }
-                        .build()
-                    context.imageLoader.enqueue(request)
-                }
+    // Smart Directional Image Preloading (Preload Size First, then Full Original Resolution)
+    var previousPage by remember { mutableStateOf(initialIndex) }
+    var swipeDirection by remember { mutableStateOf(1) } // 1: forward, -1: backward
+
+    LaunchedEffect(pagerState.currentPage, mediaList) {
+        val page = pagerState.currentPage
+        if (page > previousPage) {
+            swipeDirection = 1
+        } else if (page < previousPage) {
+            swipeDirection = -1
+        }
+        previousPage = page
+
+        val offsets = if (swipeDirection >= 0) {
+            listOf(1, 2, 3, -1, 4, -2)
+        } else {
+            listOf(-1, -2, -3, 1, -4, 2)
+        }
+
+        val targetMediaItems = offsets.mapNotNull { offset ->
+            val index = page + offset
+            mediaList.getOrNull(index)
+        }.filter { !it.isVideo }
+
+        val imageLoader = context.imageLoader
+
+        // PASS 1: Preload preview display size FIRST for instant rendering
+        for (targetMedia in targetMediaItems) {
+            val preloadUrl = viewModel.getPreloadMediaUrl(targetMedia) ?: viewModel.getThumbnailUrl(targetMedia)
+            if (!preloadUrl.isNullOrBlank()) {
+                val req = ImageRequest.Builder(context)
+                    .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .networkCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .data(preloadUrl)
+                    .apply {
+                        if (cookies.isNotEmpty()) addHeader("Cookie", cookies)
+                    }
+                    .build()
+                imageLoader.enqueue(req)
             }
-            
-            val prevPage = pagerState.currentPage - i
-            if (prevPage >= 0) {
-                val prevMedia = mediaList[prevPage]
-                if (!prevMedia.isVideo) {
-                    val request = ImageRequest.Builder(context)
-                        .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
-                        .diskCachePolicy(coil.request.CachePolicy.ENABLED)
-                        .networkCachePolicy(coil.request.CachePolicy.ENABLED)
-                        .data(viewModel.getOriginalMediaUrl(prevMedia))
-                        .apply {
-                            if (cookies.isNotEmpty()) setHeader("Cookie", cookies)
-                        }
-                        .build()
-                    context.imageLoader.enqueue(request)
-                }
+        }
+
+        // PASS 2: Preload full resolution original images
+        for (targetMedia in targetMediaItems) {
+            val originalUrl = viewModel.getOriginalMediaUrl(targetMedia)
+            if (originalUrl.isNotBlank()) {
+                val req = ImageRequest.Builder(context)
+                    .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .networkCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .data(originalUrl)
+                    .size(coil.size.Size.ORIGINAL)
+                    .apply {
+                        if (cookies.isNotEmpty()) addHeader("Cookie", cookies)
+                    }
+                    .build()
+                imageLoader.enqueue(req)
             }
         }
     }
@@ -319,27 +342,7 @@ fun MediaViewerDialog(
         }
     }
 
-    val imageLoader = context.imageLoader
-    LaunchedEffect(pagerState.currentPage, mediaList) {
-        val start = (pagerState.currentPage - 3).coerceAtLeast(0)
-        val end = (pagerState.currentPage + 3).coerceAtMost(mediaList.size - 1)
-        for (i in start..end) {
-            if (i != pagerState.currentPage) {
-                val prefetchMedia = mediaList[i]
-                if (!prefetchMedia.isVideo) {
-                    val prefetchUrl = viewModel.getPreloadMediaUrl(prefetchMedia) ?: viewModel.getOriginalMediaUrl(prefetchMedia)
-                    val request = ImageRequest.Builder(context)
-                        .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
-                        .diskCachePolicy(coil.request.CachePolicy.ENABLED)
-                        .networkCachePolicy(coil.request.CachePolicy.ENABLED)
-                        .data(prefetchUrl)
-                        .addHeader("Cookie", cookies)
-                        .build()
-                    imageLoader.enqueue(request)
-                }
-            }
-        }
-    }
+
 
     var videoCompletionTrigger by remember { mutableStateOf(0L) }
 
@@ -484,21 +487,15 @@ fun MediaViewerDialog(
             .background(Color.Black)
             .pointerInput(showMetadata) {
                 var totalDragY = 0f
-                var totalDragX = 0f
-                detectDragGestures(
+                detectVerticalDragGestures(
                     onDragStart = {
                         totalDragY = 0f
-                        totalDragX = 0f
                     },
                     onDragEnd = {
-                        val absY = kotlin.math.abs(totalDragY)
-                        val absX = kotlin.math.abs(totalDragX)
-                        if (absY > absX * 1.2f && absY > 80f) {
+                        if (kotlin.math.abs(totalDragY) > 80f) {
                             if (totalDragY < -80f) {
-                                // Swipe UP to show metadata
                                 showMetadata = true
                             } else if (totalDragY > 80f) {
-                                // Swipe DOWN to close metadata or dismiss viewer
                                 if (showMetadata) {
                                     showMetadata = false
                                 } else {
@@ -509,11 +506,9 @@ fun MediaViewerDialog(
                     },
                     onDragCancel = {
                         totalDragY = 0f
-                        totalDragX = 0f
                     },
-                    onDrag = { _, dragAmount ->
-                        totalDragY += dragAmount.y
-                        totalDragX += dragAmount.x
+                    onVerticalDrag = { _, dragAmount ->
+                        totalDragY += dragAmount
                     }
                 )
             }
@@ -578,7 +573,7 @@ fun MediaViewerDialog(
                         beyondViewportPageCount = 1,
                         modifier = Modifier.fillMaxSize()
                     ) { page ->
-                        val pageMedia = mediaList[page]
+                        val pageMedia = mediaList.getOrNull(page) ?: return@HorizontalPager
                         val pageRotation = rotationMap[page] ?: 0f
                         MediaViewerItem(
                             media = pageMedia,
@@ -1093,17 +1088,24 @@ fun MediaViewerItem(
             var currentVideoView by remember(media.id) { mutableStateOf<VideoView?>(null) }
 
             LaunchedEffect(isVideoPlaying, currentVideoView) {
-                val vv = currentVideoView
-                if (vv != null) {
-                    if (isVideoPlaying) {
-                        if (!vv.isPlaying) {
-                            vv.start()
-                        }
-                    } else {
-                        if (vv.isPlaying) {
-                            vv.pause()
+                while (true) {
+                    val vv = currentVideoView
+                    if (vv != null) {
+                        if (isVideoPlaying) {
+                            if (!vv.isPlaying) {
+                                vv.start()
+                            }
+                            if (vv.isPlaying || vv.currentPosition > 0) {
+                                isPreparing = false
+                                isBuffering = false
+                            }
+                        } else {
+                            if (vv.isPlaying) {
+                                vv.pause()
+                            }
                         }
                     }
+                    kotlinx.coroutines.delay(200)
                 }
             }
 
@@ -1170,8 +1172,10 @@ fun MediaViewerItem(
                             }
                             setOnInfoListener { _, what, _ ->
                                 if (what == 701) { // MediaPlayer.MEDIA_INFO_BUFFERING_START
-                                    isBuffering = true
-                                } else if (what == 702 || what == 703) { // MEDIA_INFO_BUFFERING_END / MEDIA_INFO_VIDEO_RENDERING_START
+                                    if (currentVideoView?.isPlaying != true) {
+                                        isBuffering = true
+                                    }
+                                } else if (what == 702 || what == 703 || what == 3) { // MEDIA_INFO_BUFFERING_END / MEDIA_INFO_VIDEO_RENDERING_START
                                     isPreparing = false
                                     isBuffering = false
                                 }
@@ -1200,6 +1204,10 @@ fun MediaViewerItem(
                         videoView?.let { vv ->
                             currentVideoView = vv
                             onVideoPrepared(vv.duration, vv)
+                            if (vv.isPlaying || vv.currentPosition > 0) {
+                                isPreparing = false
+                                isBuffering = false
+                            }
                             if (isVideoPlaying && !vv.isPlaying) {
                                 vv.start()
                             } else if (!isVideoPlaying && vv.isPlaying) {
@@ -1238,7 +1246,8 @@ fun MediaViewerItem(
                 )
             }
             
-            if ((isPreparing || isBuffering) && !hasError) {
+            val isActivelyPlaying = (currentVideoView?.isPlaying == true) || ((currentVideoView?.currentPosition ?: 0) > 0)
+            if ((isPreparing || isBuffering) && !hasError && !isActivelyPlaying) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
@@ -1329,57 +1338,62 @@ fun MediaViewerItem(
                         )
                     }
                     .pointerInput(intrinsicSize) {
-                        awaitPointerEventScope {
-                            while (true) {
-                                val event = awaitPointerEvent()
-                                val zoomChange = event.calculateZoom()
-                                val panChange = event.calculatePan()
-                                val pointersCount = event.changes.size
+                        try {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    if (event.changes.isEmpty()) continue
+                                    val zoomChange = event.calculateZoom()
+                                    val panChange = event.calculatePan()
+                                    val pointersCount = event.changes.size
 
-                                if (pointersCount > 1 || scale > 1f) {
-                                    val nextScale = (scale * zoomChange).coerceIn(1f, 5f)
-                                    scale = nextScale
-                                    
-                                    var consumedPan = false
-                                    
-                                    if (nextScale > 1f && intrinsicSize.width > 0f && intrinsicSize.height > 0f) {
-                                        val scaleX = size.width / intrinsicSize.width
-                                        val scaleY = size.height / intrinsicSize.height
-                                        val fitScale = minOf(scaleX, scaleY)
-                                        val displayWidth = intrinsicSize.width * fitScale
-                                        val displayHeight = intrinsicSize.height * fitScale
+                                    if (pointersCount > 1 || scale > 1f) {
+                                        val nextScale = (scale * zoomChange).coerceIn(1f, 5f)
+                                        scale = nextScale
                                         
-                                        val maxOffsetX = maxOf(0f, (displayWidth * nextScale - size.width) / 2f)
-                                        val maxOffsetY = maxOf(0f, (displayHeight * nextScale - size.height) / 2f)
+                                        var consumedPan = false
                                         
-                                        val oldOffsetX = offsetX
-                                        offsetX = (offsetX + panChange.x * nextScale).coerceIn(-maxOffsetX, maxOffsetX)
-                                        offsetY = (offsetY + panChange.y * nextScale).coerceIn(-maxOffsetY, maxOffsetY)
-                                        
-                                        val movedX = kotlin.math.abs(offsetX - oldOffsetX) > 0.01f
-                                        val isZooming = pointersCount > 1 || zoomChange != 1f
-                                        if (movedX || isZooming) {
-                                            consumedPan = true
+                                        if (nextScale > 1f && intrinsicSize.width > 0f && intrinsicSize.height > 0f) {
+                                            val scaleX = size.width / intrinsicSize.width
+                                            val scaleY = size.height / intrinsicSize.height
+                                            val fitScale = minOf(scaleX, scaleY)
+                                            val displayWidth = intrinsicSize.width * fitScale
+                                            val displayHeight = intrinsicSize.height * fitScale
+                                            
+                                            val maxOffsetX = maxOf(0f, (displayWidth * nextScale - size.width) / 2f)
+                                            val maxOffsetY = maxOf(0f, (displayHeight * nextScale - size.height) / 2f)
+                                            
+                                            val oldOffsetX = offsetX
+                                            offsetX = (offsetX + panChange.x * nextScale).coerceIn(-maxOffsetX, maxOffsetX)
+                                            offsetY = (offsetY + panChange.y * nextScale).coerceIn(-maxOffsetY, maxOffsetY)
+                                            
+                                            val movedX = kotlin.math.abs(offsetX - oldOffsetX) > 0.01f
+                                            val isZooming = pointersCount > 1 || zoomChange != 1f
+                                            if (movedX || isZooming) {
+                                                consumedPan = true
+                                            }
+                                        } else {
+                                            offsetX = 0f
+                                            offsetY = 0f
                                         }
-                                    } else {
-                                        offsetX = 0f
-                                        offsetY = 0f
-                                    }
-                                    
-                                    if (consumedPan) {
-                                        event.changes.forEach {
-                                            if (it.positionChanged()) {
-                                                it.consume()
+                                        
+                                        if (consumedPan) {
+                                            event.changes.forEach {
+                                                if (it.positionChanged()) {
+                                                    it.consume()
+                                                }
                                             }
                                         }
-                                    }
-                                } else {
-                                    if (scale <= 1f) {
-                                        offsetX = 0f
-                                        offsetY = 0f
+                                    } else {
+                                        if (scale <= 1f) {
+                                            offsetX = 0f
+                                            offsetY = 0f
+                                        }
                                     }
                                 }
                             }
+                        } catch (e: Exception) {
+                            // Safely handle gesture scope cancellation during page swiping
                         }
                     }
                     .graphicsLayer(

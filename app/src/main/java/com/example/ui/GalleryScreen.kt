@@ -2619,12 +2619,24 @@ fun SortDialog(
     onDismiss: () -> Unit
 ) {
     val currentPath = viewModel.getSortPath()
+    val isDateMode = viewModel.galleryViewMode.collectAsState().value == GalleryViewMode.DATE
+
+    val defaultFSort = if (isDateMode) "date" else "name"
+    val defaultFDir = if (isDateMode) "desc" else "asc"
+    val defaultMSort = "date"
+    val defaultMDir = if (isDateMode) "desc" else "asc"
+
+    val globalPath = if (isDateMode) "date_mode_global" else "global"
+    val g_fSort = viewModel.prefs.getFolderSortBy(globalPath, defaultFSort)
+    val g_fDir = viewModel.prefs.getFolderSortDirection(globalPath, defaultFDir)
+    val g_mSort = viewModel.prefs.getMediaSortBy(globalPath, defaultMSort)
+    val g_mDir = viewModel.prefs.getMediaSortDirection(globalPath, defaultMDir)
+
+    var folderSortBy by remember { mutableStateOf(viewModel.prefs.getFolderSortBy(currentPath, g_fSort)) }
+    var folderSortDir by remember { mutableStateOf(viewModel.prefs.getFolderSortDirection(currentPath, g_fDir)) }
     
-    var folderSortBy by remember { mutableStateOf(viewModel.prefs.getFolderSortBy(currentPath, viewModel.prefs.getFolderSortBy("global", "name"))) }
-    var folderSortDir by remember { mutableStateOf(viewModel.prefs.getFolderSortDirection(currentPath, viewModel.prefs.getFolderSortDirection("global", "asc"))) }
-    
-    var mediaSortBy by remember { mutableStateOf(viewModel.prefs.getMediaSortBy(currentPath, viewModel.prefs.getMediaSortBy("global", "date"))) }
-    var mediaSortDir by remember { mutableStateOf(viewModel.prefs.getMediaSortDirection(currentPath, viewModel.prefs.getMediaSortDirection("global", "asc"))) }
+    var mediaSortBy by remember { mutableStateOf(viewModel.prefs.getMediaSortBy(currentPath, g_mSort)) }
+    var mediaSortDir by remember { mutableStateOf(viewModel.prefs.getMediaSortDirection(currentPath, g_mDir)) }
     
     var currentFolderOnly by remember { mutableStateOf(false) }
 

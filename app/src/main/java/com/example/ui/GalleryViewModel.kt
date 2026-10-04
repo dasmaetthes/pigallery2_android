@@ -186,13 +186,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val isSearchActive = MutableStateFlow(false)
     val searchQuery = MutableStateFlow("")
     val isFlattened = MutableStateFlow(false)
-    val galleryViewMode = MutableStateFlow(GalleryViewMode.FOLDER)
+    val galleryViewMode = MutableStateFlow(try { GalleryViewMode.valueOf(prefs.galleryViewMode) } catch (e: Exception) { GalleryViewMode.FOLDER })
 
     private val directoryCache = java.util.concurrent.ConcurrentHashMap<String, ApiDirectory>()
     private val cachedFlattenedMedia = java.util.concurrent.ConcurrentHashMap<String, List<ApiMedia>>()
 
     fun setGalleryViewMode(mode: GalleryViewMode) {
         galleryViewMode.value = mode
+        prefs.galleryViewMode = mode.name
         _pathHistory.value = buildInitialPathStack(prefs.defaultRootPath)
         loadCurrentDirectory()
     }
@@ -372,8 +373,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 if (person != null) "person_${person.name}" else "persons_root"
             }
             else -> {
-                val path = currentPath
-                if (path.isEmpty()) "global" else path
+                if (galleryViewMode.value == GalleryViewMode.DATE) {
+                    val path = currentPath
+                    if (path.isEmpty()) "date_mode_root" else "date_mode_$path"
+                } else {
+                    val path = currentPath
+                    if (path.isEmpty()) "global" else path
+                }
             }
         }
     }
@@ -385,7 +391,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         mediaSortDirection: String,
         currentFolderOnly: Boolean
     ) {
-        val path = if (currentFolderOnly) getSortPath() else "global"
+        val path = if (currentFolderOnly) {
+            getSortPath()
+        } else if (galleryViewMode.value == GalleryViewMode.DATE) {
+            "date_mode_global"
+        } else {
+            "global"
+        }
         
         prefs.setFolderSortBy(path, folderSortBy)
         prefs.setFolderSortDirection(path, folderSortDirection)
@@ -488,36 +500,67 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val localFavs = prefs.getFavoritePersons()
         return sorted.sortedByDescending { localFavs.contains(it.name) || it.isFavourite == true }
     }
+    private fun getMonthNumber(dir: ApiSubFolder): Int? {
+        if (dir.path.contains("month:")) {
+            return dir.path.substringAfter("month:").toIntOrNull()
+        }
+        val name = dir.name.lowercase().trim()
+        return when {
+            name.contains("jan") -> 1
+            name.contains("feb") -> 2
+            name.contains("mär") || name.contains("mar") -> 3
+            name.contains("apr") -> 4
+            name.contains("mai") || name.contains("may") -> 5
+            name.contains("jun") -> 6
+            name.contains("jul") -> 7
+            name.contains("aug") -> 8
+            name.contains("sep") -> 9
+            name.contains("okt") || name.contains("oct") -> 10
+            name.contains("nov") -> 11
+            name.contains("dez") || name.contains("dec") -> 12
+            else -> null
+        }
+    }
+
     fun sortDirectory(directory: ApiDirectory): ApiDirectory {
         val currentContextPath = getSortPath()
-        
-        var fSort = prefs.getFolderSortBy(currentContextPath)
-        var fDir = prefs.getFolderSortDirection(currentContextPath)
-        var mSort = prefs.getMediaSortBy(currentContextPath)
-        var mDir = prefs.getMediaSortDirection(currentContextPath)
-        
-        val g_fSort = prefs.getFolderSortBy("global")
-        val g_fDir = prefs.getFolderSortDirection("global")
-        val g_mSort = prefs.getMediaSortBy("global")
-        val g_mDir = prefs.getMediaSortDirection("global")
+        val isDateMode = galleryViewMode.value == GalleryViewMode.DATE
 
-        fSort = prefs.getFolderSortBy(currentContextPath, g_fSort)
-        fDir = prefs.getFolderSortDirection(currentContextPath, g_fDir)
-        mSort = prefs.getMediaSortBy(currentContextPath, g_mSort)
-        mDir = prefs.getMediaSortDirection(currentContextPath, g_mDir)
+        val defaultFSort = if (isDateMode) "date" else "name"
+        val defaultFDir = if (isDateMode) "desc" else "asc"
+        val defaultMSort = "date"
+        val defaultMDir = if (isDateMode) "desc" else "asc"
+
+        val globalPath = if (isDateMode) "date_mode_global" else "global"
+        val g_fSort = prefs.getFolderSortBy(globalPath, defaultFSort)
+        val g_fDir = prefs.getFolderSortDirection(globalPath, defaultFDir)
+        val g_mSort = prefs.getMediaSortBy(globalPath, defaultMSort)
+        val g_mDir = prefs.getMediaSortDirection(globalPath, defaultMDir)
+
+        val fSort = prefs.getFolderSortBy(currentContextPath, g_fSort)
+        val fDir = prefs.getFolderSortDirection(currentContextPath, g_fDir)
+        val mSort = prefs.getMediaSortBy(currentContextPath, g_mSort)
+        val mDir = prefs.getMediaSortDirection(currentContextPath, g_mDir)
         
         val fAsc = fDir.lowercase() == "asc"
         val mAsc = mDir.lowercase() == "asc"
 
         val dirs = directory.directories.orEmpty()
+        val isMonthFolders = dirs.isNotEmpty() && dirs.all { getMonthNumber(it) != null }
+        val isYearFolders = dirs.isNotEmpty() && dirs.all { it.name.toIntOrNull() != null }
+
         val sortedDirs = when (fSort.lowercase()) {
-            "name" -> {
-                if (fAsc) dirs.sortedBy { it.name.lowercase() }
-                else dirs.sortedByDescending { it.name.lowercase() }
-            }
-            "date" -> {
-                if (fAsc) dirs.sortedBy { it.name.lowercase() }
-                else dirs.sortedByDescending { it.name.lowercase() }
+            "name", "date" -> {
+                if (isMonthFolders) {
+                    if (fAsc) dirs.sortedBy { getMonthNumber(it) ?: 0 }
+                    else dirs.sortedByDescending { getMonthNumber(it) ?: 0 }
+                } else if (isYearFolders) {
+                    if (fAsc) dirs.sortedBy { it.name.toIntOrNull() ?: 0 }
+                    else dirs.sortedByDescending { it.name.toIntOrNull() ?: 0 }
+                } else {
+                    if (fAsc) dirs.sortedBy { it.name.lowercase() }
+                    else dirs.sortedByDescending { it.name.lowercase() }
+                }
             }
             "count" -> {
                 if (fAsc) dirs.sortedBy { it.mediaCount ?: 0 }

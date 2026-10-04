@@ -38,7 +38,12 @@ class PreferencesManager(context: Context) {
         private const val KEY_LAST_UPDATE_CHECK = "last_update_check"
         private const val KEY_MAX_BRIGHTNESS = "max_brightness"
         private const val KEY_MAX_BRIGHTNESS_ENABLED = "max_brightness_enabled"
+        private const val KEY_GALLERY_VIEW_MODE = "gallery_view_mode"
     }
+
+    var galleryViewMode: String
+        get() = prefs.getString(KEY_GALLERY_VIEW_MODE, "FOLDER") ?: "FOLDER"
+        set(value) = prefs.edit().putString(KEY_GALLERY_VIEW_MODE, value).apply()
 
     var autoCheckUpdates: Boolean
         get() = prefs.getBoolean(KEY_AUTO_CHECK_UPDATES, true)
