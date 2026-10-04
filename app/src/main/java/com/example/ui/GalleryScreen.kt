@@ -30,6 +30,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
@@ -45,6 +46,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
@@ -200,11 +202,13 @@ fun GalleryScreen(
         }
     }
     val isFlattened by viewModel.isFlattened.collectAsState()
+    val galleryViewMode by viewModel.galleryViewMode.collectAsState()
     val searchSuggestions by viewModel.searchSuggestions.collectAsState()
     var showAboutDialog by remember { mutableStateOf(false) }
     var showQueryBuilder by remember { mutableStateOf(false) }
     var showMapDialog by remember { mutableStateOf(false) }
     var mapInitialMediaId by remember { mutableStateOf<String?>(null) }
+    var dismissedUpdateVersion by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
 
     // Collect states to determine list of media for map-based browsing
     val galleryState by viewModel.galleryState.collectAsState()
@@ -296,8 +300,22 @@ fun GalleryScreen(
                     } else {
                         val titleText = when (activeTab) {
                             ActiveTab.GALLERY -> {
-                                val currentFolder = pathHistory.lastOrNull()?.substringAfterLast('/') ?: "Root"
-                                if (currentFolder.isEmpty()) "Gallery" else currentFolder
+                                if (galleryViewMode == GalleryViewMode.DATE) {
+                                    val currentPath = pathHistory.lastOrNull() ?: ""
+                                    when {
+                                        currentPath.isEmpty() || currentPath == viewModel.defaultRootPath.value -> "Gallery"
+                                        currentPath.startsWith("year:") && !currentPath.contains("month:") -> currentPath.substringAfter("year:")
+                                        currentPath.contains("month:") -> {
+                                            val year = currentPath.substringAfter("year:").substringBefore("/")
+                                            val monthNum = currentPath.substringAfter("month:").toIntOrNull() ?: 1
+                                            "${viewModel.getMonthName(monthNum)} $year"
+                                        }
+                                        else -> "Gallery"
+                                    }
+                                } else {
+                                    val currentFolder = pathHistory.lastOrNull()?.substringAfterLast('/') ?: "Root"
+                                    if (currentFolder.isEmpty()) "Gallery" else currentFolder
+                                }
                             }
                             ActiveTab.ALBUMS -> {
                                 selectedAlbum?.name ?: "Albums"
@@ -443,7 +461,7 @@ fun GalleryScreen(
                                     ActiveTab.PERSONS -> "Sort persons by"
                                     else -> "Sort folders by"
                                 }
-                                val showFolderSortOptions = activeTab == ActiveTab.GALLERY
+                                val showFolderSortOptions = activeTab == ActiveTab.GALLERY || activeTab == ActiveTab.ALBUMS || activeTab == ActiveTab.PERSONS
                                 SortDialog(
                                     viewModel = viewModel,
                                     showFolderSort = showFolderSort,
@@ -467,6 +485,19 @@ fun GalleryScreen(
                             onDismissRequest = { showMoreMenu = false }
                         ) {
                             if (activeTab == ActiveTab.GALLERY) {
+                                DropdownMenuItem(
+                                    text = { Text(if (galleryViewMode == GalleryViewMode.DATE) "View by Folder" else "View by Date") },
+                                    onClick = {
+                                        viewModel.setGalleryViewMode(if (galleryViewMode == GalleryViewMode.DATE) GalleryViewMode.FOLDER else GalleryViewMode.DATE)
+                                        showMoreMenu = false
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = if (galleryViewMode == GalleryViewMode.DATE) Icons.Default.Folder else Icons.Default.DateRange,
+                                            contentDescription = null
+                                        )
+                                    }
+                                )
                                 DropdownMenuItem(
                                     text = { Text(if (isFlattened) "Unflatten Directory" else "Flatten Directory") },
                                     onClick = {
@@ -587,14 +618,31 @@ fun GalleryScreen(
                     }
                 }
             }
-
-
         }
     }
-}
+
+    val updateState by viewModel.updateState.collectAsState()
+    (updateState as? GalleryViewModel.UpdateState.NewRelease)?.let { newRelease ->
+        if (dismissedUpdateVersion != newRelease.tagName) {
+            NewUpdateDialog(
+                newRelease = newRelease,
+                onDismiss = {
+                    dismissedUpdateVersion = newRelease.tagName
+                },
+                onUpdate = {
+                    dismissedUpdateVersion = newRelease.tagName
+                    val intent = android.content.Intent(
+                        android.content.Intent.ACTION_VIEW,
+                        android.net.Uri.parse(newRelease.releaseUrl)
+                    )
+                    context.startActivity(intent)
+                }
+            )
+        }
+    }
 
     if (showAboutDialog) {
-        AboutDialog(onDismiss = { showAboutDialog = false })
+        AboutScreen(viewModel = viewModel, onBack = { showAboutDialog = false })
     }
     if (showQueryBuilder) {
         AdvancedQueryBuilderDialog(
@@ -634,6 +682,7 @@ fun GalleryScreen(
         )
     }
 }
+}
 
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -641,6 +690,7 @@ fun GalleryScreen(
 fun GalleryTabContent(viewModel: GalleryViewModel) {
     val galleryState by viewModel.galleryState.collectAsState()
     val pathHistory by viewModel.pathHistory.collectAsState()
+    val galleryViewMode by viewModel.galleryViewMode.collectAsState()
     val isSearchActive by viewModel.isSearchActive.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val searchSuggestions by viewModel.searchSuggestions.collectAsState()
@@ -651,6 +701,7 @@ fun GalleryTabContent(viewModel: GalleryViewModel) {
         Column(modifier = Modifier.fillMaxSize()) {
             BreadcrumbBar(
                 pathHistory = pathHistory,
+                galleryViewMode = galleryViewMode,
                 onBreadcrumbClick = { index -> viewModel.navigateToBreadcrumb(index) }
             )
 
@@ -1135,6 +1186,7 @@ fun RediscoverTabContent(viewModel: GalleryViewModel) {
 
 @Composable
 fun SettingsTabContent(viewModel: GalleryViewModel) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val serverUrl by viewModel.savedServerUrl.collectAsState()
     val username by viewModel.savedUsername.collectAsState()
 
@@ -1226,7 +1278,8 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                 "Orange" to Color(0xFFFFB77C),
                                 "Teal" to Color(0xFF80F2DB),
                                 "Pink" to Color(0xFFFFAEBA),
-                                "Grey" to Color(0xFF8F9099)
+                                "Grey" to Color(0xFF8F9099),
+                                "White" to Color(0xFFFFFFFF)
                             )
                             
                             val selectedThemeColor by viewModel.themeColorOption.collectAsState()
@@ -1245,6 +1298,7 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                             .size(40.dp)
                                             .clip(CircleShape)
                                             .background(color)
+                                            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), CircleShape)
                                             .clickable {
                                                 viewModel.setThemeColorOption(name)
                                             }
@@ -1308,26 +1362,28 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                             Spacer(modifier = Modifier.height(10.dp))
                             
                             val selectedThemeMode by viewModel.themeMode.collectAsState()
-                            val themeModes = listOf("Auto", "Light", "Dark")
+                            val themeModes = listOf("Auto", "Light", "Dark", "Black")
+                            val themeModeScrollState = rememberScrollState()
                             
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(themeModeScrollState),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 themeModes.forEach { mode ->
-                                    val isSelected = selectedThemeMode == mode
+                                    val isSelected = selectedThemeMode == mode || (mode == "Black" && (selectedThemeMode == "OLED Black" || selectedThemeMode == "OLED"))
                                     FilterChip(
                                         selected = isSelected,
                                         onClick = { viewModel.setThemeMode(mode) },
-                                        label = { Text(mode) },
-                                        modifier = Modifier.weight(1f)
+                                        label = { Text(mode) }
                                     )
                                 }
                             }
                         }
                     }
                 }
-                
+
                 // --- 2. View Settings ---
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -1358,6 +1414,34 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                     showItemCount = it
                                     viewModel.setShowDirectoryItemCount(it)
                                 }
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+                        HorizontalDivider()
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Max Brightness Toggle
+                        val maxBrightnessEnabled by viewModel.maxBrightnessEnabled.collectAsState()
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Max Brightness",
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                Text(
+                                    text = "Override system brightness and set to 100%",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = maxBrightnessEnabled,
+                                onCheckedChange = { viewModel.setMaxBrightnessEnabled(it) }
                             )
                         }
 
@@ -1628,6 +1712,8 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                 }
                             )
                         }
+
+                        Spacer(modifier = Modifier.height(16.dp))
                     }
                 }
             } else if (selectedSettingsTab == 2) {
@@ -1644,6 +1730,7 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                             color = MaterialTheme.colorScheme.primary
                         )
                         Spacer(modifier = Modifier.height(12.dp))
+
                         Text(
                             text = "Connected to: ${viewModel.prefs.serverUrl}",
                             style = MaterialTheme.typography.bodyMedium
@@ -1783,7 +1870,10 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                         )
                     }
                     Button(
-                        onClick = { viewModel.clearCaches() },
+                        onClick = { 
+                            viewModel.clearCaches() 
+                            android.widget.Toast.makeText(context, "Cache cleared successfully", android.widget.Toast.LENGTH_SHORT).show()
+                        },
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
                     ) {
                         Text("Clear")
@@ -2094,8 +2184,11 @@ fun GalleryContentGrid(
         }
     }
 
-    LazyVerticalGrid(
-        columns = GridCells.Fixed(itemsPerRow),
+    val state = rememberLazyGridState()
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyVerticalGrid(
+            state = state,
+            columns = GridCells.Fixed(itemsPerRow),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(spacingDp),
         horizontalArrangement = Arrangement.spacedBy(spacingDp),
@@ -2349,12 +2442,21 @@ fun GalleryContentGrid(
             }
         }
         }
+        }
+
+        FastScrollIndicator(
+            state = state,
+            groupedMedia = groupedMedia,
+            subfoldersCount = subfolders.size,
+            modifier = Modifier.align(Alignment.CenterEnd)
+        )
     }
 }
 
 @Composable
 fun BreadcrumbBar(
     pathHistory: List<String>,
+    galleryViewMode: GalleryViewMode,
     onBreadcrumbClick: (Int) -> Unit
 ) {
     LazyRow(
@@ -2365,7 +2467,35 @@ fun BreadcrumbBar(
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         itemsIndexed(pathHistory) { index, path ->
-            val folderName = if (path.isEmpty()) "Root" else path.substringAfterLast('/')
+            val folderName = if (galleryViewMode == GalleryViewMode.DATE) {
+                when {
+                    index == 0 -> "Datum"
+                    path.startsWith("year:") && !path.contains("month:") -> path.substringAfter("year:")
+                    path.contains("month:") -> {
+                        val monthNum = path.substringAfter("month:").toIntOrNull() ?: 1
+                        val vm = androidx.lifecycle.viewmodel.compose.viewModel<GalleryViewModel>() // or pass method
+                        // We can parse month name directly or use static/helper
+                        when (monthNum) {
+                            1 -> "Januar"
+                            2 -> "Februar"
+                            3 -> "März"
+                            4 -> "April"
+                            5 -> "Mai"
+                            6 -> "Juni"
+                            7 -> "Juli"
+                            8 -> "August"
+                            9 -> "September"
+                            10 -> "Oktober"
+                            11 -> "November"
+                            12 -> "Dezember"
+                            else -> "$monthNum"
+                        }
+                    }
+                    else -> "Root"
+                }
+            } else {
+                if (path.isEmpty()) "Root" else path.substringAfterLast('/')
+            }
             val isActive = index == pathHistory.lastIndex
 
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2512,9 +2642,15 @@ fun SortDialog(
                     }
                     Text(folderSortTitle, style = MaterialTheme.typography.labelMedium)
                     if (showFolderSortOptions) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
                             FilterChip(selected = folderSortBy == "name", onClick = { folderSortBy = "name" }, label = { Text("Name") })
                             FilterChip(selected = folderSortBy == "date", onClick = { folderSortBy = "date" }, label = { Text("Date") })
+                            FilterChip(selected = folderSortBy == "count", onClick = { folderSortBy = "count" }, label = { Text("Count") })
                             FilterChip(selected = folderSortBy == "random", onClick = { folderSortBy = "random" }, label = { Text("Random") })
                         }
                     }
@@ -2777,129 +2913,503 @@ fun PersonItem(modifier: Modifier = Modifier, person: com.example.data.ApiPerson
     }
 }
 
-@Suppress("DEPRECATION")
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AboutDialog(onDismiss: () -> Unit) {
-    androidx.compose.material3.AlertDialog(
+fun AboutScreen(viewModel: GalleryViewModel, onBack: () -> Unit) {
+    androidx.activity.compose.BackHandler { onBack() }
+
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+
+    val version = remember {
+        try {
+            val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            packageInfo.versionName ?: "2.2"
+        } catch (e: Exception) {
+            "2.2"
+        }
+    }
+
+    val updateState by viewModel.updateState.collectAsState()
+    val autoCheckUpdates by viewModel.autoCheckUpdates.collectAsState()
+
+    LaunchedEffect(autoCheckUpdates) {
+        if (autoCheckUpdates && updateState is GalleryViewModel.UpdateState.Idle) {
+            viewModel.checkForUpdates()
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("About PiGallery2", fontWeight = FontWeight.Bold) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
+            )
+        },
+        contentWindowInsets = WindowInsets.systemBars
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // Hero App Header Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Surface(
+                        shape = androidx.compose.foundation.shape.CircleShape,
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shadowElevation = 4.dp,
+                        modifier = Modifier.size(80.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                            Icon(
+                                painter = androidx.compose.ui.res.painterResource(id = com.example.R.drawable.ic_launcher_foreground),
+                                contentDescription = "PiGallery2 Logo",
+                                modifier = Modifier.size(64.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Text(
+                        text = "PiGallery2",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                    ) {
+                        Text(
+                            text = "Version $version",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text(
+                        text = "A beautiful, fast, and modern gallery application connecting to your self-hosted PiGallery2 server.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
+            }
+
+            // Software Updates Section
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Text(
+                            text = "Software Updates",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Auto-check for updates",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                text = "Check for new releases automatically",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = autoCheckUpdates,
+                            onCheckedChange = { viewModel.setAutoCheckUpdates(it) }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    when (val state = updateState) {
+                        is GalleryViewModel.UpdateState.Idle -> {
+                            Button(
+                                onClick = { viewModel.checkForUpdates(force = true) },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Check for Updates")
+                            }
+                        }
+                        is GalleryViewModel.UpdateState.Checking -> {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text("Checking GitHub for updates...", style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                        is GalleryViewModel.UpdateState.UpToDate -> {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "You are on the latest version (${state.currentVersion})",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedButton(
+                                    onClick = { viewModel.checkForUpdates(force = true) },
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text("Check Again")
+                                }
+                            }
+                        }
+                        is GalleryViewModel.UpdateState.NewRelease -> {
+                            Card(
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(16.dp),
+                                    horizontalAlignment = Alignment.Start
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.Download,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "New Update Available (${state.tagName})",
+                                            fontWeight = FontWeight.Bold,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        text = state.releaseNotes,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        maxLines = 4,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                    )
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Button(
+                                        onClick = {
+                                            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(state.releaseUrl))
+                                            context.startActivity(intent)
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Text("View & Download Release")
+                                    }
+                                }
+                            }
+                        }
+                        is GalleryViewModel.UpdateState.Error -> {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = "Error: ${state.message}",
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Button(
+                                    onClick = { viewModel.checkForUpdates(force = true) },
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text("Retry")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Links & Resources Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                ) {
+                    Text(
+                        text = "Links & Resources",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    FilledTonalButton(
+                        onClick = { uriHandler.openUri("https://github.com/dasmaetthes/pigallery2_android") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(
+                            painter = androidx.compose.ui.res.painterResource(id = com.example.R.drawable.ic_github),
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("View Source Code on GitHub", fontWeight = FontWeight.SemiBold)
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    OutlinedButton(
+                        onClick = { uriHandler.openUri("https://github.com/dasmaetthes/pigallery2_android/issues") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Report an Issue / Feedback")
+                    }
+                }
+            }
+
+            // Open Source Software Licenses Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                ) {
+                    Text(
+                        text = "Open Source Licenses",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    val annotatedString = androidx.compose.ui.text.buildAnnotatedString {
+                        append("Built with open source software:\n")
+                        append("• Android Jetpack & Compose (Apache 2.0)\n")
+                        append("• Kotlin & Coroutines (Apache 2.0)\n")
+                        append("• Coil Image Loader (Apache 2.0)\n")
+                        append("• OkHttp & Retrofit (Apache 2.0)\n")
+                        append("• Moshi (Apache 2.0)\n")
+                        append("• Room Database (Apache 2.0)\n\n")
+                        append("These libraries are licensed under the Apache License, Version 2.0. ")
+                        append("You may obtain a copy of the License at ")
+
+                        val startIndex = length
+                        append("http://www.apache.org/licenses/LICENSE-2.0")
+                        val endIndex = length
+
+                        addStyle(
+                            style = androidx.compose.ui.text.SpanStyle(
+                                color = MaterialTheme.colorScheme.primary,
+                                textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
+                            ),
+                            start = startIndex,
+                            end = endIndex
+                        )
+                        addStringAnnotation(
+                            tag = "URL",
+                            annotation = "http://www.apache.org/licenses/LICENSE-2.0",
+                            start = startIndex,
+                            end = endIndex
+                        )
+                    }
+
+                    androidx.compose.foundation.text.ClickableText(
+                        text = annotatedString,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        ),
+                        onClick = { offset ->
+                            annotatedString.getStringAnnotations(tag = "URL", start = offset, end = offset)
+                                .firstOrNull()?.let { annotation ->
+                                    uriHandler.openUri(annotation.item)
+                                }
+                        }
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+fun NewUpdateDialog(
+    newRelease: GalleryViewModel.UpdateState.NewRelease,
+    onDismiss: () -> Unit,
+    onUpdate: () -> Unit
+) {
+    AlertDialog(
         onDismissRequest = onDismiss,
         icon = {
             Icon(
-                imageVector = Icons.Default.Info,
+                imageVector = Icons.Default.Download,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(32.dp)
             )
         },
-        title = { Text("About PiGallery2") },
+        title = {
+            Text(
+                text = "New Update Available",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+        },
         text = {
-            Column(
-                horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                // Assuming we use an icon
-                Icon(
-                    painter = androidx.compose.ui.res.painterResource(id = com.example.R.drawable.ic_launcher_foreground),
-                    contentDescription = null,
-                    modifier = Modifier.size(64.dp),
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                val context = androidx.compose.ui.platform.LocalContext.current
-                val version = try {
-                    val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-                    packageInfo.versionName
-                } catch (e: Exception) {
-                    "2.2"
-                }
-                Text("Version $version", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.height(16.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "A beautiful and modern gallery app connecting to your PiGallery2 server.",
+                    text = "A new version of PiGallery2 (${newRelease.tagName}) is available!",
                     style = MaterialTheme.typography.bodyMedium,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    color = MaterialTheme.colorScheme.onSurface
                 )
-                Spacer(modifier = Modifier.height(16.dp))
-                
-                // GitHub Link
-                val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
-                Button(
-                    onClick = {
-                        uriHandler.openUri("https://github.com/dasmaetthes/pigallery2_android")
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp)
-                        .padding(horizontal = 16.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
-                    ),
-                    shape = RoundedCornerShape(24.dp)
-                ) {
-                    Icon(
-                        painter = androidx.compose.ui.res.painterResource(id = com.example.R.drawable.ic_github),
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp),
-                        tint = MaterialTheme.colorScheme.onPrimary
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "View on GitHub",
-                        fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.labelLarge
-                    )
-                }
-                
-                Spacer(modifier = Modifier.height(16.dp))
-                val annotatedString = androidx.compose.ui.text.buildAnnotatedString {
-                    append("Built with open source software:\n")
-                    append("• Android Jetpack (Apache 2.0)\n")
-                    append("• Kotlin (Apache 2.0)\n")
-                    append("• Kotlin Coroutines (Apache 2.0)\n")
-                    append("• Coil Image Loader (Apache 2.0)\n")
-                    append("• OkHttp (Apache 2.0)\n")
-                    append("• Retrofit (Apache 2.0)\n")
-                    append("• Moshi (Apache 2.0)\n\n")
-                    append("These libraries are licensed under the Apache License, Version 2.0. ")
-                    append("You may obtain a copy of the License at ")
-                    
-                    val startIndex = length
-                    append("http://www.apache.org/licenses/LICENSE-2.0")
-                    val endIndex = length
-                    
-                    addStyle(
-                        style = androidx.compose.ui.text.SpanStyle(
-                            color = MaterialTheme.colorScheme.primary,
-                            textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
-                        ),
-                        start = startIndex,
-                        end = endIndex
-                    )
-                    addStringAnnotation(
-                        tag = "URL",
-                        annotation = "http://www.apache.org/licenses/LICENSE-2.0",
-                        start = startIndex,
-                        end = endIndex
-                    )
-                }
-
-                androidx.compose.foundation.text.ClickableText(
-                    text = annotatedString,
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    ),
-                    onClick = { offset ->
-                        annotatedString.getStringAnnotations(tag = "URL", start = offset, end = offset)
-                            .firstOrNull()?.let { annotation ->
-                                uriHandler.openUri(annotation.item)
-                            }
+                if (newRelease.releaseNotes.isNotBlank()) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 180.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .padding(12.dp)
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            Text(
+                                text = "Release Notes:",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = newRelease.releaseNotes,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
-                )
+                }
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Close")
+            Button(onClick = onUpdate) {
+                Text("Update Now")
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) {
+                Text("Later")
             }
         }
     )

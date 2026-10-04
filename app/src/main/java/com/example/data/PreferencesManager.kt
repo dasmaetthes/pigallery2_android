@@ -34,7 +34,27 @@ class PreferencesManager(context: Context) {
         private const val KEY_THEME_MODE = "theme_mode"
         private const val KEY_PEOPLE_FALLBACK_TO_KEYWORDS = "people_fallback_to_keywords"
         private const val KEY_DEFAULT_ROOT_PATH = "default_root_path"
+        private const val KEY_AUTO_CHECK_UPDATES = "auto_check_updates"
+        private const val KEY_LAST_UPDATE_CHECK = "last_update_check"
+        private const val KEY_MAX_BRIGHTNESS = "max_brightness"
+        private const val KEY_MAX_BRIGHTNESS_ENABLED = "max_brightness_enabled"
     }
+
+    var autoCheckUpdates: Boolean
+        get() = prefs.getBoolean(KEY_AUTO_CHECK_UPDATES, true)
+        set(value) = prefs.edit().putBoolean(KEY_AUTO_CHECK_UPDATES, value).apply()
+
+    var lastUpdateCheck: Long
+        get() = prefs.getLong(KEY_LAST_UPDATE_CHECK, 0L)
+        set(value) = prefs.edit().putLong(KEY_LAST_UPDATE_CHECK, value).apply()
+
+    var maxBrightnessEnabled: Boolean
+        get() = prefs.getBoolean(KEY_MAX_BRIGHTNESS_ENABLED, false)
+        set(value) = prefs.edit().putBoolean(KEY_MAX_BRIGHTNESS_ENABLED, value).apply()
+
+    var maxBrightness: Float
+        get() = prefs.getFloat(KEY_MAX_BRIGHTNESS, 1.0f)
+        set(value) = prefs.edit().putFloat(KEY_MAX_BRIGHTNESS, value).apply()
 
     var defaultRootPath: String
         get() = prefs.getString(KEY_DEFAULT_ROOT_PATH, "") ?: ""

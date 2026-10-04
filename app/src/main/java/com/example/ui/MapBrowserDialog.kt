@@ -890,7 +890,7 @@ private fun MapViewContainer(
                             }
                         }
                         setBackgroundColor(android.graphics.Color.parseColor("#121212"))
-                        setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+                        setLayerType(android.view.View.LAYER_TYPE_SOFTWARE, null)
                         layoutParams = android.view.ViewGroup.LayoutParams(
                             android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                             android.view.ViewGroup.LayoutParams.MATCH_PARENT
@@ -901,6 +901,19 @@ private fun MapViewContainer(
                         postDelayed({ ensureCacheDirs(ctx) }, 5000)
 
                         webViewClient = object : WebViewClient() {
+                            override fun onRenderProcessGone(
+                                view: WebView?,
+                                detail: android.webkit.RenderProcessGoneDetail?
+                            ): Boolean {
+                                android.util.Log.e("MapBrowserWebView", "WebView render process gone (didCrash: ${detail?.didCrash()}). Handled safely.")
+                                view?.let { webView ->
+                                    val parent = webView.parent as? android.view.ViewGroup
+                                    parent?.removeView(webView)
+                                    webView.destroy()
+                                }
+                                return true // Return true so main app process does not crash
+                            }
+
                             override fun shouldInterceptRequest(
                                 view: WebView,
                                 request: android.webkit.WebResourceRequest

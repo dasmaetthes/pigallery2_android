@@ -8,6 +8,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.ApiAlbum
 import com.example.data.ApiAlbumCache
+import com.example.data.ApiCoverPhoto
+import com.example.data.ApiCoverPhotoDirectory
 import com.example.data.ApiDirectory
 import com.example.data.ApiMedia
 import com.example.data.ApiSubFolder
@@ -44,6 +46,10 @@ sealed interface GalleryUiState {
     data class Error(val message: String) : GalleryUiState
 }
 
+enum class GalleryViewMode {
+    FOLDER, DATE
+}
+
 
 sealed interface PersonsUiState {
     object Loading : PersonsUiState
@@ -74,6 +80,8 @@ enum class ActiveTab {
 class GalleryViewModel(application: Application) : AndroidViewModel(application) {
     val prefs = PreferencesManager(application)
     val api = PiGalleryApi(application)
+    val database = com.example.data.database.DatabaseProvider.getDatabase(application)
+    val repo = com.example.data.GalleryRepository(database)
     val searchHistoryManager = com.example.data.SearchHistoryManager(application)
 
     val localSearchHistory = searchHistoryManager.searchHistory
@@ -146,6 +154,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val rediscoverDays = MutableStateFlow(prefs.rediscoverDays)
     val slideshowDuration = MutableStateFlow(prefs.slideshowDuration)
     val peopleFallbackToKeywords = MutableStateFlow(prefs.peopleFallbackToKeywords)
+    val autoCheckUpdates = MutableStateFlow(prefs.autoCheckUpdates)
 
     // Multi-Selection State (for sharing several images)
     private val _isSelectMode = MutableStateFlow(false)
@@ -170,12 +179,20 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val aspectRatio = MutableStateFlow(prefs.aspectRatio)
     val themeColorOption = MutableStateFlow(prefs.themeColor)
     val themeMode = MutableStateFlow(prefs.themeMode)
+    val maxBrightnessEnabled = MutableStateFlow(prefs.maxBrightnessEnabled)
     val defaultRootPath = MutableStateFlow(prefs.defaultRootPath)
 
     // Search and directory flattening states
     val isSearchActive = MutableStateFlow(false)
     val searchQuery = MutableStateFlow("")
     val isFlattened = MutableStateFlow(false)
+    val galleryViewMode = MutableStateFlow(GalleryViewMode.FOLDER)
+
+    fun setGalleryViewMode(mode: GalleryViewMode) {
+        galleryViewMode.value = mode
+        _pathHistory.value = buildInitialPathStack(prefs.defaultRootPath)
+        loadCurrentDirectory()
+    }
     val searchSuggestions = MutableStateFlow<List<String>>(emptyList())
     val showSearchSuggestions = MutableStateFlow(false)
 
@@ -432,6 +449,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 if (fAsc) albums.sortedBy { it.name.lowercase() }
                 else albums.sortedByDescending { it.name.lowercase() }
             }
+            "count" -> {
+                if (fAsc) albums.sortedBy { it.cache?.itemCount ?: 0 }
+                else albums.sortedByDescending { it.cache?.itemCount ?: 0 }
+            }
             "random" -> albums.shuffled()
             else -> albums
         }
@@ -452,6 +473,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 if (fAsc) persons.sortedBy { it.name.lowercase() }
                 else persons.sortedByDescending { it.name.lowercase() }
             }
+            "count" -> {
+                if (fAsc) persons.sortedBy { it.cache?.count ?: 0 }
+                else persons.sortedByDescending { it.cache?.count ?: 0 }
+            }
             "random" -> persons.shuffled()
             else -> persons
         }
@@ -463,33 +488,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun sortDirectory(directory: ApiDirectory): ApiDirectory {
         val currentContextPath = getSortPath()
         
-        // Use current folder specific settings if available (not equal to global default unless actually global), 
-        // actually prefs fallback is fine. Let's try current first, if it doesn't exist, we fall back to global.
-        // Wait, SharedPreferences will just return the default ("name" or "date") if key not found.
-        // So we can query the path. If it's missing, it gives default. But what if we want to fallback to "global" if path doesn't have it?
-        // Let's modify logic: check if path exists in prefs. If not, use global.
-        
         var fSort = prefs.getFolderSortBy(currentContextPath)
         var fDir = prefs.getFolderSortDirection(currentContextPath)
         var mSort = prefs.getMediaSortBy(currentContextPath)
         var mDir = prefs.getMediaSortDirection(currentContextPath)
-        
-        // Actually, our prefs.getXXX functions don't tell us if it's missing vs default. 
-        // We will just read it. Wait, the user wants "Global" fallback if not set for current folder.
-        // I will change the logic below to fetch properly by passing a check.
-        // For simplicity, let's just use the current path if it's explicitly set. If not, use global.
-        // Let's just use the prefs directly for the current path. Wait, if current Folder doesn't have it set, it returns "name", not the global setting.
-        // I should read "global" first, then use it as fallback.
         
         val g_fSort = prefs.getFolderSortBy("global")
         val g_fDir = prefs.getFolderSortDirection("global")
         val g_mSort = prefs.getMediaSortBy("global")
         val g_mDir = prefs.getMediaSortDirection("global")
 
-        // Wait, I didn't write get getString with fallback in prefs. I just wrote fallback to "name"/"date". 
-        // Let me just read SharedPreferences directly here to see if the key exists, or I can just update prefs manager later.
-        // For now, let's assume prefs.getFolderSortBy will be updated to take a fallback argument.
-        
         fSort = prefs.getFolderSortBy(currentContextPath, g_fSort)
         fDir = prefs.getFolderSortDirection(currentContextPath, g_fDir)
         mSort = prefs.getMediaSortBy(currentContextPath, g_mSort)
@@ -505,9 +513,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 else dirs.sortedByDescending { it.name.lowercase() }
             }
             "date" -> {
-                // Directories don't have direct date in ApiSubFolder, so we can sort them by name
                 if (fAsc) dirs.sortedBy { it.name.lowercase() }
                 else dirs.sortedByDescending { it.name.lowercase() }
+            }
+            "count" -> {
+                if (fAsc) dirs.sortedBy { it.mediaCount ?: 0 }
+                else dirs.sortedByDescending { it.mediaCount ?: 0 }
             }
             "random" -> dirs.shuffled()
             else -> dirs
@@ -538,6 +549,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     init {
+        checkForUpdates()
         if (prefs.isLoggedIn && prefs.serverUrl.isNotEmpty()) {
             loadCurrentDirectory()
             loadAlbums()
@@ -630,21 +642,159 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         directoryLoadJob = viewModelScope.launch(Dispatchers.IO) {
             _galleryState.value = GalleryUiState.Loading
             try {
-                var directory = if (searchQuery.value.isNotEmpty()) {
+                var directory: ApiDirectory? = null
+                
+                // Cache-first
+                if (searchQuery.value.isEmpty() && !isFlattened.value && galleryViewMode.value == GalleryViewMode.FOLDER) {
+                    val cachedMedia = repo.getDirectory(path)
+                    if (cachedMedia != null) {
+                        directory = ApiDirectory(id = -1, name = path.substringAfterLast('/'), path = path, directories = emptyList(), media = cachedMedia)
+                        _galleryState.value = GalleryUiState.Success(directory)
+                    }
+                }
+
+                val freshDirectory = if (searchQuery.value.isNotEmpty()) {
                     // Fetch search results using the advanced search query parser
                     val query = parseSearchStringToQuery(searchQuery.value)
                     val queryJson = api.serializeQuery(query)
                     api.search(server, queryJson, cookies, apiPrefix)
                 } else if (isFlattened.value) {
-                    // Fetch flattened directory content recursively to avoid missing images or search limits
-                    val rootDir = api.getGalleryContent(server, path, cookies, apiPrefix)
-                    val allMedia = fetchAllMediaRecursively(server, path, cookies, apiPrefix)
+                    // Fetch flattened directory content recursively, handling virtual paths safely
+                    val rootPath = if (currentPath.startsWith("year:") || currentPath.startsWith("month:")) {
+                        prefs.defaultRootPath
+                    } else {
+                        path
+                    }
+                    val allMedia = fetchAllMediaRecursively(server, rootPath, cookies, apiPrefix)
                     val uniqueMedia = allMedia.distinctBy { it.id }
-                    rootDir.copy(directories = emptyList(), media = uniqueMedia)
+
+                    val filteredMedia = if (currentPath.startsWith("year:") && !currentPath.contains("month:")) {
+                        val year = currentPath.substringAfter("year:").substringBefore("/").toIntOrNull() ?: 0
+                        uniqueMedia.filter { media ->
+                            val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+                            getYearFromTimestamp(localMs) == year
+                        }
+                    } else if (currentPath.contains("month:")) {
+                        val year = currentPath.substringAfter("year:").substringBefore("/").toIntOrNull() ?: 0
+                        val month = currentPath.substringAfter("month:").toIntOrNull() ?: 0
+                        uniqueMedia.filter { media ->
+                            val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+                            getYearFromTimestamp(localMs) == year && getMonthFromTimestamp(localMs) == month
+                        }
+                    } else {
+                        uniqueMedia
+                    }
+
+                    ApiDirectory(
+                        id = -1,
+                        name = if (currentPath.isEmpty() || currentPath == prefs.defaultRootPath) "Flattened Gallery" else currentPath.substringAfterLast('/'),
+                        path = currentPath,
+                        directories = emptyList(),
+                        media = filteredMedia
+                    )
+                } else if (galleryViewMode.value == GalleryViewMode.DATE) {
+                    val rootPath = prefs.defaultRootPath
+                    val allMedia = fetchAllMediaRecursively(server, rootPath, cookies, apiPrefix)
+                    val uniqueMedia = allMedia.distinctBy { it.id }
+                    
+                    val currentPathStr = currentPath
+                    if (currentPathStr == rootPath || currentPathStr.isEmpty()) {
+                        val groupedByYear = uniqueMedia
+                            .filter { it.metadata?.creationDate != null }
+                            .groupBy { media ->
+                                val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+                                getYearFromTimestamp(localMs)
+                            }
+                            .toSortedMap(compareByDescending { it })
+
+                        val yearSubFolders = groupedByYear.map { (year, mediaList) ->
+                            val firstMedia = mediaList.firstOrNull()
+                            val cover = firstMedia?.let {
+                                ApiCoverPhoto(
+                                    name = it.name,
+                                    directory = ApiCoverPhotoDirectory(name = "", path = it.parentPath ?: "")
+                                )
+                            }
+                            ApiSubFolder(
+                                id = year,
+                                name = "$year",
+                                path = "year:$year",
+                                mediaCount = mediaList.size,
+                                cache = ApiSubFolderCache(cover = cover)
+                            )
+                        }
+                        ApiDirectory(
+                            id = -1,
+                            name = "Gallery",
+                            path = currentPathStr,
+                            directories = yearSubFolders,
+                            media = emptyList()
+                        )
+                    } else if (currentPathStr.startsWith("year:") && !currentPathStr.contains("month:")) {
+                        val yearStr = currentPathStr.substringAfter("year:")
+                        val year = yearStr.toIntOrNull() ?: 0
+                        val yearMedia = uniqueMedia.filter { media ->
+                            val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+                            getYearFromTimestamp(localMs) == year
+                        }
+
+                        val groupedByMonth = yearMedia
+                            .groupBy { media ->
+                                val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+                                getMonthFromTimestamp(localMs)
+                            }
+                            .toSortedMap(compareByDescending { it })
+
+                        val monthSubFolders = groupedByMonth.map { (month, mediaList) ->
+                            val firstMedia = mediaList.firstOrNull()
+                            val cover = firstMedia?.let {
+                                ApiCoverPhoto(
+                                    name = it.name,
+                                    directory = ApiCoverPhotoDirectory(name = "", path = it.parentPath ?: "")
+                                )
+                            }
+                            ApiSubFolder(
+                                id = year * 100 + month,
+                                name = getMonthName(month),
+                                path = "year:$year/month:$month",
+                                mediaCount = mediaList.size,
+                                cache = ApiSubFolderCache(cover = cover)
+                            )
+                        }
+                        ApiDirectory(
+                            id = -1,
+                            name = "$year",
+                            path = currentPathStr,
+                            directories = monthSubFolders,
+                            media = emptyList()
+                        )
+                    } else if (currentPathStr.contains("month:")) {
+                        val year = currentPathStr.substringAfter("year:").substringBefore("/").toIntOrNull() ?: 0
+                        val month = currentPathStr.substringAfter("month:").toIntOrNull() ?: 0
+                        val monthMedia = uniqueMedia.filter { media ->
+                            val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+                            getYearFromTimestamp(localMs) == year && getMonthFromTimestamp(localMs) == month
+                        }
+                        ApiDirectory(
+                            id = -1,
+                            name = "${getMonthName(month)} $year",
+                            path = currentPathStr,
+                            directories = emptyList(),
+                            media = monthMedia
+                        )
+                    } else {
+                        api.getGalleryContent(server, path, cookies, apiPrefix)
+                    }
                 } else {
-                    // Normal folder fetch
                     api.getGalleryContent(server, path, cookies, apiPrefix)
                 }
+
+                // Update cache
+                if (freshDirectory != null && freshDirectory.media != null && searchQuery.value.isEmpty() && !isFlattened.value && galleryViewMode.value == GalleryViewMode.FOLDER) {
+                    repo.saveDirectory(path, freshDirectory.media)
+                }
+                
+                directory = freshDirectory
 
                 // Apply sorting
                 val sortedDirectory = sortDirectory(directory)
@@ -982,6 +1132,14 @@ fun loadAlbums() {
         }
     }
 
+    fun setAutoCheckUpdates(enabled: Boolean) {
+        prefs.autoCheckUpdates = enabled
+        autoCheckUpdates.value = enabled
+        if (enabled) {
+            checkForUpdates(force = true)
+        }
+    }
+
     fun setShowDirectoryItemCount(value: Boolean) {
         prefs.showDirectoryItemCount = value
         showDirectoryItemCount.value = value
@@ -1025,6 +1183,11 @@ fun loadAlbums() {
     fun setThemeMode(value: String) {
         prefs.themeMode = value
         themeMode.value = value
+    }
+
+    fun setMaxBrightnessEnabled(enabled: Boolean) {
+        prefs.maxBrightnessEnabled = enabled
+        maxBrightnessEnabled.value = enabled
     }
 
     private fun buildInitialPathStack(defaultRoot: String): List<String> {
@@ -1312,17 +1475,19 @@ fun loadAlbums() {
     val cacheSize: StateFlow<String> = _cacheSize.asStateFlow()
 
     fun updateCacheSize() {
-        var size: Long = 0
-        val context = getApplication<Application>()
-        val imageCache = java.io.File(context.cacheDir, "image_cache")
-        if (imageCache.exists()) {
-            size += imageCache.walkBottomUp().sumOf { it.length() }
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            var size: Long = 0
+            val cacheDir = context.cacheDir
+            if (cacheDir != null && cacheDir.exists()) {
+                size += cacheDir.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
+            }
+            val externalCache = context.externalCacheDir
+            if (externalCache != null && externalCache.exists()) {
+                size += externalCache.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
+            }
+            _cacheSize.value = formatSize(size)
         }
-        val httpCache = java.io.File(context.cacheDir, "http_cache")
-        if (httpCache.exists()) {
-            size += httpCache.walkBottomUp().sumOf { it.length() }
-        }
-        _cacheSize.value = formatSize(size)
     }
 
     private fun formatSize(size: Long): String {
@@ -1334,15 +1499,124 @@ fun loadAlbums() {
 
     @OptIn(coil.annotation.ExperimentalCoilApi::class)
     fun clearCaches() {
-        val context = getApplication<Application>()
-        val imageCache = java.io.File(context.cacheDir, "image_cache")
-        if (imageCache.exists()) {
-            imageCache.deleteRecursively()
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            
+            try {
+                context.imageLoader.memoryCache?.clear()
+                context.imageLoader.diskCache?.clear()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
+            try {
+                api.clearCache()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
+            try {
+                context.cacheDir?.listFiles()?.forEach { child ->
+                    child.deleteRecursively()
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
+            try {
+                context.externalCacheDir?.listFiles()?.forEach { child ->
+                    child.deleteRecursively()
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
+            try {
+                repo.clearAllCache()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
+            updateCacheSize()
         }
-        // Properly clear OkHttp cache without deleting the directory
-        api.clearCache()
-        context.imageLoader.memoryCache?.clear()
-        context.imageLoader.diskCache?.clear()
-        updateCacheSize()
+    }
+
+    private fun getMonthFromTimestamp(timestampMs: Long): Int {
+        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+        cal.timeInMillis = timestampMs
+        return cal.get(java.util.Calendar.MONTH) + 1
+    }
+
+    sealed interface UpdateState {
+        object Idle : UpdateState
+        object Checking : UpdateState
+        data class UpToDate(val currentVersion: String) : UpdateState
+        data class NewRelease(val tagName: String, val releaseUrl: String, val releaseNotes: String) : UpdateState
+        data class Error(val message: String) : UpdateState
+    }
+
+    private val _updateState = MutableStateFlow<UpdateState>(UpdateState.Idle)
+    val updateState: StateFlow<UpdateState> = _updateState.asStateFlow()
+
+    fun checkForUpdates(force: Boolean = false) {
+        val lastCheck = prefs.lastUpdateCheck
+        val now = System.currentTimeMillis()
+        if (!force && !prefs.autoCheckUpdates) return
+        if (!force && (now - lastCheck) < 24 * 60 * 60 * 1000) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            _updateState.value = UpdateState.Checking
+            try {
+                val client = okhttp3.OkHttpClient()
+                val request = okhttp3.Request.Builder()
+                    .url("https://api.github.com/repos/dasmaetthes/pigallery2_android/releases/latest")
+                    .header("User-Agent", "PiGallery2-Android")
+                    .build()
+                
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        _updateState.value = UpdateState.Error("Failed to check for updates (${response.code})")
+                        return@launch
+                    }
+                    val bodyString = response.body?.string() ?: ""
+                    val json = org.json.JSONObject(bodyString)
+                    val tagName = json.optString("tag_name", json.optString("tagName", "v1.0.0"))
+                    val htmlUrl = json.optString("html_url", "https://github.com/dasmaetthes/pigallery2_android/releases")
+                    val releaseNotes = json.optString("body", "No release notes provided.")
+
+                    val currentVersion = com.example.BuildConfig.VERSION_NAME
+                    val cleanRemote = tagName.removePrefix("v").trim()
+                    val cleanCurrent = currentVersion.removePrefix("v").trim()
+
+                    prefs.lastUpdateCheck = now
+
+                    if (cleanRemote != cleanCurrent && cleanRemote.isNotEmpty()) {
+                        _updateState.value = UpdateState.NewRelease(tagName, htmlUrl, releaseNotes)
+                    } else {
+                        _updateState.value = UpdateState.UpToDate(currentVersion)
+                    }
+                }
+            } catch (e: Exception) {
+                _updateState.value = UpdateState.Error(e.localizedMessage ?: "Network error checking for updates")
+            }
+        }
+    }
+
+    fun getMonthName(month: Int): String {
+        return when (month) {
+            1 -> "Januar"
+            2 -> "Februar"
+            3 -> "März"
+            4 -> "April"
+            5 -> "Mai"
+            6 -> "Juni"
+            7 -> "Juli"
+            8 -> "August"
+            9 -> "September"
+            10 -> "Oktober"
+            11 -> "November"
+            12 -> "Dezember"
+            else -> "$month"
+        }
     }
 }

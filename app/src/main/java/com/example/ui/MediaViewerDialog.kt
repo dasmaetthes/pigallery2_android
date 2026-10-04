@@ -26,6 +26,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.layout.*
@@ -262,19 +264,35 @@ fun MediaViewerDialog(
     var showBars by remember { mutableStateOf(true) }
     var showFaceRegions by remember { mutableStateOf(false) }
     var isVideoPlaying by remember(currentMedia) { mutableStateOf(true) }
-    var videoDuration by remember(currentMedia) { mutableStateOf(0) }
     var videoCurrentPosition by remember(currentMedia) { mutableStateOf(0) }
     var isDraggingVideoSlider by remember(currentMedia) { mutableStateOf(false) }
     var videoSliderValue by remember(currentMedia) { mutableStateOf(0f) }
-    var activeVideoView by remember(currentMedia) { mutableStateOf<VideoView?>(null) }
 
-    LaunchedEffect(isVideoPlaying, activeVideoView) {
+    val preparedVideoViews = remember { mutableStateMapOf<Int, VideoView>() }
+    val videoDurations = remember { mutableStateMapOf<Int, Int>() }
+
+    val activeVideoView = preparedVideoViews[pagerState.currentPage]
+    val videoDuration = videoDurations[pagerState.currentPage] ?: activeVideoView?.duration ?: 0
+
+    LaunchedEffect(isVideoPlaying, activeVideoView, pagerState.currentPage, pagerState.isScrollInProgress) {
         val vv = activeVideoView
-        if (isVideoPlaying && vv != null) {
-            while (isVideoPlaying) {
+        if (vv != null) {
+            if (isVideoPlaying && !pagerState.isScrollInProgress) {
+                if (!vv.isPlaying) {
+                    vv.start()
+                }
+            } else {
+                if (vv.isPlaying) {
+                    vv.pause()
+                }
+            }
+            while (isVideoPlaying && !pagerState.isScrollInProgress) {
                 if (!isDraggingVideoSlider) {
                     videoCurrentPosition = vv.currentPosition
-                    videoDuration = vv.duration
+                    val dur = vv.duration
+                    if (dur > 0) {
+                        videoDurations[pagerState.currentPage] = dur
+                    }
                 }
                 kotlinx.coroutines.delay(250L)
             }
@@ -461,6 +479,41 @@ fun MediaViewerDialog(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
+            .pointerInput(showMetadata) {
+                var totalDragY = 0f
+                var totalDragX = 0f
+                detectDragGestures(
+                    onDragStart = {
+                        totalDragY = 0f
+                        totalDragX = 0f
+                    },
+                    onDragEnd = {
+                        val absY = kotlin.math.abs(totalDragY)
+                        val absX = kotlin.math.abs(totalDragX)
+                        if (absY > absX * 1.2f && absY > 80f) {
+                            if (totalDragY < -80f) {
+                                // Swipe UP to show metadata
+                                showMetadata = true
+                            } else if (totalDragY > 80f) {
+                                // Swipe DOWN to close metadata or dismiss viewer
+                                if (showMetadata) {
+                                    showMetadata = false
+                                } else {
+                                    onDismiss()
+                                }
+                            }
+                        }
+                    },
+                    onDragCancel = {
+                        totalDragY = 0f
+                        totalDragX = 0f
+                    },
+                    onDrag = { _, dragAmount ->
+                        totalDragY += dragAmount.y
+                        totalDragX += dragAmount.x
+                    }
+                )
+            }
     ) {
             Row(modifier = Modifier.fillMaxSize()) {
                 Box(
@@ -531,7 +584,7 @@ fun MediaViewerDialog(
                             context = context,
                             rotation = pageRotation,
                             showFaceRegions = showFaceRegions,
-                            isVideoPlaying = if (page == pagerState.currentPage) isVideoPlaying else false,
+                            isVideoPlaying = if (page == pagerState.currentPage && !pagerState.isScrollInProgress) isVideoPlaying else false,
                             onVideoPlayingChange = { if (page == pagerState.currentPage) isVideoPlaying = it },
                             onVideoCompletion = { videoCompletionTrigger = System.currentTimeMillis() },
                             onToggleBars = {
@@ -539,10 +592,14 @@ fun MediaViewerDialog(
                             },
                             showBars = showBars,
                             onVideoPrepared = { duration, videoView ->
-                                if (page == pagerState.currentPage) {
-                                    videoDuration = duration
-                                    activeVideoView = videoView
+                                preparedVideoViews[page] = videoView
+                                if (duration > 0) {
+                                    videoDurations[page] = duration
                                 }
+                            },
+                            onDisposeVideo = {
+                                preparedVideoViews.remove(page)
+                                videoDurations.remove(page)
                             }
                         )
                     }
@@ -993,7 +1050,8 @@ fun MediaViewerItem(
     onVideoCompletion: () -> Unit,
     onToggleBars: () -> Unit,
     showBars: Boolean,
-    onVideoPrepared: (duration: Int, videoView: VideoView) -> Unit
+    onVideoPrepared: (duration: Int, videoView: VideoView) -> Unit,
+    onDisposeVideo: (() -> Unit)? = null
 ) {
     val isTv = remember(context) {
         context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
@@ -1028,6 +1086,18 @@ fun MediaViewerItem(
             var isPreparing by remember { mutableStateOf(true) }
             var isBuffering by remember { mutableStateOf(false) }
             var hasError by remember { mutableStateOf(false) }
+
+            var currentVideoView by remember { mutableStateOf<VideoView?>(null) }
+
+            DisposableEffect(isVideoPlaying, currentVideoView) {
+                if (!isVideoPlaying) {
+                    currentVideoView?.pause()
+                }
+                onDispose {
+                    currentVideoView?.pause()
+                    onDisposeVideo?.invoke()
+                }
+            }
 
             val initialAspectRatio = remember(media) {
                 val w = media.metadata?.size?.width?.toFloat()
@@ -1075,7 +1145,12 @@ fun MediaViewerItem(
                                     videoAspectRatio = w.toFloat() / h.toFloat()
                                 }
                                 onVideoPrepared(mp.duration, this)
-                                start()
+                                currentVideoView = this
+                                if (isVideoPlaying) {
+                                    start()
+                                } else {
+                                    pause()
+                                }
                             }
                             setOnInfoListener { _, what, _ ->
                                 if (what == 701) { // MediaPlayer.MEDIA_INFO_BUFFERING_START
@@ -1106,12 +1181,21 @@ fun MediaViewerItem(
                     update = { view ->
                         val videoView = view.getChildAt(0) as? VideoView
                         videoView?.let { vv ->
+                            currentVideoView = vv
                             if (isVideoPlaying && !vv.isPlaying) {
                                 vv.start()
                             } else if (!isVideoPlaying && vv.isPlaying) {
                                 vv.pause()
                             }
                         }
+                    },
+                    onReset = { view ->
+                        val videoView = view.getChildAt(0) as? VideoView
+                        videoView?.pause()
+                    },
+                    onRelease = { view ->
+                        val videoView = view.getChildAt(0) as? VideoView
+                        videoView?.stopPlayback()
                     },
                     modifier = Modifier.fillMaxSize()
                 )

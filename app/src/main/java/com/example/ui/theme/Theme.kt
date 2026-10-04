@@ -166,12 +166,29 @@ fun getLightColorSchemeForOption(option: String): ColorScheme {
             onSurfaceVariant = Color(0xFF44474B),
             outline = Color(0xFF75777F)
         )
+        "White" -> lightColorScheme(
+            primary = Color(0xFF1C1B1F),
+            onPrimary = Color(0xFFFFFFFF),
+            primaryContainer = Color(0xFFE6E1E5),
+            onPrimaryContainer = Color(0xFF1C1B1F),
+            secondary = Color(0xFF49454F),
+            onSecondary = Color(0xFFFFFFFF),
+            secondaryContainer = Color(0xFFE7E0EC),
+            onSecondaryContainer = Color(0xFF1D192B),
+            background = Color(0xFFFFFFFF),
+            onBackground = Color(0xFF1C1B1F),
+            surface = Color(0xFFFFFFFF),
+            onSurface = Color(0xFF1C1B1F),
+            surfaceVariant = Color(0xFFF2F0F4),
+            onSurfaceVariant = Color(0xFF49454F),
+            outline = Color(0xFF79747E)
+        )
         else -> LightColorScheme // Purple (default)
     }
 }
 
-fun getDarkColorSchemeForOption(option: String): ColorScheme {
-    return when (option) {
+fun getDarkColorSchemeForOption(option: String, isOled: Boolean = false): ColorScheme {
+    val baseScheme = when (option) {
         "Blue" -> darkColorScheme(
             primary = Color(0xFF82CFFF),
             onPrimary = Color(0xFF003452),
@@ -274,7 +291,36 @@ fun getDarkColorSchemeForOption(option: String): ColorScheme {
             onSurfaceVariant = Color(0xFFC4C6D0),
             outline = Color(0xFF8F9099)
         )
+        "White" -> darkColorScheme(
+            primary = Color(0xFFFFFFFF),
+            onPrimary = Color(0xFF000000),
+            primaryContainer = Color(0xFF333333),
+            onPrimaryContainer = Color(0xFFFFFFFF),
+            secondary = Color(0xFFE0E0E0),
+            onSecondary = Color(0xFF000000),
+            secondaryContainer = Color(0xFF2C2C2C),
+            onSecondaryContainer = Color(0xFFFFFFFF),
+            background = Color(0xFF121212),
+            onBackground = Color(0xFFFFFFFF),
+            surface = Color(0xFF1E1E1E),
+            onSurface = Color(0xFFFFFFFF),
+            surfaceVariant = Color(0xFF2A2A2A),
+            onSurfaceVariant = Color(0xFFCCCCCC),
+            outline = Color(0xFF888888)
+        )
         else -> DarkColorScheme // Purple (default)
+    }
+
+    return if (isOled) {
+        baseScheme.copy(
+            background = Color(0xFF000000),
+            surface = Color(0xFF000000),
+            surfaceVariant = Color(0xFF121212),
+            onBackground = Color(0xFFFFFFFF),
+            onSurface = Color(0xFFFFFFFF)
+        )
+    } else {
+        baseScheme
     }
 }
 
@@ -282,10 +328,11 @@ fun getDarkColorSchemeForOption(option: String): ColorScheme {
 fun MyApplicationTheme(
   themeColorOption: String = "Purple",
   darkTheme: Boolean = true,
+  isOledMode: Boolean = false,
   content: @Composable () -> Unit,
 ) {
   val colorScheme = if (darkTheme) {
-      getDarkColorSchemeForOption(themeColorOption)
+      getDarkColorSchemeForOption(themeColorOption, isOled = isOledMode)
   } else {
       getLightColorSchemeForOption(themeColorOption)
   }

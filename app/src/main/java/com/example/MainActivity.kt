@@ -18,6 +18,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
+import android.view.WindowManager
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ui.GalleryScreen
@@ -122,13 +123,15 @@ class MainActivity : ComponentActivity() {
             val viewModel: GalleryViewModel = viewModel()
             val themeColorOption by viewModel.themeColorOption.collectAsState()
             val themeMode by viewModel.themeMode.collectAsState()
+            val maxBrightnessEnabled by viewModel.maxBrightnessEnabled.collectAsState()
 
             val isSystemDark = isSystemInDarkTheme()
             val darkTheme = when (themeMode) {
-                "Dark" -> true
+                "Dark", "Black", "OLED Black", "OLED" -> true
                 "Light" -> false
                 else -> isSystemDark // "Auto"
             }
+            val isOledMode = themeMode == "Black" || themeMode == "OLED Black" || themeMode == "OLED"
 
             val view = LocalView.current
             if (!view.isInEditMode) {
@@ -140,12 +143,17 @@ class MainActivity : ComponentActivity() {
                     val insetsController = WindowCompat.getInsetsController(window, view)
                     insetsController.isAppearanceLightStatusBars = !darkTheme
                     insetsController.isAppearanceLightNavigationBars = !darkTheme
+
+                    val layoutParams = window.attributes
+                    layoutParams.screenBrightness = if (maxBrightnessEnabled) 1.0f else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                    window.attributes = layoutParams
                 }
             }
 
             MyApplicationTheme(
                 themeColorOption = themeColorOption,
-                darkTheme = darkTheme
+                darkTheme = darkTheme,
+                isOledMode = isOledMode
             ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
