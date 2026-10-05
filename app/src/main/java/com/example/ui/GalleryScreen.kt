@@ -268,7 +268,10 @@ fun GalleryScreen(
                             val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
                             val focusRequester = remember { FocusRequester() }
                             LaunchedEffect(Unit) {
-                                focusRequester.requestFocus()
+                                try {
+                                    kotlinx.coroutines.delay(100)
+                                    focusRequester.requestFocus()
+                                } catch (e: Exception) {}
                             }
                             TextField(
                                 value = textFieldValue,
@@ -2447,6 +2450,7 @@ fun GalleryContentGrid(
         FastScrollIndicator(
             state = state,
             groupedMedia = groupedMedia,
+            subfolders = subfolders,
             subfoldersCount = subfolders.size,
             modifier = Modifier.align(Alignment.CenterEnd)
         )

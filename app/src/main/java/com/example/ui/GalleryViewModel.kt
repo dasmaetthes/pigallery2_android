@@ -673,6 +673,103 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     private var directoryLoadJob: kotlinx.coroutines.Job? = null
 
+    private fun buildDateViewDirectory(currentPathStr: String, uniqueMedia: List<ApiMedia>): ApiDirectory {
+        val rootPath = prefs.defaultRootPath
+        return if (currentPathStr == rootPath || currentPathStr.isEmpty()) {
+            val groupedByYear = uniqueMedia
+                .filter { it.metadata?.creationDate != null }
+                .groupBy { media ->
+                    val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+                    getYearFromTimestamp(localMs)
+                }
+                .toSortedMap(compareByDescending { it })
+
+            val yearSubFolders = groupedByYear.map { (year, mediaList) ->
+                val firstMedia = mediaList.firstOrNull()
+                val cover = firstMedia?.let {
+                    ApiCoverPhoto(
+                        name = it.name,
+                        directory = ApiCoverPhotoDirectory(name = "", path = it.parentPath ?: "")
+                    )
+                }
+                ApiSubFolder(
+                    id = year,
+                    name = "$year",
+                    path = "year:$year",
+                    mediaCount = mediaList.size,
+                    cache = ApiSubFolderCache(cover = cover)
+                )
+            }
+            ApiDirectory(
+                id = -1,
+                name = "Gallery",
+                path = currentPathStr,
+                directories = yearSubFolders,
+                media = emptyList()
+            )
+        } else if (currentPathStr.startsWith("year:") && !currentPathStr.contains("month:")) {
+            val yearStr = currentPathStr.substringAfter("year:")
+            val year = yearStr.toIntOrNull() ?: 0
+            val yearMedia = uniqueMedia.filter { media ->
+                val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+                getYearFromTimestamp(localMs) == year
+            }
+
+            val groupedByMonth = yearMedia
+                .groupBy { media ->
+                    val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+                    getMonthFromTimestamp(localMs)
+                }
+                .toSortedMap(compareByDescending { it })
+
+            val monthSubFolders = groupedByMonth.map { (month, mediaList) ->
+                val firstMedia = mediaList.firstOrNull()
+                val cover = firstMedia?.let {
+                    ApiCoverPhoto(
+                        name = it.name,
+                        directory = ApiCoverPhotoDirectory(name = "", path = it.parentPath ?: "")
+                    )
+                }
+                ApiSubFolder(
+                    id = year * 100 + month,
+                    name = getMonthName(month),
+                    path = "year:$year/month:$month",
+                    mediaCount = mediaList.size,
+                    cache = ApiSubFolderCache(cover = cover)
+                )
+            }
+            ApiDirectory(
+                id = -1,
+                name = "$year",
+                path = currentPathStr,
+                directories = monthSubFolders,
+                media = emptyList()
+            )
+        } else if (currentPathStr.contains("month:")) {
+            val year = currentPathStr.substringAfter("year:").substringBefore("/").toIntOrNull() ?: 0
+            val month = currentPathStr.substringAfter("month:").toIntOrNull() ?: 0
+            val monthMedia = uniqueMedia.filter { media ->
+                val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+                getYearFromTimestamp(localMs) == year && getMonthFromTimestamp(localMs) == month
+            }
+            ApiDirectory(
+                id = -1,
+                name = "${getMonthName(month)} $year",
+                path = currentPathStr,
+                directories = emptyList(),
+                media = monthMedia
+            )
+        } else {
+            ApiDirectory(
+                id = -1,
+                name = "Gallery",
+                path = currentPathStr,
+                directories = emptyList(),
+                media = uniqueMedia
+            )
+        }
+    }
+
     fun loadCurrentDirectory() {
         val server = prefs.serverUrl
         val cookies = prefs.cookies
@@ -686,26 +783,45 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
         directoryLoadJob?.cancel()
         directoryLoadJob = viewModelScope.launch(Dispatchers.IO) {
-            _galleryState.value = GalleryUiState.Loading
-            try {
-                var directory: ApiDirectory? = null
-                
-                // Cache-first
-                if (searchQuery.value.isEmpty() && !isFlattened.value && galleryViewMode.value == GalleryViewMode.FOLDER) {
+            var cachedEmitted = false
+
+            // 1. Cache-first: Instantly emit saved state from Room DB so user sees old state without delay
+            if (searchQuery.value.isEmpty() && !isFlattened.value) {
+                if (galleryViewMode.value == GalleryViewMode.FOLDER) {
                     val cachedMedia = repo.getDirectory(path)
-                    if (cachedMedia != null) {
-                        directory = ApiDirectory(id = -1, name = path.substringAfterLast('/'), path = path, directories = emptyList(), media = cachedMedia)
-                        _galleryState.value = GalleryUiState.Success(directory)
+                    if (cachedMedia != null && cachedMedia.isNotEmpty()) {
+                        val directory = ApiDirectory(
+                            id = -1,
+                            name = path.substringAfterLast('/'),
+                            path = path,
+                            directories = emptyList(),
+                            media = cachedMedia
+                        )
+                        _galleryState.value = GalleryUiState.Success(sortDirectory(directory))
+                        cachedEmitted = true
+                    }
+                } else if (galleryViewMode.value == GalleryViewMode.DATE) {
+                    val cachedAllMedia = repo.getAllMedia()
+                    if (!cachedAllMedia.isNullOrEmpty()) {
+                        val cachedDirectory = buildDateViewDirectory(currentPath, cachedAllMedia)
+                        _galleryState.value = GalleryUiState.Success(sortDirectory(cachedDirectory))
+                        cachedEmitted = true
                     }
                 }
+            }
+
+            if (!cachedEmitted) {
+                _galleryState.value = GalleryUiState.Loading
+            }
+
+            try {
+                var directory: ApiDirectory? = null
 
                 val freshDirectory = if (searchQuery.value.isNotEmpty()) {
-                    // Fetch search results using the advanced search query parser
                     val query = parseSearchStringToQuery(searchQuery.value)
                     val queryJson = api.serializeQuery(query)
                     api.search(server, queryJson, cookies, apiPrefix)
                 } else if (isFlattened.value) {
-                    // Fetch flattened directory content recursively, handling virtual paths safely
                     val rootPath = if (currentPath.startsWith("year:") || currentPath.startsWith("month:")) {
                         prefs.defaultRootPath
                     } else {
@@ -742,111 +858,30 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     val rootPath = prefs.defaultRootPath
                     val allMedia = getOrFetchAllMedia(server, rootPath, cookies, apiPrefix)
                     val uniqueMedia = allMedia.distinctBy { it.id }
-                    
-                    val currentPathStr = currentPath
-                    if (currentPathStr == rootPath || currentPathStr.isEmpty()) {
-                        val groupedByYear = uniqueMedia
-                            .filter { it.metadata?.creationDate != null }
-                            .groupBy { media ->
-                                val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
-                                getYearFromTimestamp(localMs)
-                            }
-                            .toSortedMap(compareByDescending { it })
 
-                        val yearSubFolders = groupedByYear.map { (year, mediaList) ->
-                            val firstMedia = mediaList.firstOrNull()
-                            val cover = firstMedia?.let {
-                                ApiCoverPhoto(
-                                    name = it.name,
-                                    directory = ApiCoverPhotoDirectory(name = "", path = it.parentPath ?: "")
-                                )
-                            }
-                            ApiSubFolder(
-                                id = year,
-                                name = "$year",
-                                path = "year:$year",
-                                mediaCount = mediaList.size,
-                                cache = ApiSubFolderCache(cover = cover)
-                            )
-                        }
-                        ApiDirectory(
-                            id = -1,
-                            name = "Gallery",
-                            path = currentPathStr,
-                            directories = yearSubFolders,
-                            media = emptyList()
-                        )
-                    } else if (currentPathStr.startsWith("year:") && !currentPathStr.contains("month:")) {
-                        val yearStr = currentPathStr.substringAfter("year:")
-                        val year = yearStr.toIntOrNull() ?: 0
-                        val yearMedia = uniqueMedia.filter { media ->
-                            val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
-                            getYearFromTimestamp(localMs) == year
-                        }
-
-                        val groupedByMonth = yearMedia
-                            .groupBy { media ->
-                                val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
-                                getMonthFromTimestamp(localMs)
-                            }
-                            .toSortedMap(compareByDescending { it })
-
-                        val monthSubFolders = groupedByMonth.map { (month, mediaList) ->
-                            val firstMedia = mediaList.firstOrNull()
-                            val cover = firstMedia?.let {
-                                ApiCoverPhoto(
-                                    name = it.name,
-                                    directory = ApiCoverPhotoDirectory(name = "", path = it.parentPath ?: "")
-                                )
-                            }
-                            ApiSubFolder(
-                                id = year * 100 + month,
-                                name = getMonthName(month),
-                                path = "year:$year/month:$month",
-                                mediaCount = mediaList.size,
-                                cache = ApiSubFolderCache(cover = cover)
-                            )
-                        }
-                        ApiDirectory(
-                            id = -1,
-                            name = "$year",
-                            path = currentPathStr,
-                            directories = monthSubFolders,
-                            media = emptyList()
-                        )
-                    } else if (currentPathStr.contains("month:")) {
-                        val year = currentPathStr.substringAfter("year:").substringBefore("/").toIntOrNull() ?: 0
-                        val month = currentPathStr.substringAfter("month:").toIntOrNull() ?: 0
-                        val monthMedia = uniqueMedia.filter { media ->
-                            val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
-                            getYearFromTimestamp(localMs) == year && getMonthFromTimestamp(localMs) == month
-                        }
-                        ApiDirectory(
-                            id = -1,
-                            name = "${getMonthName(month)} $year",
-                            path = currentPathStr,
-                            directories = emptyList(),
-                            media = monthMedia
-                        )
-                    } else {
-                        api.getGalleryContent(server, path, cookies, apiPrefix)
+                    if (uniqueMedia.isNotEmpty()) {
+                        repo.saveAllMedia(uniqueMedia)
                     }
+
+                    buildDateViewDirectory(currentPath, uniqueMedia)
                 } else {
                     api.getGalleryContent(server, path, cookies, apiPrefix)
                 }
 
-                // Update cache
+                // Update cache for FOLDER view
                 if (freshDirectory != null && freshDirectory.media != null && searchQuery.value.isEmpty() && !isFlattened.value && galleryViewMode.value == GalleryViewMode.FOLDER) {
                     repo.saveDirectory(path, freshDirectory.media)
                 }
-                
+
                 directory = freshDirectory
 
-                // Apply sorting
+                // Apply sorting and update UI in background
                 val sortedDirectory = sortDirectory(directory)
                 _galleryState.value = GalleryUiState.Success(sortedDirectory)
             } catch (e: Exception) {
-                _galleryState.value = GalleryUiState.Error(e.localizedMessage ?: "Failed to fetch gallery content")
+                if (!cachedEmitted) {
+                    _galleryState.value = GalleryUiState.Error(e.localizedMessage ?: "Failed to fetch gallery content")
+                }
             }
         }
     }

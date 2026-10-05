@@ -10,6 +10,9 @@ interface MediaDao {
     @Query("SELECT * FROM media WHERE parentPath = :path")
     suspend fun getMediaByPath(path: String): List<MediaEntity>
 
+    @Query("SELECT * FROM media")
+    suspend fun getAllMedia(): List<MediaEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMedia(media: List<MediaEntity>)
 

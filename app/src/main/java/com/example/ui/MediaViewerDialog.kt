@@ -198,13 +198,20 @@ fun MediaViewerDialog(
     val cookies = viewModel.getCookiesHeader()
     val activeMediaList by viewModel.activeMediaList.collectAsState()
 
+    val displayMetrics = LocalContext.current.resources.displayMetrics
+    val maxScreenDim = maxOf(displayMetrics.widthPixels, displayMetrics.heightPixels)
+    val safeMaxDimension = minOf(maxScreenDim * 2, 4096).coerceAtLeast(1920)
+
     val coroutineScope = rememberCoroutineScope()
     val scope = coroutineScope
     val focusRequester = remember { FocusRequester() }
     val topBarFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
+        try {
+            kotlinx.coroutines.delay(100)
+            focusRequester.requestFocus()
+        } catch (e: Exception) {}
     }
 
     // Decouple list for robust swiping
@@ -264,7 +271,7 @@ fun MediaViewerDialog(
             }
         }
 
-        // PASS 2: Preload full resolution original images
+        // PASS 2: Preload full resolution original images (downsampled safely for high-res images)
         for (targetMedia in targetMediaItems) {
             val originalUrl = viewModel.getOriginalMediaUrl(targetMedia)
             if (originalUrl.isNotBlank()) {
@@ -273,7 +280,8 @@ fun MediaViewerDialog(
                     .diskCachePolicy(coil.request.CachePolicy.ENABLED)
                     .networkCachePolicy(coil.request.CachePolicy.ENABLED)
                     .data(originalUrl)
-                    .size(coil.size.Size.ORIGINAL)
+                    .size(safeMaxDimension, safeMaxDimension)
+                    .precision(coil.size.Precision.INEXACT)
                     .apply {
                         if (cookies.isNotEmpty()) addHeader("Cookie", cookies)
                     }
@@ -1279,16 +1287,21 @@ fun MediaViewerItem(
                 mutableStateOf<android.graphics.drawable.Drawable?>(null)
             }
 
+            val displayMetrics = LocalContext.current.resources.displayMetrics
+            val maxScreenDim = maxOf(displayMetrics.widthPixels, displayMetrics.heightPixels)
+            val safeMaxDimension = minOf(maxScreenDim * 2, 4096).coerceAtLeast(1920)
+
             // Image View with Pinch to Zoom & dynamic Client-Side Rotation
             val builder = ImageRequest.Builder(context)
                 .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
-                        .diskCachePolicy(coil.request.CachePolicy.ENABLED)
-                        .networkCachePolicy(coil.request.CachePolicy.ENABLED)
-                        .data(currentUrl)
+                .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                .networkCachePolicy(coil.request.CachePolicy.ENABLED)
+                .data(currentUrl)
                 .crossfade(true)
 
             if (currentUrl == originalUrl) {
-                builder.size(coil.size.Size.ORIGINAL)
+                builder.size(safeMaxDimension, safeMaxDimension)
+                builder.precision(coil.size.Precision.INEXACT)
                 if (preloadDrawable != null) {
                     builder.placeholder(preloadDrawable)
                 } else {

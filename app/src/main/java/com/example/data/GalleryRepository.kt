@@ -19,6 +19,32 @@ class GalleryRepository(private val database: AppDatabase) {
         }
     }
 
+    suspend fun getAllMedia(): List<ApiMedia>? {
+        val mediaEntities = database.mediaDao().getAllMedia()
+        if (mediaEntities.isEmpty()) return null
+        return mediaEntities.map { 
+            ApiMedia(
+                id = it.id,
+                name = it.name,
+                parentPath = it.parentPath,
+                metadata = ApiMediaMetadata(creationDate = it.creationDate)
+            )
+        }
+    }
+
+    suspend fun saveAllMedia(mediaList: List<ApiMedia>) {
+        val entities = mediaList.mapNotNull { media ->
+            val mediaId = media.id ?: return@mapNotNull null
+            MediaEntity(
+                id = mediaId,
+                name = media.name,
+                parentPath = media.parentPath ?: "",
+                creationDate = media.metadata?.creationDate
+            )
+        }
+        database.mediaDao().insertMedia(entities)
+    }
+
     suspend fun saveDirectory(path: String, media: List<ApiMedia>) {
         val entities = media.map {
             MediaEntity(
