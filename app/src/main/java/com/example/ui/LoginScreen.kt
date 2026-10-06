@@ -44,6 +44,7 @@ fun LoginScreen(
     val savedPassword by viewModel.savedPassword.collectAsState()
 
     var serverUrl by remember { mutableStateOf(savedServerUrl) }
+    var localServerUrl by remember { mutableStateOf(viewModel.prefs.localServerUrl) }
     var username by remember { mutableStateOf(savedUsername) }
     var password by remember { mutableStateOf(savedPassword) }
     var passwordVisible by remember { mutableStateOf(false) }
@@ -144,8 +145,8 @@ fun LoginScreen(
                     OutlinedTextField(
                         value = serverUrl,
                         onValueChange = { serverUrl = it },
-                        label = { Text("Server URL") },
-                        placeholder = { Text("http://192.168.1.100:3000") },
+                        label = { Text("Primary Server URL") },
+                        placeholder = { Text("https://gallery.deinedomain.de") },
                         leadingIcon = {
                             Icon(
                                 imageVector = Icons.Default.Language,
@@ -157,6 +158,29 @@ fun LoginScreen(
                             .fillMaxWidth()
                             .tvFocus(shape = RoundedCornerShape(4.dp))
                             .testTag("server_url_input"),
+                        colors = OutlinedTextFieldDefaults.colors()
+                    )
+
+                    // Optional Local Server URL Input
+                    OutlinedTextField(
+                        value = localServerUrl,
+                        onValueChange = { 
+                            localServerUrl = it
+                            viewModel.prefs.localServerUrl = it
+                        },
+                        label = { Text("Local Server (Optimal for Home Wi-Fi)") },
+                        placeholder = { Text("http://192.168.178.50:3000") },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Language,
+                                contentDescription = "Local Server URL"
+                            )
+                        },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .tvFocus(shape = RoundedCornerShape(4.dp))
+                            .testTag("local_server_url_input"),
                         colors = OutlinedTextFieldDefaults.colors()
                     )
 
@@ -230,6 +254,7 @@ fun LoginScreen(
                     Button(
                         onClick = {
                             if (serverUrl.isNotEmpty()) {
+                                viewModel.prefs.localServerUrl = localServerUrl
                                 viewModel.connectAndLogin(serverUrl, username, password, allowInsecureSsl)
                             }
                         },

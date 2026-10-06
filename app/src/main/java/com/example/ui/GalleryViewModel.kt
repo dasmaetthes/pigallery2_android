@@ -24,6 +24,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import java.io.IOException
 
 import androidx.paging.Pager
@@ -190,6 +192,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     private val directoryCache = java.util.concurrent.ConcurrentHashMap<String, ApiDirectory>()
     private val cachedFlattenedMedia = java.util.concurrent.ConcurrentHashMap<String, List<ApiMedia>>()
+    private val fetchSemaphore = Semaphore(12)
 
     fun setGalleryViewMode(mode: GalleryViewMode) {
         galleryViewMode.value = mode
@@ -785,6 +788,31 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    private fun filterFlattenedMedia(currentPathStr: String, uniqueMedia: List<ApiMedia>): List<ApiMedia> {
+        return if (currentPathStr.startsWith("year:") && !currentPathStr.contains("month:")) {
+            val year = currentPathStr.substringAfter("year:").substringBefore("/").toIntOrNull() ?: 0
+            uniqueMedia.filter { media ->
+                val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+                getYearFromTimestamp(localMs) == year
+            }
+        } else if (currentPathStr.contains("month:")) {
+            val year = currentPathStr.substringAfter("year:").substringBefore("/").toIntOrNull() ?: 0
+            val month = currentPathStr.substringAfter("month:").toIntOrNull() ?: 0
+            uniqueMedia.filter { media ->
+                val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+                getYearFromTimestamp(localMs) == year && getMonthFromTimestamp(localMs) == month
+            }
+        } else {
+            uniqueMedia
+        }
+    }
+
+    fun refreshCurrentDirectory() {
+        directoryCache.clear()
+        cachedFlattenedMedia.clear()
+        loadCurrentDirectory()
+    }
+
     fun loadCurrentDirectory() {
         val server = prefs.serverUrl
         val cookies = prefs.cookies
@@ -800,28 +828,43 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         directoryLoadJob = viewModelScope.launch(Dispatchers.IO) {
             var cachedEmitted = false
 
-            // 1. Cache-first: Instantly emit saved state from Room DB so user sees old state without delay
-            if (searchQuery.value.isEmpty() && !isFlattened.value) {
-                if (galleryViewMode.value == GalleryViewMode.FOLDER) {
-                    val cachedMedia = repo.getDirectory(path)
-                    if (cachedMedia != null && cachedMedia.isNotEmpty()) {
-                        val directory = ApiDirectory(
+            // 1. In-memory fast path for Date View and Flattened Mode (instant 0ms navigation, zero flicker, 100% accurate counts)
+            if (searchQuery.value.isEmpty() && (isFlattened.value || galleryViewMode.value == GalleryViewMode.DATE)) {
+                val rootPath = prefs.defaultRootPath
+                val cacheKey = rootPath.ifEmpty { "ROOT" }
+                val inMemoryMedia = cachedFlattenedMedia[cacheKey]
+                if (inMemoryMedia != null && inMemoryMedia.isNotEmpty()) {
+                    val freshDirectory = if (isFlattened.value) {
+                        val filteredMedia = filterFlattenedMedia(currentPath, inMemoryMedia)
+                        ApiDirectory(
                             id = -1,
-                            name = path.substringAfterLast('/'),
-                            path = path,
+                            name = if (currentPath.isEmpty() || currentPath == prefs.defaultRootPath) "Flattened Gallery" else currentPath.substringAfterLast('/'),
+                            path = currentPath,
                             directories = emptyList(),
-                            media = cachedMedia
+                            media = filteredMedia
                         )
-                        _galleryState.value = GalleryUiState.Success(sortDirectory(directory))
-                        cachedEmitted = true
+                    } else {
+                        buildDateViewDirectory(currentPath, inMemoryMedia)
                     }
-                } else if (galleryViewMode.value == GalleryViewMode.DATE) {
-                    val cachedAllMedia = repo.getAllMedia()
-                    if (!cachedAllMedia.isNullOrEmpty()) {
-                        val cachedDirectory = buildDateViewDirectory(currentPath, cachedAllMedia)
-                        _galleryState.value = GalleryUiState.Success(sortDirectory(cachedDirectory))
-                        cachedEmitted = true
-                    }
+                    val sortedDirectory = sortDirectory(freshDirectory)
+                    _galleryState.value = GalleryUiState.Success(sortedDirectory)
+                    return@launch
+                }
+            }
+
+            // 2. Room DB cache check for FOLDER view
+            if (searchQuery.value.isEmpty() && !isFlattened.value && galleryViewMode.value == GalleryViewMode.FOLDER) {
+                val cachedMedia = repo.getDirectory(path)
+                if (cachedMedia != null && cachedMedia.isNotEmpty()) {
+                    val directory = ApiDirectory(
+                        id = -1,
+                        name = path.substringAfterLast('/'),
+                        path = path,
+                        directories = emptyList(),
+                        media = cachedMedia
+                    )
+                    _galleryState.value = GalleryUiState.Success(sortDirectory(directory))
+                    cachedEmitted = true
                 }
             }
 
@@ -845,22 +888,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     val allMedia = getOrFetchAllMedia(server, rootPath, cookies, apiPrefix)
                     val uniqueMedia = deduplicateMedia(allMedia)
 
-                    val filteredMedia = if (currentPath.startsWith("year:") && !currentPath.contains("month:")) {
-                        val year = currentPath.substringAfter("year:").substringBefore("/").toIntOrNull() ?: 0
-                        uniqueMedia.filter { media ->
-                            val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
-                            getYearFromTimestamp(localMs) == year
-                        }
-                    } else if (currentPath.contains("month:")) {
-                        val year = currentPath.substringAfter("year:").substringBefore("/").toIntOrNull() ?: 0
-                        val month = currentPath.substringAfter("month:").toIntOrNull() ?: 0
-                        uniqueMedia.filter { media ->
-                            val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
-                            getYearFromTimestamp(localMs) == year && getMonthFromTimestamp(localMs) == month
-                        }
-                    } else {
-                        uniqueMedia
-                    }
+                    val filteredMedia = filterFlattenedMedia(currentPath, uniqueMedia)
 
                     ApiDirectory(
                         id = -1,
@@ -925,13 +953,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         apiPrefix: String
     ): List<ApiMedia> = kotlinx.coroutines.coroutineScope {
         try {
-            val directory = directoryCache[path] ?: run {
-                val fetched = api.getGalleryContent(serverUrl, path, cookies, apiPrefix)
-                directoryCache[path] = fetched
-                if (fetched.media != null) {
-                    repo.saveDirectory(path, fetched.media)
+            val directory = directoryCache[path] ?: fetchSemaphore.withPermit {
+                directoryCache[path] ?: run {
+                    val fetched = api.getGalleryContent(serverUrl, path, cookies, apiPrefix)
+                    directoryCache[path] = fetched
+                    if (fetched.media != null) {
+                        repo.saveDirectory(path, fetched.media)
+                    }
+                    fetched
                 }
-                fetched
             }
 
             val currentMedia = (directory.media ?: emptyList()).map { media ->
@@ -1514,9 +1544,26 @@ fun loadAlbums() {
     }
 
     // --- URL Construction and Media Resolution ---
+    fun getActiveServerUrl(): String {
+        val primary = prefs.serverUrl.let { if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it }.trimEnd('/')
+        val local = prefs.localServerUrl.let { if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it }.trimEnd('/')
+        if (local.isEmpty()) return primary
+
+        return try {
+            val uri = java.net.URI(local)
+            val host = uri.host ?: return primary
+            val port = if (uri.port != -1) uri.port else 80
+            val socket = java.net.Socket()
+            socket.connect(java.net.InetSocketAddress(host, port), 150)
+            socket.close()
+            local
+        } catch (e: Exception) {
+            primary
+        }
+    }
+
     fun getThumbnailUrl(media: ApiMedia): String {
-        val base = prefs.serverUrl.let { if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it }
-        val sanitizedBase = base.trimEnd('/')
+        val sanitizedBase = getActiveServerUrl()
         val apiPrefix = prefs.apiPrefix
         val relativePath = encodePath(getMediaFullPath(media))
         val suffix = prefs.thumbnailPathSuffix
@@ -1527,16 +1574,14 @@ fun loadAlbums() {
         if (media.isVideo) return null
         val suffix = prefs.preloadPathSuffix
         if (suffix.isBlank()) return null
-        val base = prefs.serverUrl.let { if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it }
-        val sanitizedBase = base.trimEnd('/')
+        val sanitizedBase = getActiveServerUrl()
         val apiPrefix = prefs.apiPrefix
         val relativePath = encodePath(getMediaFullPath(media))
         return "$sanitizedBase$apiPrefix/gallery/content/${relativePath}/$suffix"
     }
 
     fun getOriginalMediaUrl(media: ApiMedia): String {
-        val base = prefs.serverUrl.let { if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it }
-        val sanitizedBase = base.trimEnd('/')
+        val sanitizedBase = getActiveServerUrl()
         val apiPrefix = prefs.apiPrefix
         val relativePath = encodePath(getMediaFullPath(media))
         return if (media.isVideo) {

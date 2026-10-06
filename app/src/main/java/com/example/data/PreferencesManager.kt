@@ -8,6 +8,7 @@ class PreferencesManager(context: Context) {
 
     companion object {
         private const val KEY_SERVER_URL = "server_url"
+        private const val KEY_LOCAL_SERVER_URL = "local_server_url"
         private const val KEY_ALLOW_INSECURE_SSL = "allow_insecure_ssl"
         private const val KEY_USERNAME = "username"
         private const val KEY_PASSWORD = "password"
@@ -68,6 +69,10 @@ class PreferencesManager(context: Context) {
     var serverUrl: String
         get() = prefs.getString(KEY_SERVER_URL, "") ?: ""
         set(value) = prefs.edit().putString(KEY_SERVER_URL, value).apply()
+
+    var localServerUrl: String
+        get() = prefs.getString(KEY_LOCAL_SERVER_URL, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_LOCAL_SERVER_URL, value).apply()
 
     var allowInsecureSsl: Boolean
         get() = prefs.getBoolean(KEY_ALLOW_INSECURE_SSL, false)

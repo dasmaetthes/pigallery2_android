@@ -19,8 +19,8 @@ android {
     applicationId = "com.aistudio.pigallery.dasmaetthes"
     minSdk = 24
     targetSdk = 36
-    versionCode = 3
-    versionName = "2.4"
+    versionCode = 4
+    versionName = "2.5"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

@@ -711,7 +711,7 @@ fun GalleryTabContent(viewModel: GalleryViewModel) {
             val isRefreshing = galleryState is GalleryUiState.Loading
             AdaptivePullToRefreshBox(
                 isRefreshing = isRefreshing,
-                onRefresh = { viewModel.loadCurrentDirectory() },
+                onRefresh = { viewModel.refreshCurrentDirectory() },
                 modifier = Modifier.weight(1f).fillMaxWidth()
             ) {
                 when (val state = galleryState) {
@@ -722,7 +722,7 @@ fun GalleryTabContent(viewModel: GalleryViewModel) {
                     }
                     is GalleryUiState.Error -> {
                         ErrorStateView(message = state.message) {
-                            viewModel.loadCurrentDirectory()
+                            viewModel.refreshCurrentDirectory()
                         }
                     }
                     is GalleryUiState.Success -> {
@@ -1739,6 +1739,20 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                         Text(
                             text = "Logged in as: ${if (viewModel.prefs.username.isEmpty()) "Demo / Public User" else viewModel.prefs.username}",
                             style = MaterialTheme.typography.bodyMedium
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        var localServerUrl by remember { mutableStateOf(viewModel.prefs.localServerUrl) }
+                        OutlinedTextField(
+                            value = localServerUrl,
+                            onValueChange = {
+                                localServerUrl = it
+                                viewModel.prefs.localServerUrl = it
+                            },
+                            label = { Text("Local Server (Optimal for Home Wi-Fi)") },
+                            placeholder = { Text("http://192.168.178.50:3000") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         
@@ -2954,9 +2968,9 @@ fun AboutScreen(viewModel: GalleryViewModel, onBack: () -> Unit) {
     val version = remember {
         try {
             val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-            packageInfo.versionName ?: "2.2"
+            packageInfo.versionName ?: "2.5"
         } catch (e: Exception) {
-            "2.2"
+            "2.5"
         }
     }
 
