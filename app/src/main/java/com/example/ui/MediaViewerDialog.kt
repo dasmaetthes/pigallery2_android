@@ -1,6 +1,10 @@
 package com.example.ui
 
+import com.example.data.PreferencesManager
 import androidx.compose.ui.unit.dp
+import java.io.FileOutputStream
+import okhttp3.OkHttpClient
+import okhttp3.Request
 
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
@@ -287,6 +291,21 @@ fun MediaViewerDialog(
                     }
                     .build()
                 imageLoader.enqueue(req)
+            }
+        }
+
+        // PASS 3: Proactively prefetch adjacent video files into disk cache for instant 0ms playback resume
+        val targetVideoItems = offsets.mapNotNull { offset ->
+            val index = page + offset
+            mediaList.getOrNull(index)
+        }.filter { it.isVideo }
+
+        for (targetVideo in targetVideoItems.take(2)) {
+            val videoUrl = viewModel.getOriginalMediaUrl(targetVideo)
+            if (videoUrl.isNotBlank()) {
+                launch(Dispatchers.IO) {
+                    prefetchVideoFile(context, targetVideo, videoUrl, cookies)
+                }
             }
         }
     }
@@ -949,8 +968,67 @@ fun MediaViewerDialog(
         }
     }
 
+fun formatFileSize(bytes: Long): String {
+    if (bytes <= 0) return "Unknown"
+    val kb = bytes / 1024.0
+    val mb = kb / 1024.0
+    val gb = mb / 1024.0
+    return when {
+        gb >= 1.0 -> String.format(java.util.Locale.US, "%.2f GB", gb)
+        mb >= 1.0 -> String.format(java.util.Locale.US, "%.2f MB", mb)
+        kb >= 1.0 -> String.format(java.util.Locale.US, "%.1f KB", kb)
+        else -> "$bytes B"
+    }
+}
+
 @Composable
 fun MetadataContent(media: ApiMedia, onClose: () -> Unit) {
+    var currentFileSize by remember(media.id) { mutableStateOf(media.metadata?.fileSize) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val prefs = remember(context) { PreferencesManager(context) }
+
+    LaunchedEffect(media.id, currentFileSize) {
+        if (currentFileSize == null || currentFileSize == 0L) {
+            val server = prefs.serverUrl
+            val base = if (server.isNotBlank() && !server.startsWith("http")) "http://$server" else server
+            val sanitizedBase = base.trimEnd('/')
+            val apiPrefix = prefs.apiPrefix
+            val encodedName = java.net.URLEncoder.encode(media.name, "UTF-8").replace("+", "%20")
+            val relativePath = if (!media.parentPath.isNullOrEmpty()) {
+                val pathClean = media.parentPath.trim('/').split("/").joinToString("/") {
+                    java.net.URLEncoder.encode(it, "UTF-8").replace("+", "%20")
+                }
+                "$pathClean/$encodedName"
+            } else {
+                encodedName
+            }
+            val mediaUrl = "$sanitizedBase$apiPrefix/gallery/content/$relativePath"
+            if (sanitizedBase.isNotBlank()) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    try {
+                        val client = okhttp3.OkHttpClient()
+                        val req = okhttp3.Request.Builder()
+                            .url(mediaUrl)
+                            .apply {
+                                val userCookies = prefs.cookies
+                                if (userCookies.isNotEmpty()) addHeader("Cookie", userCookies)
+                            }
+                            .head()
+                            .build()
+                        client.newCall(req).execute().use { resp ->
+                            val len = resp.header("Content-Length")?.toLongOrNull()
+                            if (len != null && len > 0) {
+                                currentFileSize = len
+                            }
+                        }
+                    } catch (e: Exception) {
+                        // Ignore
+                    }
+                }
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .padding(16.dp)
@@ -989,6 +1067,12 @@ fun MetadataContent(media: ApiMedia, onClose: () -> Unit) {
         media.parentPath?.let {
             val cleanedPath = it.replace(Regex("/{2,}"), "/")
             MetadataRow(icon = Icons.Outlined.Folder, label = "Folder", value = cleanedPath)
+        }
+
+        currentFileSize?.let { bytes ->
+            if (bytes > 0) {
+                MetadataRow(icon = Icons.Outlined.SdCard, label = "File Size", value = formatFileSize(bytes))
+            }
         }
 
         val size = media.metadata?.size
@@ -1043,6 +1127,76 @@ fun MetadataContent(media: ApiMedia, onClose: () -> Unit) {
     }
 }
 
+suspend fun prefetchVideoFile(
+    context: Context,
+    media: ApiMedia,
+    mediaUrl: String,
+    cookies: String
+): File? = withContext(Dispatchers.IO) {
+    val mediaId = media.id ?: return@withContext null
+    val cacheFile = File(context.cacheDir, "temp_video_${mediaId}.mp4")
+    if (cacheFile.exists() && cacheFile.length() > 0) {
+        return@withContext cacheFile
+    }
+
+    val tempFile = File(context.cacheDir, "temp_video_${mediaId}.mp4.tmp")
+    try {
+        val client = OkHttpClient.Builder()
+            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+
+        val req = Request.Builder()
+            .url(mediaUrl)
+            .apply {
+                if (cookies.isNotEmpty()) addHeader("Cookie", cookies)
+            }
+            .build()
+
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) return@withContext null
+            val body = resp.body ?: return@withContext null
+
+            body.byteStream().use { input ->
+                FileOutputStream(tempFile).use { output ->
+                    val buffer = ByteArray(32 * 1024)
+                    var bytesRead: Int
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        output.write(buffer, 0, bytesRead)
+                    }
+                    output.flush()
+                }
+            }
+            if (tempFile.exists() && tempFile.length() > 0) {
+                tempFile.renameTo(cacheFile)
+                trimVideoCache(context)
+                return@withContext cacheFile
+            }
+        }
+    } catch (e: Exception) {
+        tempFile.delete()
+    }
+    return@withContext if (cacheFile.exists() && cacheFile.length() > 0) cacheFile else null
+}
+
+fun trimVideoCache(context: Context, maxSizeBytes: Long = 300L * 1024L * 1024L) {
+    try {
+        val cacheFiles = context.cacheDir.listFiles()
+            ?.filter { it.name.startsWith("temp_video_") && it.name.endsWith(".mp4") }
+            ?.sortedByDescending { it.lastModified() } ?: return
+
+        var totalSize = 0L
+        for (file in cacheFiles) {
+            totalSize += file.length()
+            if (totalSize > maxSizeBytes) {
+                file.delete()
+            }
+        }
+    } catch (e: Exception) {
+        // Ignore
+    }
+}
+
 @Composable
 fun MediaViewerItem(
     media: ApiMedia,
@@ -1069,26 +1223,29 @@ fun MediaViewerItem(
     var offsetX by remember { mutableStateOf(0f) }
     var offsetY by remember { mutableStateOf(0f) }
 
-    // Clean up temp files upon entering and exiting
-    DisposableEffect(media.id) {
-        onDispose {
-            try {
-                context.cacheDir.listFiles()?.forEach { file ->
-                    if (file.name.startsWith("temp_video_${media.id}")) {
-                        file.delete()
-                    }
-                }
-            } catch (e: Exception) {
-                // Ignore
-            }
-        }
-    }
-
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
         if (media.isVideo) {
+            val mediaId = media.id
+            val initialCachedFile = remember(mediaId) {
+                if (mediaId != null) {
+                    val f = File(context.cacheDir, "temp_video_${mediaId}.mp4")
+                    if (f.exists() && f.length() > 0) f else null
+                } else null
+            }
+            var cachedVideoFile by remember(mediaId) { mutableStateOf(initialCachedFile) }
+
+            LaunchedEffect(mediaId) {
+                if (cachedVideoFile == null && mediaUrl.isNotBlank()) {
+                    val prefetched = prefetchVideoFile(context, media, mediaUrl, cookies)
+                    if (prefetched != null) {
+                        cachedVideoFile = prefetched
+                    }
+                }
+            }
+
             var isPreparing by remember(media.id) { mutableStateOf(true) }
             var isBuffering by remember(media.id) { mutableStateOf(false) }
             var hasError by remember(media.id) { mutableStateOf(false) }
@@ -1096,24 +1253,44 @@ fun MediaViewerItem(
             var currentVideoView by remember(media.id) { mutableStateOf<VideoView?>(null) }
 
             LaunchedEffect(isVideoPlaying, currentVideoView) {
-                while (true) {
-                    val vv = currentVideoView
-                    if (vv != null) {
-                        if (isVideoPlaying) {
-                            if (!vv.isPlaying) {
-                                vv.start()
-                            }
-                            if (vv.isPlaying || vv.currentPosition > 0) {
-                                isPreparing = false
-                                isBuffering = false
-                            }
+                val vv = currentVideoView ?: return@LaunchedEffect
+                if (isVideoPlaying) {
+                    isBuffering = true
+                    val currentPos = vv.currentPosition
+                    if (currentPos > 0) {
+                        try {
+                            vv.seekTo(currentPos)
+                        } catch (e: Exception) {}
+                    }
+                    vv.start()
+
+                    var lastPos = vv.currentPosition
+                    var stallCount = 0
+                    while (isVideoPlaying) {
+                        kotlinx.coroutines.delay(250)
+                        val pos = vv.currentPosition
+                        if (pos > lastPos) {
+                            isPreparing = false
+                            isBuffering = false
+                            stallCount = 0
+                            lastPos = pos
                         } else {
-                            if (vv.isPlaying) {
-                                vv.pause()
+                            stallCount++
+                            if (stallCount >= 3) { // ~750ms without position advancement
+                                isBuffering = true
+                                try {
+                                    vv.seekTo(pos)
+                                    vv.start()
+                                } catch (e: Exception) {}
+                                stallCount = 0
                             }
                         }
                     }
-                    kotlinx.coroutines.delay(200)
+                } else {
+                    if (vv.isPlaying) {
+                        vv.pause()
+                    }
+                    isBuffering = false
                 }
             }
 
@@ -1157,7 +1334,10 @@ fun MediaViewerItem(
                             isFocusable = false
                             isFocusableInTouchMode = false
 
-                            if (cookies.isNotEmpty()) {
+                            val localVideo = cachedVideoFile
+                            if (localVideo != null && localVideo.exists() && localVideo.length() > 0) {
+                                setVideoURI(Uri.fromFile(localVideo))
+                            } else if (cookies.isNotEmpty()) {
                                 setVideoURI(Uri.parse(mediaUrl), mapOf("Cookie" to cookies))
                             } else {
                                 setVideoURI(Uri.parse(mediaUrl))
@@ -1180,9 +1360,7 @@ fun MediaViewerItem(
                             }
                             setOnInfoListener { _, what, _ ->
                                 if (what == 701) { // MediaPlayer.MEDIA_INFO_BUFFERING_START
-                                    if (currentVideoView?.isPlaying != true) {
-                                        isBuffering = true
-                                    }
+                                    isBuffering = true
                                 } else if (what == 702 || what == 703 || what == 3) { // MEDIA_INFO_BUFFERING_END / MEDIA_INFO_VIDEO_RENDERING_START
                                     isPreparing = false
                                     isBuffering = false
@@ -1212,10 +1390,6 @@ fun MediaViewerItem(
                         videoView?.let { vv ->
                             currentVideoView = vv
                             onVideoPrepared(vv.duration, vv)
-                            if (vv.isPlaying || vv.currentPosition > 0) {
-                                isPreparing = false
-                                isBuffering = false
-                            }
                             if (isVideoPlaying && !vv.isPlaying) {
                                 vv.start()
                             } else if (!isVideoPlaying && vv.isPlaying) {
@@ -1254,8 +1428,7 @@ fun MediaViewerItem(
                 )
             }
             
-            val isActivelyPlaying = (currentVideoView?.isPlaying == true) || ((currentVideoView?.currentPosition ?: 0) > 0)
-            if ((isPreparing || isBuffering) && !hasError && !isActivelyPlaying) {
+            if ((isPreparing || isBuffering) && !hasError) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,

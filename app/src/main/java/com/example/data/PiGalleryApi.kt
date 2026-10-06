@@ -136,7 +136,8 @@ data class ApiMediaMetadata(
     val keywords: List<String>? = null,
     val faces: List<ApiFace>? = null,
     val duration: Double? = null,
-    val gps: ApiGPSData? = null
+    val gps: ApiGPSData? = null,
+    val fileSize: Long? = null
 )
 
 data class ApiCameraData(
@@ -282,7 +283,9 @@ class PiGalleryApi(private val context: android.content.Context) {
             } else null
         } else null
 
-        return ApiMediaMetadata(size, creationDate, creationDateOffset, cameraData, keywords, faces, duration, gps)
+        val fileSize = (metaMap["fileSize"] as? Number ?: metaMap["file_size"] as? Number ?: metaMap["s"] as? Number ?: metaMap["fs"] as? Number)?.toLong()
+
+        return ApiMediaMetadata(size, creationDate, creationDateOffset, cameraData, keywords, faces, duration, gps, fileSize)
     }
 
     private val prefs = PreferencesManager(context)
@@ -573,10 +576,14 @@ class PiGalleryApi(private val context: android.content.Context) {
             val mediaMap = item as? Map<*, *> ?: return@mapNotNull null
             val medId = (mediaMap["id"] as? Number)?.toInt() ?: kotlin.random.Random.nextInt()
             val medName = (mediaMap["name"] as? String) ?: (mediaMap["n"] as? String) ?: ""
+            val medFileSize = (mediaMap["fileSize"] as? Number ?: mediaMap["file_size"] as? Number ?: mediaMap["s"] as? Number ?: mediaMap["fs"] as? Number)?.toLong()
             
             val metaMap = (mediaMap["metadata"] as? Map<*, *>) ?: (mediaMap["m"] as? Map<*, *>)
             val metadata = if (metaMap != null) {
-                parseMetadata(metaMap, cwMap)
+                val parsed = parseMetadata(metaMap, cwMap)
+                if (parsed.fileSize == null && medFileSize != null) parsed.copy(fileSize = medFileSize) else parsed
+            } else if (medFileSize != null) {
+                ApiMediaMetadata(fileSize = medFileSize)
             } else {
                 null
             }
@@ -659,16 +666,23 @@ class PiGalleryApi(private val context: android.content.Context) {
             val medId = (mediaMap["id"] as? Number)?.toInt() ?: kotlin.random.Random.nextInt()
             val medName = (mediaMap["name"] as? String) ?: (mediaMap["n"] as? String) ?: ""
             
-            // Find parent path from map directories index
+            // Find parent path from map directories index or directory object
             val dIndex = (mediaMap["d"] as? Number)?.toInt()
-            val parentPath = if (dIndex != null && mapDirectories != null && dIndex in mapDirectories.indices) {
+            val dirObj = mediaMap["directory"] as? Map<*, *> ?: mediaMap["dir"] as? Map<*, *>
+            val dirNameFromObj = (dirObj?.get("name") as? String) ?: (dirObj?.get("n") as? String) ?: ""
+            val dirPathFromObj = (dirObj?.get("path") as? String) ?: (dirObj?.get("p") as? String) ?: ""
+            val pathFromObj = if (dirPathFromObj.isEmpty()) dirNameFromObj else if (dirNameFromObj.isEmpty()) dirPathFromObj else "$dirPathFromObj/$dirNameFromObj"
+
+            val parentPath = if (pathFromObj.isNotBlank()) {
+                pathFromObj.replace("./", "").trim('/')
+            } else if (dIndex != null && mapDirectories != null && dIndex in mapDirectories.indices) {
                 val dirMap = mapDirectories[dIndex] as? Map<*, *>
-                val dirName = (dirMap?.get("name") as? String) ?: ""
-                val dirPath = (dirMap?.get("path") as? String) ?: ""
+                val dirName = (dirMap?.get("name") as? String) ?: (dirMap?.get("n") as? String) ?: ""
+                val dirPath = (dirMap?.get("path") as? String) ?: (dirMap?.get("p") as? String) ?: ""
                 val joined = if (dirPath.isEmpty()) dirName else if (dirName.isEmpty()) dirPath else "$dirPath/$dirName"
                 joined.replace("./", "").trim('/')
             } else {
-                ""
+                ((mediaMap["parentPath"] as? String) ?: (mediaMap["path"] as? String) ?: (mediaMap["p"] as? String) ?: "").replace("./", "").trim('/')
             }
             
             val metaMap = (mediaMap["metadata"] as? Map<*, *>) ?: (mediaMap["m"] as? Map<*, *>)

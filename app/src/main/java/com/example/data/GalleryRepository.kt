@@ -14,7 +14,7 @@ class GalleryRepository(private val database: AppDatabase) {
                 id = it.id,
                 name = it.name,
                 parentPath = it.parentPath,
-                metadata = ApiMediaMetadata(creationDate = it.creationDate)
+                metadata = ApiMediaMetadata(creationDate = it.creationDate, fileSize = it.fileSize)
             )
         }
     }
@@ -27,19 +27,30 @@ class GalleryRepository(private val database: AppDatabase) {
                 id = it.id,
                 name = it.name,
                 parentPath = it.parentPath,
-                metadata = ApiMediaMetadata(creationDate = it.creationDate)
+                metadata = ApiMediaMetadata(creationDate = it.creationDate, fileSize = it.fileSize)
             )
         }
     }
 
     suspend fun saveAllMedia(mediaList: List<ApiMedia>) {
+        val existingMap = database.mediaDao().getAllMedia().associateBy { it.id }
         val entities = mediaList.mapNotNull { media ->
             val mediaId = media.id ?: return@mapNotNull null
+            val existing = existingMap[mediaId]
+            val parentPath = if (!media.parentPath.isNullOrEmpty()) {
+                media.parentPath
+            } else {
+                existing?.parentPath ?: ""
+            }
+            val creationDate = media.metadata?.creationDate ?: existing?.creationDate
+            val fileSize = media.metadata?.fileSize ?: existing?.fileSize
+
             MediaEntity(
                 id = mediaId,
                 name = media.name,
-                parentPath = media.parentPath ?: "",
-                creationDate = media.metadata?.creationDate
+                parentPath = parentPath,
+                creationDate = creationDate,
+                fileSize = fileSize
             )
         }
         database.mediaDao().insertMedia(entities)
@@ -51,7 +62,8 @@ class GalleryRepository(private val database: AppDatabase) {
                 id = it.id ?: 0,
                 name = it.name,
                 parentPath = path,
-                creationDate = it.metadata?.creationDate
+                creationDate = it.metadata?.creationDate,
+                fileSize = it.metadata?.fileSize
             )
         }
         database.mediaDao().deleteMediaByPath(path)

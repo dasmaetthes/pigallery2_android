@@ -8,5 +8,6 @@ data class MediaEntity(
     @PrimaryKey val id: Int,
     val name: String,
     val parentPath: String,
-    val creationDate: Long?
+    val creationDate: Long?,
+    val fileSize: Long? = null
 )

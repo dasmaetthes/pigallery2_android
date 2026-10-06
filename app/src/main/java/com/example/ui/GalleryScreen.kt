@@ -2048,18 +2048,25 @@ fun RediscoverMediaItem(
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            val imageRequest = ImageRequest.Builder(context)
-                .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+            val thumbnailUrl = remember(media.id, media.parentPath, media.name) {
+                viewModel.getThumbnailUrl(media)
+            }
+            val imageRequest = remember(thumbnailUrl, cookies) {
+                val cacheKey = "thumb_${media.id}_${media.name}"
+                ImageRequest.Builder(context)
+                    .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
                     .diskCachePolicy(coil.request.CachePolicy.ENABLED)
                     .networkCachePolicy(coil.request.CachePolicy.ENABLED)
-                    .data(viewModel.getThumbnailUrl(media))
-                .apply {
-                    if (cookies.isNotEmpty()) {
-                        setHeader("Cookie", cookies)
+                    .memoryCacheKey(cacheKey)
+                    .diskCacheKey(cacheKey)
+                    .data(thumbnailUrl)
+                    .apply {
+                        if (cookies.isNotEmpty()) {
+                            setHeader("Cookie", cookies)
+                        }
                     }
-                }
-                .crossfade(true)
-                .build()
+                    .build()
+            }
 
             AsyncImage(
                 model = imageRequest,
@@ -2228,11 +2235,14 @@ fun GalleryContentGrid(
                         Box(modifier = Modifier.fillMaxSize()) {
                             val context = LocalContext.current
                             val imageRequest = remember(coverUrl, cookies) {
+                                val cacheKey = "folder_${folder.path}"
                                 val builder = ImageRequest.Builder(context)
                                     .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
-                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
-                    .networkCachePolicy(coil.request.CachePolicy.ENABLED)
-                    .data(coverUrl)
+                                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                                    .networkCachePolicy(coil.request.CachePolicy.ENABLED)
+                                    .memoryCacheKey(cacheKey)
+                                    .diskCacheKey(cacheKey)
+                                    .data(coverUrl)
                                     .crossfade(true)
                                 if (cookies.isNotEmpty()) {
                                     builder.addHeader("Cookie", cookies)
@@ -2353,19 +2363,25 @@ fun GalleryContentGrid(
                 elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
-                    // Build dynamic Coil loader with Auth Cookies attached
-                    val imageRequest = ImageRequest.Builder(context)
-                        .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
-                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
-                    .networkCachePolicy(coil.request.CachePolicy.ENABLED)
-                    .data(viewModel.getThumbnailUrl(media))
-                        .apply {
-                            if (cookies.isNotEmpty()) {
-                                setHeader("Cookie", cookies)
+                    val thumbnailUrl = remember(media.id, media.parentPath, media.name) {
+                        viewModel.getThumbnailUrl(media)
+                    }
+                    val imageRequest = remember(thumbnailUrl, cookies) {
+                        val cacheKey = "thumb_${media.id}_${media.name}"
+                        ImageRequest.Builder(context)
+                            .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                            .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                            .networkCachePolicy(coil.request.CachePolicy.ENABLED)
+                            .memoryCacheKey(cacheKey)
+                            .diskCacheKey(cacheKey)
+                            .data(thumbnailUrl)
+                            .apply {
+                                if (cookies.isNotEmpty()) {
+                                    setHeader("Cookie", cookies)
+                                }
                             }
-                        }
-                        .crossfade(true)
-                        .build()
+                            .build()
+                    }
 
                     AsyncImage(
                         model = imageRequest,

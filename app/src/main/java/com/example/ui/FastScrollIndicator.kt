@@ -82,21 +82,15 @@ fun FastScrollIndicator(
                 val groupEnd = indexTracker + 1 + items.size
                 if (activeIndex in groupStart until groupEnd) {
                     val itemOffset = activeIndex - groupStart
-                    if (itemOffset == 0) {
-                        label = header
+                    val media = if (itemOffset == 0) items.firstOrNull() else items.getOrNull(itemOffset - 1)
+                    if (media != null && media.metadata?.creationDate != null) {
+                        label = DateUtils.formatMediaDate(
+                            media.metadata?.creationDate,
+                            media.metadata?.creationDateOffset,
+                            "d. MMMM yyyy"
+                        )
                     } else {
-                        val mediaIndex = itemOffset - 1
-                        val media = items.getOrNull(mediaIndex)
-                        if (media != null && media.metadata?.creationDate != null) {
-                            val formattedDate = DateUtils.formatMediaDate(
-                                media.metadata?.creationDate,
-                                media.metadata?.creationDateOffset,
-                                "MMMM yyyy"
-                            )
-                            label = formattedDate
-                        } else {
-                            label = header
-                        }
+                        label = header
                     }
                     break
                 }
@@ -123,8 +117,9 @@ fun FastScrollIndicator(
     val currentThumbOffsetY = activeFraction * maxThumbOffsetPx
 
     fun updateDragPosition(touchY: Float) {
-        val clampedY = touchY.coerceIn(0f, trackHeightPx)
-        val fraction = (clampedY / trackHeightPx.coerceAtLeast(1f)).coerceIn(0f, 1f)
+        val thumbHalf = thumbHeightPx / 2f
+        val maxOffset = (trackHeightPx - thumbHeightPx).coerceAtLeast(1f)
+        val fraction = ((touchY - thumbHalf) / maxOffset).coerceIn(0f, 1f)
         dragFraction = fraction
         val targetItem = (fraction * (totalItems - 1)).roundToInt().coerceIn(0, totalItems - 1)
         coroutineScope.launch {

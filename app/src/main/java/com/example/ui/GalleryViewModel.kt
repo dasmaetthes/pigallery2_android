@@ -1681,6 +1681,7 @@ fun loadAlbums() {
 
             directoryCache.clear()
             cachedFlattenedMedia.clear()
+            com.example.data.ThumbnailLruCache.clear()
 
             updateCacheSize()
         }

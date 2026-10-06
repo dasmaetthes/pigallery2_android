@@ -50,7 +50,9 @@ class MainActivity : ComponentActivity() {
         val imageLoader = ImageLoader.Builder(this)
             .memoryCache {
                 MemoryCache.Builder(this)
-                    .maxSizePercent(0.40) // Increased memory cache to 40% for faster thumbnail scrolling and image retention
+                    .maxSizePercent(0.35) // Dedicate 35% of heap memory to LRU image memory caching
+                    .strongReferencesEnabled(true)
+                    .weakReferencesEnabled(true)
                     .build()
             }
             .diskCache {
