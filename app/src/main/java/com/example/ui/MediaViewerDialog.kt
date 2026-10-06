@@ -1,120 +1,97 @@
 package com.example.ui
 
-import com.example.data.PreferencesManager
-import androidx.compose.ui.unit.dp
-import java.io.FileOutputStream
-import okhttp3.OkHttpClient
-import okhttp3.Request
-
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.graphics.vector.path
-
 import android.app.DownloadManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Environment
 import android.view.ViewGroup
-import android.widget.MediaController
 import android.widget.Toast
-import androidx.media3.common.MediaItem
-import androidx.media3.common.Player
-import androidx.media3.common.VideoSize
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.DefaultLoadControl
-import androidx.media3.exoplayer.source.ProgressiveMediaSource
-import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.ui.PlayerView
-
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.gestures.detectTransformGestures
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.RotateRight
 import androidx.compose.material.icons.automirrored.outlined.InsertDriveFile
 import androidx.compose.material.icons.automirrored.outlined.Label
-
-
-
-
-
-
-
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.geometry.Size
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.filter
+import androidx.compose.ui.focus.*
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.ui.PlayerView
+import coil.compose.AsyncImage
 import coil.imageLoader
 import coil.request.ImageRequest
-import coil.compose.AsyncImage
 import com.example.data.ApiMedia
+import com.example.data.PreferencesManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.flow.first
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import java.io.File
 import java.io.IOException
-import androidx.compose.ui.input.key.*
-import androidx.compose.ui.focus.*
-import androidx.compose.foundation.focusable
-
-
-
-
-
-
-
-import androidx.paging.compose.collectAsLazyPagingItems
-import androidx.paging.compose.LazyPagingItems
 
 val CameraLensSide: ImageVector
     get() = ImageVector.Builder(
@@ -1016,8 +993,8 @@ fun MetadataContent(media: ApiMedia, onClose: () -> Unit) {
             if (sanitizedBase.isNotBlank()) {
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     try {
-                        val client = okhttp3.OkHttpClient()
-                        val req = okhttp3.Request.Builder()
+                        val client = OkHttpClient()
+                        val req = Request.Builder()
                             .url(mediaUrl)
                             .apply {
                                 val userCookies = prefs.cookies
@@ -1632,32 +1609,7 @@ fun MetadataRow(icon: androidx.compose.ui.graphics.vector.ImageVector, label: St
 
 @Composable
 fun MetadataBlock(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = label,
-            tint = Color.White.copy(alpha = 0.6f),
-            modifier = Modifier.size(24.dp)
-        )
-        Spacer(modifier = Modifier.width(16.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = label,
-                color = Color.White.copy(alpha = 0.6f),
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Medium
-            )
-            Text(
-                text = value,
-                color = Color.White,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Normal
-            )
-        }
-    }
+    MetadataRow(icon = icon, label = label, value = value)
 }
 
 private fun downloadFile(context: Context, url: String, fileName: String, cookies: String) {
