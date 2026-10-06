@@ -14,9 +14,20 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Environment
+import android.view.ViewGroup
 import android.widget.MediaController
-import android.widget.VideoView
 import android.widget.Toast
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.ui.PlayerView
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
@@ -187,6 +198,15 @@ val ApertureIcon: ImageVector
         }
     }.build()
 
+interface VideoPlayerController {
+    val duration: Long
+    val currentPosition: Long
+    val isPlaying: Boolean
+    fun play()
+    fun pause()
+    fun seekTo(positionMs: Long)
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun MediaViewerDialog(
@@ -245,6 +265,10 @@ fun MediaViewerDialog(
         }
         previousPage = page
 
+        if (currentMedia.isVideo) {
+            return@LaunchedEffect
+        }
+
         val offsets = if (swipeDirection >= 0) {
             listOf(1, 2, 3, -1, 4, -2)
         } else {
@@ -293,21 +317,6 @@ fun MediaViewerDialog(
                 imageLoader.enqueue(req)
             }
         }
-
-        // PASS 3: Proactively prefetch adjacent video files into disk cache for instant 0ms playback resume
-        val targetVideoItems = offsets.mapNotNull { offset ->
-            val index = page + offset
-            mediaList.getOrNull(index)
-        }.filter { it.isVideo }
-
-        for (targetVideo in targetVideoItems.take(2)) {
-            val videoUrl = viewModel.getOriginalMediaUrl(targetVideo)
-            if (videoUrl.isNotBlank()) {
-                launch(Dispatchers.IO) {
-                    prefetchVideoFile(context, targetVideo, videoUrl, cookies)
-                }
-            }
-        }
     }
 
     var showMetadata by remember { mutableStateOf(false) }
@@ -318,31 +327,31 @@ fun MediaViewerDialog(
     var isDraggingVideoSlider by remember(currentMedia) { mutableStateOf(false) }
     var videoSliderValue by remember(currentMedia) { mutableStateOf(0f) }
 
-    val preparedVideoViews = remember { mutableStateMapOf<Int, VideoView>() }
+    val preparedVideoPlayers = remember { mutableStateMapOf<Int, VideoPlayerController>() }
     val videoDurations = remember { mutableStateMapOf<Int, Int>() }
 
-    val activeVideoView = preparedVideoViews[pagerState.currentPage]
-    val videoDuration = videoDurations[pagerState.currentPage] ?: activeVideoView?.duration ?: 0
+    val activeVideoPlayer = preparedVideoPlayers[pagerState.currentPage]
+    val videoDuration = videoDurations[pagerState.currentPage] ?: activeVideoPlayer?.duration?.toInt() ?: 0
 
-    LaunchedEffect(isVideoPlaying, activeVideoView, pagerState.currentPage, pagerState.isScrollInProgress) {
-        val vv = activeVideoView
-        if (vv != null) {
+    LaunchedEffect(isVideoPlaying, activeVideoPlayer, pagerState.currentPage, pagerState.isScrollInProgress) {
+        val player = activeVideoPlayer
+        if (player != null) {
             if (isVideoPlaying && !pagerState.isScrollInProgress) {
-                if (vv.duration > 0 && vv.currentPosition >= vv.duration - 500) {
-                    vv.seekTo(0)
+                if (player.duration > 0 && player.currentPosition >= player.duration - 500) {
+                    player.seekTo(0)
                 }
-                if (!vv.isPlaying) {
-                    vv.start()
+                if (!player.isPlaying) {
+                    player.play()
                 }
             } else {
-                if (vv.isPlaying) {
-                    vv.pause()
+                if (player.isPlaying) {
+                    player.pause()
                 }
             }
             while (isVideoPlaying && !pagerState.isScrollInProgress) {
                 if (!isDraggingVideoSlider) {
-                    videoCurrentPosition = vv.currentPosition
-                    val dur = vv.duration
+                    videoCurrentPosition = player.currentPosition.toInt()
+                    val dur = player.duration.toInt()
                     if (dur > 0) {
                         videoDurations[pagerState.currentPage] = dur
                     }
@@ -609,6 +618,7 @@ fun MediaViewerDialog(
                             context = context,
                             rotation = pageRotation,
                             showFaceRegions = showFaceRegions,
+                            isCurrentPage = (page == pagerState.currentPage),
                             isVideoPlaying = if (page == pagerState.currentPage && !pagerState.isScrollInProgress) isVideoPlaying else false,
                             onVideoPlayingChange = { if (page == pagerState.currentPage) isVideoPlaying = it },
                             onVideoCompletion = { videoCompletionTrigger = System.currentTimeMillis() },
@@ -616,14 +626,14 @@ fun MediaViewerDialog(
                                 showBars = !showBars
                             },
                             showBars = showBars,
-                            onVideoPrepared = { duration, videoView ->
-                                preparedVideoViews[page] = videoView
+                            onVideoPrepared = { duration, controller ->
+                                preparedVideoPlayers[page] = controller
                                 if (duration > 0) {
                                     videoDurations[page] = duration
                                 }
                             },
                             onDisposeVideo = {
-                                preparedVideoViews.remove(page)
+                                preparedVideoPlayers.remove(page)
                                 videoDurations.remove(page)
                             }
                         )
@@ -893,7 +903,7 @@ fun MediaViewerDialog(
                                 },
                                 onValueChangeFinished = {
                                     isDraggingVideoSlider = false
-                                    activeVideoView?.seekTo(videoSliderValue.toInt())
+                                    activeVideoPlayer?.seekTo(videoSliderValue.toLong())
                                     videoCurrentPosition = videoSliderValue.toInt()
                                 },
                                 valueRange = 0f..videoDuration.toFloat().coerceAtLeast(1f),
@@ -1127,76 +1137,7 @@ fun MetadataContent(media: ApiMedia, onClose: () -> Unit) {
     }
 }
 
-suspend fun prefetchVideoFile(
-    context: Context,
-    media: ApiMedia,
-    mediaUrl: String,
-    cookies: String
-): File? = withContext(Dispatchers.IO) {
-    val mediaId = media.id ?: return@withContext null
-    val cacheFile = File(context.cacheDir, "temp_video_${mediaId}.mp4")
-    if (cacheFile.exists() && cacheFile.length() > 0) {
-        return@withContext cacheFile
-    }
-
-    val tempFile = File(context.cacheDir, "temp_video_${mediaId}.mp4.tmp")
-    try {
-        val client = OkHttpClient.Builder()
-            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-            .build()
-
-        val req = Request.Builder()
-            .url(mediaUrl)
-            .apply {
-                if (cookies.isNotEmpty()) addHeader("Cookie", cookies)
-            }
-            .build()
-
-        client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) return@withContext null
-            val body = resp.body ?: return@withContext null
-
-            body.byteStream().use { input ->
-                FileOutputStream(tempFile).use { output ->
-                    val buffer = ByteArray(32 * 1024)
-                    var bytesRead: Int
-                    while (input.read(buffer).also { bytesRead = it } != -1) {
-                        output.write(buffer, 0, bytesRead)
-                    }
-                    output.flush()
-                }
-            }
-            if (tempFile.exists() && tempFile.length() > 0) {
-                tempFile.renameTo(cacheFile)
-                trimVideoCache(context)
-                return@withContext cacheFile
-            }
-        }
-    } catch (e: Exception) {
-        tempFile.delete()
-    }
-    return@withContext if (cacheFile.exists() && cacheFile.length() > 0) cacheFile else null
-}
-
-fun trimVideoCache(context: Context, maxSizeBytes: Long = 300L * 1024L * 1024L) {
-    try {
-        val cacheFiles = context.cacheDir.listFiles()
-            ?.filter { it.name.startsWith("temp_video_") && it.name.endsWith(".mp4") }
-            ?.sortedByDescending { it.lastModified() } ?: return
-
-        var totalSize = 0L
-        for (file in cacheFiles) {
-            totalSize += file.length()
-            if (totalSize > maxSizeBytes) {
-                file.delete()
-            }
-        }
-    } catch (e: Exception) {
-        // Ignore
-    }
-}
-
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 fun MediaViewerItem(
     media: ApiMedia,
@@ -1205,12 +1146,13 @@ fun MediaViewerItem(
     context: Context,
     rotation: Float,
     showFaceRegions: Boolean,
+    isCurrentPage: Boolean,
     isVideoPlaying: Boolean,
     onVideoPlayingChange: (Boolean) -> Unit,
     onVideoCompletion: () -> Unit,
     onToggleBars: () -> Unit,
     showBars: Boolean,
-    onVideoPrepared: (duration: Int, videoView: VideoView) -> Unit,
+    onVideoPrepared: (duration: Int, controller: VideoPlayerController) -> Unit,
     onDisposeVideo: (() -> Unit)? = null
 ) {
     val isTv = remember(context) {
@@ -1228,79 +1170,10 @@ fun MediaViewerItem(
         contentAlignment = Alignment.Center
     ) {
         if (media.isVideo) {
-            val mediaId = media.id
-            val initialCachedFile = remember(mediaId) {
-                if (mediaId != null) {
-                    val f = File(context.cacheDir, "temp_video_${mediaId}.mp4")
-                    if (f.exists() && f.length() > 0) f else null
-                } else null
-            }
-            var cachedVideoFile by remember(mediaId) { mutableStateOf(initialCachedFile) }
-
-            LaunchedEffect(mediaId) {
-                if (cachedVideoFile == null && mediaUrl.isNotBlank()) {
-                    val prefetched = prefetchVideoFile(context, media, mediaUrl, cookies)
-                    if (prefetched != null) {
-                        cachedVideoFile = prefetched
-                    }
-                }
-            }
-
             var isPreparing by remember(media.id) { mutableStateOf(true) }
             var isBuffering by remember(media.id) { mutableStateOf(false) }
             var hasError by remember(media.id) { mutableStateOf(false) }
-
-            var currentVideoView by remember(media.id) { mutableStateOf<VideoView?>(null) }
-
-            LaunchedEffect(isVideoPlaying, currentVideoView) {
-                val vv = currentVideoView ?: return@LaunchedEffect
-                if (isVideoPlaying) {
-                    isBuffering = true
-                    val currentPos = vv.currentPosition
-                    if (currentPos > 0) {
-                        try {
-                            vv.seekTo(currentPos)
-                        } catch (e: Exception) {}
-                    }
-                    vv.start()
-
-                    var lastPos = vv.currentPosition
-                    var stallCount = 0
-                    while (isVideoPlaying) {
-                        kotlinx.coroutines.delay(250)
-                        val pos = vv.currentPosition
-                        if (pos > lastPos) {
-                            isPreparing = false
-                            isBuffering = false
-                            stallCount = 0
-                            lastPos = pos
-                        } else {
-                            stallCount++
-                            if (stallCount >= 3) { // ~750ms without position advancement
-                                isBuffering = true
-                                try {
-                                    vv.seekTo(pos)
-                                    vv.start()
-                                } catch (e: Exception) {}
-                                stallCount = 0
-                            }
-                        }
-                    }
-                } else {
-                    if (vv.isPlaying) {
-                        vv.pause()
-                    }
-                    isBuffering = false
-                }
-            }
-
-            DisposableEffect(media.id) {
-                onDispose {
-                    currentVideoView?.pause()
-                    currentVideoView?.stopPlayback()
-                    onDisposeVideo?.invoke()
-                }
-            }
+            var isPlayingState by remember(media.id) { mutableStateOf(false) }
 
             val initialAspectRatio = remember(media) {
                 val w = media.metadata?.size?.width?.toFloat()
@@ -1309,101 +1182,158 @@ fun MediaViewerItem(
             }
             var videoAspectRatio by remember(media) { mutableStateOf(initialAspectRatio) }
 
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                AndroidView(
-                    factory = { ctx ->
-                        val frameLayout = android.widget.FrameLayout(ctx).apply {
-                            layoutParams = android.view.ViewGroup.LayoutParams(
-                                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                                android.view.ViewGroup.LayoutParams.MATCH_PARENT
-                            )
-                            setBackgroundColor(android.graphics.Color.BLACK)
+            val exoPlayer = remember(media.id) {
+                // Progressive buffering strategy:
+                // bufferForPlaybackMs = 1,000ms: Starts playback as soon as 1s is buffered — does not wait for all to be buffered!
+                // bufferForPlaybackAfterRebufferMs = 2,500ms: Quick and stable resumption after rebuffering
+                // minBufferMs = 20,000ms: Keeps 20s buffered ahead in the background for smooth continuous playback without stopping
+                // maxBufferMs = 60,000ms: Upper buffer limit (60s)
+                val loadControl = DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(
+                        /* minBufferMs = */ 20_000,
+                        /* maxBufferMs = */ 60_000,
+                        /* bufferForPlaybackMs = */ 1_000,
+                        /* bufferForPlaybackAfterRebufferMs = */ 2_500
+                    )
+                    .setPrioritizeTimeOverSizeThresholds(true)
+                    .setBackBuffer(15_000, true)
+                    .build()
+
+                val dataSourceFactory = DefaultHttpDataSource.Factory()
+                    .setConnectTimeoutMs(15000)
+                    .setReadTimeoutMs(30000)
+                    .setAllowCrossProtocolRedirects(true)
+                    .apply {
+                        if (cookies.isNotEmpty()) {
+                            setDefaultRequestProperties(mapOf("Cookie" to cookies))
                         }
+                    }
 
-                        val videoView = VideoView(ctx).apply {
-                            val lp = android.widget.FrameLayout.LayoutParams(
-                                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
-                                android.widget.FrameLayout.LayoutParams.MATCH_PARENT
-                            ).apply {
-                                gravity = android.view.Gravity.CENTER
+                val mediaSource = ProgressiveMediaSource.Factory(dataSourceFactory)
+                    .setContinueLoadingCheckIntervalBytes(256 * 1024)
+                    .createMediaSource(MediaItem.fromUri(mediaUrl))
+
+                ExoPlayer.Builder(context)
+                    .setLoadControl(loadControl)
+                    .setAudioAttributes(
+                        androidx.media3.common.AudioAttributes.Builder()
+                            .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MOVIE)
+                            .setUsage(androidx.media3.common.C.USAGE_MEDIA)
+                            .build(),
+                        /* handleAudioFocus = */ true
+                    )
+                    .setWakeMode(androidx.media3.common.C.WAKE_MODE_NETWORK)
+                    .build().apply {
+                        setMediaSource(mediaSource)
+                    }
+            }
+
+            val controller = remember(exoPlayer) {
+                object : VideoPlayerController {
+                    override val duration: Long get() = exoPlayer.duration.coerceAtLeast(0L)
+                    override val currentPosition: Long get() = exoPlayer.currentPosition.coerceAtLeast(0L)
+                    override val isPlaying: Boolean get() = exoPlayer.isPlaying
+                    override fun play() { exoPlayer.play() }
+                    override fun pause() { exoPlayer.pause() }
+                    override fun seekTo(positionMs: Long) { exoPlayer.seekTo(positionMs) }
+                }
+            }
+
+            DisposableEffect(exoPlayer) {
+                // Immediately wire up player controller to dialog state
+                onVideoPrepared(if (exoPlayer.duration > 0) exoPlayer.duration.toInt() else 0, controller)
+
+                val listener = object : Player.Listener {
+                    override fun onPlaybackStateChanged(state: Int) {
+                        when (state) {
+                            Player.STATE_BUFFERING -> {
+                                isBuffering = true
                             }
-                            layoutParams = lp
-                            isFocusable = false
-                            isFocusableInTouchMode = false
-
-                            val localVideo = cachedVideoFile
-                            if (localVideo != null && localVideo.exists() && localVideo.length() > 0) {
-                                setVideoURI(Uri.fromFile(localVideo))
-                            } else if (cookies.isNotEmpty()) {
-                                setVideoURI(Uri.parse(mediaUrl), mapOf("Cookie" to cookies))
-                            } else {
-                                setVideoURI(Uri.parse(mediaUrl))
-                            }
-
-                            setOnPreparedListener { mp ->
+                            Player.STATE_READY -> {
                                 isPreparing = false
-                                val w = mp.videoWidth
-                                val h = mp.videoHeight
-                                if (w > 0 && h > 0) {
-                                    videoAspectRatio = w.toFloat() / h.toFloat()
-                                }
-                                onVideoPrepared(mp.duration, this)
-                                currentVideoView = this
-                                if (isVideoPlaying) {
-                                    start()
-                                } else {
-                                    pause()
-                                }
+                                isBuffering = false
+                                val dur = exoPlayer.duration
+                                onVideoPrepared(if (dur > 0) dur.toInt() else 0, controller)
                             }
-                            setOnInfoListener { _, what, _ ->
-                                if (what == 701) { // MediaPlayer.MEDIA_INFO_BUFFERING_START
-                                    isBuffering = true
-                                } else if (what == 702 || what == 703 || what == 3) { // MEDIA_INFO_BUFFERING_END / MEDIA_INFO_VIDEO_RENDERING_START
-                                    isPreparing = false
-                                    isBuffering = false
-                                }
-                                true
-                            }
-                            setOnCompletionListener {
+                            Player.STATE_ENDED -> {
                                 isPreparing = false
                                 isBuffering = false
                                 onVideoPlayingChange(false)
                                 onVideoCompletion()
                                 viewModel.emitVideoFinished()
                             }
-                            setOnErrorListener { _, _, _ ->
-                                hasError = true
-                                isPreparing = false
-                                isBuffering = false
-                                onVideoPlayingChange(false)
-                                false
-                            }
+                            Player.STATE_IDLE -> {}
                         }
-                        frameLayout.addView(videoView)
-                        frameLayout
-                    },
-                    update = { view ->
-                        val videoView = view.getChildAt(0) as? VideoView
-                        videoView?.let { vv ->
-                            currentVideoView = vv
-                            onVideoPrepared(vv.duration, vv)
-                            if (isVideoPlaying && !vv.isPlaying) {
-                                vv.start()
-                            } else if (!isVideoPlaying && vv.isPlaying) {
-                                vv.pause()
-                            }
+                    }
+
+                    override fun onIsPlayingChanged(isPlaying: Boolean) {
+                        isPlayingState = isPlaying
+                        if (isPlaying) {
+                            isPreparing = false
+                            isBuffering = false
+                        }
+                    }
+
+                    override fun onVideoSizeChanged(videoSize: VideoSize) {
+                        if (videoSize.width > 0 && videoSize.height > 0) {
+                            videoAspectRatio = videoSize.width.toFloat() / videoSize.height.toFloat()
+                        }
+                    }
+
+                    override fun onPlayerError(error: PlaybackException) {
+                        hasError = true
+                        isPreparing = false
+                        isBuffering = false
+                        onVideoPlayingChange(false)
+                    }
+                }
+                exoPlayer.addListener(listener)
+                onDispose {
+                    exoPlayer.removeListener(listener)
+                }
+            }
+
+            LaunchedEffect(isCurrentPage, isVideoPlaying) {
+                if (isCurrentPage) {
+                    if (exoPlayer.playbackState == Player.STATE_IDLE) {
+                        exoPlayer.prepare()
+                    }
+                    exoPlayer.playWhenReady = isVideoPlaying
+                } else {
+                    exoPlayer.playWhenReady = false
+                    exoPlayer.pause()
+                }
+            }
+
+            DisposableEffect(media.id) {
+                onDispose {
+                    exoPlayer.stop()
+                    exoPlayer.release()
+                    onDisposeVideo?.invoke()
+                }
+            }
+
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                AndroidView(
+                    factory = { ctx ->
+                        PlayerView(ctx).apply {
+                            layoutParams = ViewGroup.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT
+                            )
+                            useController = false
+                            player = exoPlayer
+                            setBackgroundColor(android.graphics.Color.BLACK)
                         }
                     },
-                    onReset = { view ->
-                        val videoView = view.getChildAt(0) as? VideoView
-                        videoView?.pause()
-                    },
-                    onRelease = { view ->
-                        val videoView = view.getChildAt(0) as? VideoView
-                        videoView?.stopPlayback()
+                    update = { playerView ->
+                        val pv = playerView as? PlayerView
+                        if (pv?.player != exoPlayer) {
+                            pv?.player = exoPlayer
+                        }
                     },
                     modifier = Modifier.fillMaxSize()
                 )
@@ -1428,7 +1358,7 @@ fun MediaViewerItem(
                 )
             }
             
-            if ((isPreparing || isBuffering) && !hasError) {
+            if ((isPreparing || isBuffering) && !hasError && !isPlayingState) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
