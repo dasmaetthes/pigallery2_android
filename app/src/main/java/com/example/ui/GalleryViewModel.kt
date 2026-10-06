@@ -194,6 +194,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun setGalleryViewMode(mode: GalleryViewMode) {
         galleryViewMode.value = mode
         prefs.galleryViewMode = mode.name
+        cachedFlattenedMedia.clear()
         _pathHistory.value = buildInitialPathStack(prefs.defaultRootPath)
         loadCurrentDirectory()
     }
@@ -292,6 +293,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun toggleFlattened() {
         isFlattened.value = !isFlattened.value
+        cachedFlattenedMedia.clear()
         loadCurrentDirectory()
     }
 
@@ -673,14 +675,24 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     private var directoryLoadJob: kotlinx.coroutines.Job? = null
 
+    private fun deduplicateMedia(mediaList: List<ApiMedia>): List<ApiMedia> {
+        return mediaList.distinctBy { media ->
+            val id = media.id
+            if (id != null && id != 0) {
+                "id_$id"
+            } else {
+                "path_${media.parentPath ?: ""}/${media.name}"
+            }
+        }
+    }
+
     private fun buildDateViewDirectory(currentPathStr: String, uniqueMedia: List<ApiMedia>): ApiDirectory {
         val rootPath = prefs.defaultRootPath
         return if (currentPathStr == rootPath || currentPathStr.isEmpty()) {
             val groupedByYear = uniqueMedia
-                .filter { it.metadata?.creationDate != null }
                 .groupBy { media ->
                     val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
-                    getYearFromTimestamp(localMs)
+                    if (localMs > 0L) getYearFromTimestamp(localMs) else 0
                 }
                 .toSortedMap(compareByDescending { it })
 
@@ -694,7 +706,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
                 ApiSubFolder(
                     id = year,
-                    name = "$year",
+                    name = if (year > 0) "$year" else "Undated",
                     path = "year:$year",
                     mediaCount = mediaList.size,
                     cache = ApiSubFolderCache(cover = cover)
@@ -712,13 +724,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             val year = yearStr.toIntOrNull() ?: 0
             val yearMedia = uniqueMedia.filter { media ->
                 val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
-                getYearFromTimestamp(localMs) == year
+                val mYear = if (localMs > 0L) getYearFromTimestamp(localMs) else 0
+                mYear == year
             }
 
             val groupedByMonth = yearMedia
                 .groupBy { media ->
                     val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
-                    getMonthFromTimestamp(localMs)
+                    if (localMs > 0L) getMonthFromTimestamp(localMs) else 0
                 }
                 .toSortedMap(compareByDescending { it })
 
@@ -732,7 +745,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
                 ApiSubFolder(
                     id = year * 100 + month,
-                    name = getMonthName(month),
+                    name = if (month > 0) getMonthName(month) else "Undated",
                     path = "year:$year/month:$month",
                     mediaCount = mediaList.size,
                     cache = ApiSubFolderCache(cover = cover)
@@ -740,7 +753,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
             ApiDirectory(
                 id = -1,
-                name = "$year",
+                name = if (year > 0) "$year" else "Undated",
                 path = currentPathStr,
                 directories = monthSubFolders,
                 media = emptyList()
@@ -750,11 +763,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             val month = currentPathStr.substringAfter("month:").toIntOrNull() ?: 0
             val monthMedia = uniqueMedia.filter { media ->
                 val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
-                getYearFromTimestamp(localMs) == year && getMonthFromTimestamp(localMs) == month
+                val mYear = if (localMs > 0L) getYearFromTimestamp(localMs) else 0
+                val mMonth = if (localMs > 0L) getMonthFromTimestamp(localMs) else 0
+                mYear == year && mMonth == month
             }
             ApiDirectory(
                 id = -1,
-                name = "${getMonthName(month)} $year",
+                name = if (month > 0) "${getMonthName(month)} $year" else "Undated",
                 path = currentPathStr,
                 directories = emptyList(),
                 media = monthMedia
@@ -828,7 +843,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         path
                     }
                     val allMedia = getOrFetchAllMedia(server, rootPath, cookies, apiPrefix)
-                    val uniqueMedia = allMedia.distinctBy { it.id }
+                    val uniqueMedia = deduplicateMedia(allMedia)
 
                     val filteredMedia = if (currentPath.startsWith("year:") && !currentPath.contains("month:")) {
                         val year = currentPath.substringAfter("year:").substringBefore("/").toIntOrNull() ?: 0
@@ -857,7 +872,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 } else if (galleryViewMode.value == GalleryViewMode.DATE) {
                     val rootPath = prefs.defaultRootPath
                     val allMedia = getOrFetchAllMedia(server, rootPath, cookies, apiPrefix)
-                    val uniqueMedia = allMedia.distinctBy { it.id }
+                    val uniqueMedia = deduplicateMedia(allMedia)
 
                     if (uniqueMedia.isNotEmpty()) {
                         repo.saveAllMedia(uniqueMedia)
@@ -895,35 +910,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val cacheKey = rootPath.ifEmpty { "ROOT" }
         cachedFlattenedMedia[cacheKey]?.let { return it }
 
-        // 1. Try single PiGallery2 search request
-        try {
-            val searchDto = if (rootPath.isEmpty() || rootPath == prefs.defaultRootPath) {
-                com.example.data.search.TextSearch(
-                    type = com.example.data.search.SearchQueryTypes.ANY_TEXT,
-                    value = "",
-                    matchType = com.example.data.search.TextSearchQueryMatchTypes.LIKE
-                )
-            } else {
-                com.example.data.search.TextSearch(
-                    type = com.example.data.search.SearchQueryTypes.DIRECTORY,
-                    value = rootPath,
-                    matchType = com.example.data.search.TextSearchQueryMatchTypes.LIKE
-                )
-            }
-            val queryJson = api.serializeQuery(searchDto.toJson())
-            val searchResult = api.search(serverUrl, queryJson, cookies, apiPrefix)
-            if (searchResult.media != null && searchResult.media.isNotEmpty()) {
-                val uniqueMedia = searchResult.media.distinctBy { it.id }
-                cachedFlattenedMedia[cacheKey] = uniqueMedia
-                return uniqueMedia
-            }
-        } catch (e: Exception) {
-            android.util.Log.d("GalleryViewModel", "Search optimization fallback: ${e.message}")
-        }
-
-        // 2. Fall back to recursive fetching with per-folder caching
         val recursiveMedia = fetchAllMediaRecursively(serverUrl, rootPath, cookies, apiPrefix)
-        val uniqueMedia = recursiveMedia.distinctBy { it.id }
+        val uniqueMedia = deduplicateMedia(recursiveMedia)
         if (uniqueMedia.isNotEmpty()) {
             cachedFlattenedMedia[cacheKey] = uniqueMedia
         }
@@ -938,22 +926,19 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     ): List<ApiMedia> = kotlinx.coroutines.coroutineScope {
         try {
             val directory = directoryCache[path] ?: run {
-                val roomMedia = repo.getDirectory(path)
-                if (roomMedia != null && roomMedia.isNotEmpty()) {
-                    val dir = ApiDirectory(id = -1, name = path.substringAfterLast('/'), path = path, directories = emptyList(), media = roomMedia)
-                    directoryCache[path] = dir
-                    dir
-                } else {
-                    val fetched = api.getGalleryContent(serverUrl, path, cookies, apiPrefix)
-                    directoryCache[path] = fetched
-                    if (fetched.media != null) {
-                        repo.saveDirectory(path, fetched.media)
-                    }
-                    fetched
+                val fetched = api.getGalleryContent(serverUrl, path, cookies, apiPrefix)
+                directoryCache[path] = fetched
+                if (fetched.media != null) {
+                    repo.saveDirectory(path, fetched.media)
                 }
+                fetched
             }
 
-            val currentMedia = directory.media ?: emptyList()
+            val currentMedia = (directory.media ?: emptyList()).map { media ->
+                if (media.parentPath.isNullOrEmpty()) {
+                    media.copy(parentPath = path)
+                } else media
+            }
             val subDirs = directory.directories ?: emptyList()
             
             if (subDirs.isEmpty()) {
@@ -1688,8 +1673,9 @@ fun loadAlbums() {
     }
 
     private fun getMonthFromTimestamp(timestampMs: Long): Int {
+        val ms = if (timestampMs < 10000000000L) timestampMs * 1000L else timestampMs
         val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
-        cal.timeInMillis = timestampMs
+        cal.timeInMillis = ms
         return cal.get(java.util.Calendar.MONTH) + 1
     }
 
