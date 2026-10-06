@@ -869,7 +869,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
 
                 // Update cache for FOLDER view
-                if (freshDirectory != null && freshDirectory.media != null && searchQuery.value.isEmpty() && !isFlattened.value && galleryViewMode.value == GalleryViewMode.FOLDER) {
+                if (freshDirectory.media != null && searchQuery.value.isEmpty() && !isFlattened.value && galleryViewMode.value == GalleryViewMode.FOLDER) {
                     repo.saveDirectory(path, freshDirectory.media)
                 }
 

@@ -3344,25 +3344,23 @@ fun AboutScreen(viewModel: GalleryViewModel, onBack: () -> Unit) {
                             start = startIndex,
                             end = endIndex
                         )
-                        addStringAnnotation(
-                            tag = "URL",
-                            annotation = "http://www.apache.org/licenses/LICENSE-2.0",
+                        addLink(
+                            androidx.compose.ui.text.LinkAnnotation.Url(
+                                url = "http://www.apache.org/licenses/LICENSE-2.0",
+                                linkInteractionListener = androidx.compose.ui.text.LinkInteractionListener {
+                                    uriHandler.openUri("http://www.apache.org/licenses/LICENSE-2.0")
+                                }
+                            ),
                             start = startIndex,
                             end = endIndex
                         )
                     }
 
-                    androidx.compose.foundation.text.ClickableText(
+                    Text(
                         text = annotatedString,
                         style = MaterialTheme.typography.bodySmall.copy(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
-                        ),
-                        onClick = { offset ->
-                            annotatedString.getStringAnnotations(tag = "URL", start = offset, end = offset)
-                                .firstOrNull()?.let { annotation ->
-                                    uriHandler.openUri(annotation.item)
-                                }
-                        }
+                        )
                     )
                 }
             }
