@@ -685,12 +685,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     private fun deduplicateMedia(mediaList: List<ApiMedia>): List<ApiMedia> {
         return mediaList.distinctBy { media ->
-            val id = media.id
-            if (id != null && id != 0) {
-                "id_$id"
-            } else {
-                "path_${media.parentPath ?: ""}/${media.name}"
-            }
+            "${media.parentPath?.trim('/') ?: ""}/${media.name}"
         }
     }
 
@@ -825,9 +820,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private fun hasMediaChanged(oldList: List<ApiMedia>?, newList: List<ApiMedia>): Boolean {
         if (oldList == null) return true
         if (oldList.size != newList.size) return true
-        val oldKeys = oldList.map { it.id ?: ("${it.parentPath}/${it.name}".hashCode()) }.toHashSet()
+        val oldKeys = oldList.map { "${it.parentPath?.trim('/') ?: ""}/${it.name}" }.toHashSet()
         for (item in newList) {
-            val key = item.id ?: ("${item.parentPath}/${item.name}".hashCode())
+            val key = "${item.parentPath?.trim('/') ?: ""}/${item.name}"
             if (!oldKeys.contains(key)) return true
         }
         return false
@@ -958,7 +953,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         cookies = cookies,
                         apiPrefix = apiPrefix,
                         emitIntermediateBatches = emitIntermediate,
-                        forceNetworkScan = forceRefresh || cachedEmitted
+                        forceNetworkScan = forceRefresh
                     ) { partialList ->
                         if (emitIntermediate) {
                             val partialDir = if (isFlattened.value) {
@@ -1069,12 +1064,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
             if (currentMedia.isNotEmpty()) {
                 accumulatedMedia.addAll(currentMedia)
-                // Persist current directory to Room DB immediately so cache is saved progressively!
-                try {
-                    repo.saveDirectory(path, currentMedia)
-                } catch (e: Exception) {
-                    // Ignore transient DB write errors
-                }
                 if (emitIntermediateBatches) {
                     val now = System.currentTimeMillis()
                     if (now - lastEmitTime > 250 || accumulatedMedia.size <= currentMedia.size) {
