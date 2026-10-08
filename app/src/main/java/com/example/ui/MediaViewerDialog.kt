@@ -491,6 +491,8 @@ fun MediaViewerDialog(
     }
 
     val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    val dismissGestureEnabled by viewModel.dismissGestureEnabled.collectAsState()
+    val showMetadataGestureEnabled by viewModel.showMetadataGestureEnabled.collectAsState()
     
     androidx.activity.compose.BackHandler { onDismiss() }
 
@@ -498,33 +500,41 @@ fun MediaViewerDialog(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .pointerInput(showMetadata) {
-                var totalDragY = 0f
-                detectVerticalDragGestures(
-                    onDragStart = {
-                        totalDragY = 0f
-                    },
-                    onDragEnd = {
-                        if (kotlin.math.abs(totalDragY) > 80f) {
-                            if (totalDragY < -80f) {
-                                showMetadata = true
-                            } else if (totalDragY > 80f) {
-                                if (showMetadata) {
-                                    showMetadata = false
-                                } else {
-                                    onDismiss()
+            .then(
+                if (dismissGestureEnabled || showMetadataGestureEnabled) {
+                    Modifier.pointerInput(showMetadata, dismissGestureEnabled, showMetadataGestureEnabled) {
+                        var totalDragY = 0f
+                        detectVerticalDragGestures(
+                            onDragStart = {
+                                totalDragY = 0f
+                            },
+                            onDragEnd = {
+                                if (kotlin.math.abs(totalDragY) > 80f) {
+                                    if (totalDragY < -80f) {
+                                        if (showMetadataGestureEnabled) {
+                                            showMetadata = true
+                                        }
+                                    } else if (totalDragY > 80f) {
+                                        if (showMetadata) {
+                                            showMetadata = false
+                                        } else if (dismissGestureEnabled) {
+                                            onDismiss()
+                                        }
+                                    }
                                 }
+                            },
+                            onDragCancel = {
+                                totalDragY = 0f
+                            },
+                            onVerticalDrag = { _, dragAmount ->
+                                totalDragY += dragAmount
                             }
-                        }
-                    },
-                    onDragCancel = {
-                        totalDragY = 0f
-                    },
-                    onVerticalDrag = { _, dragAmount ->
-                        totalDragY += dragAmount
+                        )
                     }
-                )
-            }
+                } else {
+                    Modifier
+                }
+            )
     ) {
             Row(modifier = Modifier.fillMaxSize()) {
                 Box(

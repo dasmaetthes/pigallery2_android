@@ -1620,15 +1620,76 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                 }
                             }
                         }
+                    }
+                }
+
+                // --- 3. Gestures Settings ---
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Gestures",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Dismiss Gesture Switch
+                        val dismissGestureEnabled by viewModel.dismissGestureEnabled.collectAsState()
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Swipe Down to Dismiss",
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                Text(
+                                    text = "Swipe down on a photo or video to exit full-screen viewer",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = dismissGestureEnabled,
+                                onCheckedChange = { viewModel.setDismissGestureEnabled(it) }
+                            )
+                        }
 
                         Spacer(modifier = Modifier.height(16.dp))
                         HorizontalDivider()
                         Spacer(modifier = Modifier.height(16.dp))
 
-                        
+                        // Show Metadata Gesture Switch
+                        val showMetadataGestureEnabled by viewModel.showMetadataGestureEnabled.collectAsState()
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Swipe Up for Details",
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                Text(
+                                    text = "Swipe up on a photo or video to view EXIF information and metadata",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = showMetadataGestureEnabled,
+                                onCheckedChange = { viewModel.setShowMetadataGestureEnabled(it) }
+                            )
+                        }
                     }
                 }
-            
 
             } else if (selectedSettingsTab == 1) {
                 // --- 3. Features Settings ---

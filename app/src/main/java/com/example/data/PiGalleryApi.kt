@@ -574,8 +574,8 @@ class PiGalleryApi(private val context: android.content.Context) {
         val mediaList = map["media"] as? List<*>
         val media = mediaList?.mapNotNull { item ->
             val mediaMap = item as? Map<*, *> ?: return@mapNotNull null
-            val medId = (mediaMap["id"] as? Number)?.toInt() ?: kotlin.random.Random.nextInt()
             val medName = (mediaMap["name"] as? String) ?: (mediaMap["n"] as? String) ?: ""
+            val medId = (mediaMap["id"] as? Number)?.toInt() ?: ("$directoryFullPath/$medName").hashCode()
             val medFileSize = (mediaMap["fileSize"] as? Number ?: mediaMap["file_size"] as? Number ?: mediaMap["s"] as? Number ?: mediaMap["fs"] as? Number)?.toLong()
             
             val metaMap = (mediaMap["metadata"] as? Map<*, *>) ?: (mediaMap["m"] as? Map<*, *>)
@@ -663,7 +663,6 @@ class PiGalleryApi(private val context: android.content.Context) {
         val mediaList = searchResult["media"] as? List<*>
         val media = mediaList?.mapNotNull { item ->
             val mediaMap = item as? Map<*, *> ?: return@mapNotNull null
-            val medId = (mediaMap["id"] as? Number)?.toInt() ?: kotlin.random.Random.nextInt()
             val medName = (mediaMap["name"] as? String) ?: (mediaMap["n"] as? String) ?: ""
             
             // Find parent path from map directories index or directory object
@@ -684,6 +683,7 @@ class PiGalleryApi(private val context: android.content.Context) {
             } else {
                 ((mediaMap["parentPath"] as? String) ?: (mediaMap["path"] as? String) ?: (mediaMap["p"] as? String) ?: "").replace("./", "").trim('/')
             }
+            val medId = (mediaMap["id"] as? Number)?.toInt() ?: ("$parentPath/$medName").hashCode()
             
             val metaMap = (mediaMap["metadata"] as? Map<*, *>) ?: (mediaMap["m"] as? Map<*, *>)
             val metadata = if (metaMap != null) {

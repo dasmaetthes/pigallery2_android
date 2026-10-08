@@ -183,6 +183,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val themeMode = MutableStateFlow(prefs.themeMode)
     val maxBrightnessEnabled = MutableStateFlow(prefs.maxBrightnessEnabled)
     val defaultRootPath = MutableStateFlow(prefs.defaultRootPath)
+    val dismissGestureEnabled = MutableStateFlow(prefs.dismissGestureEnabled)
+    val showMetadataGestureEnabled = MutableStateFlow(prefs.showMetadataGestureEnabled)
 
     // Search and directory flattening states
     val isSearchActive = MutableStateFlow(false)
@@ -193,12 +195,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     private val directoryCache = java.util.concurrent.ConcurrentHashMap<String, ApiDirectory>()
     private val cachedFlattenedMedia = java.util.concurrent.ConcurrentHashMap<String, List<ApiMedia>>()
+    private val lastBackgroundSyncTime = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val fetchSemaphore = Semaphore(24)
+
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
 
     fun setGalleryViewMode(mode: GalleryViewMode) {
         galleryViewMode.value = mode
         prefs.galleryViewMode = mode.name
-        cachedFlattenedMedia.clear()
         _pathHistory.value = buildInitialPathStack(prefs.defaultRootPath)
         loadCurrentDirectory()
     }
@@ -297,7 +302,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun toggleFlattened() {
         isFlattened.value = !isFlattened.value
-        cachedFlattenedMedia.clear()
         loadCurrentDirectory()
     }
 
@@ -692,7 +696,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     private fun buildDateViewDirectory(currentPathStr: String, uniqueMedia: List<ApiMedia>): ApiDirectory {
         val rootPath = prefs.defaultRootPath
-        return if (currentPathStr == rootPath || currentPathStr.isEmpty()) {
+        val isRootDateView = currentPathStr.isEmpty() ||
+            currentPathStr == rootPath ||
+            currentPathStr.trim('/') == rootPath.trim('/') ||
+            (!currentPathStr.startsWith("year:") && !currentPathStr.contains("month:"))
+
+        return if (isRootDateView) {
             val groupedByYear = uniqueMedia
                 .groupBy { media ->
                     val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
@@ -810,11 +819,21 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun refreshCurrentDirectory() {
         directoryCache.clear()
-        cachedFlattenedMedia.clear()
-        loadCurrentDirectory()
+        loadCurrentDirectory(forceRefresh = true)
     }
 
-    fun loadCurrentDirectory() {
+    private fun hasMediaChanged(oldList: List<ApiMedia>?, newList: List<ApiMedia>): Boolean {
+        if (oldList == null) return true
+        if (oldList.size != newList.size) return true
+        val oldKeys = oldList.map { it.id ?: ("${it.parentPath}/${it.name}".hashCode()) }.toHashSet()
+        for (item in newList) {
+            val key = item.id ?: ("${item.parentPath}/${item.name}".hashCode())
+            if (!oldKeys.contains(key)) return true
+        }
+        return false
+    }
+
+    fun loadCurrentDirectory(forceRefresh: Boolean = false) {
         val server = prefs.serverUrl
         val cookies = prefs.cookies
         val apiPrefix = prefs.apiPrefix
@@ -828,15 +847,44 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         directoryLoadJob?.cancel()
         directoryLoadJob = viewModelScope.launch(Dispatchers.IO) {
             var cachedEmitted = false
+            val isDateOrFlattened = searchQuery.value.isEmpty() && (isFlattened.value || galleryViewMode.value == GalleryViewMode.DATE)
 
-            // 1. In-memory fast path for Date View and Flattened Mode (instant 0ms navigation, zero flicker, 100% accurate counts)
-            if (searchQuery.value.isEmpty() && (isFlattened.value || galleryViewMode.value == GalleryViewMode.DATE)) {
-                val rootPath = prefs.defaultRootPath
-                val cacheKey = rootPath.ifEmpty { "ROOT" }
-                val inMemoryMedia = cachedFlattenedMedia[cacheKey]
-                if (inMemoryMedia != null && inMemoryMedia.isNotEmpty()) {
-                    val freshDirectory = if (isFlattened.value) {
-                        val filteredMedia = filterFlattenedMedia(currentPath, inMemoryMedia)
+            // 1. Instant cache path for Date View and Flattened Mode (from in-memory or Room DB)
+            if (isDateOrFlattened) {
+                val rootPath = if (isFlattened.value && !currentPath.startsWith("year:") && !currentPath.startsWith("month:")) {
+                    path
+                } else {
+                    prefs.defaultRootPath
+                }
+                val cleanRoot = rootPath.trim('/').replace("\\", "/")
+                val cacheKey = cleanRoot.ifEmpty { "ROOT" }
+
+                // Check in-memory cache first
+                var mediaList = if (!forceRefresh) cachedFlattenedMedia[cacheKey] else null
+
+                // If not in-memory (e.g. app restart or first load), immediately load from Room DB
+                if (mediaList == null || mediaList.isEmpty()) {
+                    val dbMedia = repo.getAllMedia()
+                    if (dbMedia != null && dbMedia.isNotEmpty()) {
+                        val filteredDb = if (cleanRoot.isEmpty()) {
+                            dbMedia
+                        } else {
+                            dbMedia.filter {
+                                val p = (it.parentPath ?: "").trim('/').replace("\\", "/")
+                                p == cleanRoot || p.startsWith("$cleanRoot/")
+                            }
+                        }
+                        if (filteredDb.isNotEmpty()) {
+                            mediaList = deduplicateMedia(filteredDb)
+                            cachedFlattenedMedia[cacheKey] = mediaList
+                        }
+                    }
+                }
+
+                // If cached media exists, emit it IMMEDIATELY so full counts and images appear with zero delay!
+                if (mediaList != null && mediaList.isNotEmpty()) {
+                    val cachedDirectory = if (isFlattened.value) {
+                        val filteredMedia = filterFlattenedMedia(currentPath, mediaList)
                         ApiDirectory(
                             id = -1,
                             name = if (currentPath.isEmpty() || currentPath == prefs.defaultRootPath) "Flattened Gallery" else currentPath.substringAfterLast('/'),
@@ -845,11 +893,19 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                             media = filteredMedia
                         )
                     } else {
-                        buildDateViewDirectory(currentPath, inMemoryMedia)
+                        buildDateViewDirectory(currentPath, mediaList)
                     }
-                    val sortedDirectory = sortDirectory(freshDirectory)
+                    val sortedDirectory = sortDirectory(cachedDirectory)
                     _galleryState.value = GalleryUiState.Success(sortedDirectory)
-                    return@launch
+                    cachedEmitted = true
+
+                    // Check if we need to scan the server in the background:
+                    // If not forced and checked recently (within 60s), navigation between folders is 0ms instant!
+                    val lastSync = lastBackgroundSyncTime[cacheKey] ?: 0L
+                    val shouldCheckBackground = forceRefresh || (System.currentTimeMillis() - lastSync > 60_000L)
+                    if (!shouldCheckBackground) {
+                        return@launch
+                    }
                 }
             }
 
@@ -871,62 +927,106 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
             if (!cachedEmitted) {
                 _galleryState.value = GalleryUiState.Loading
+            } else if (forceRefresh) {
+                _isRefreshing.value = true
             }
 
             try {
-                var directory: ApiDirectory? = null
-
-                val freshDirectory = if (searchQuery.value.isNotEmpty()) {
+                if (searchQuery.value.isNotEmpty()) {
                     val query = parseSearchStringToQuery(searchQuery.value)
                     val queryJson = api.serializeQuery(query)
-                    api.search(server, queryJson, cookies, apiPrefix)
-                } else if (isFlattened.value) {
-                    val rootPath = if (currentPath.startsWith("year:") || currentPath.startsWith("month:")) {
-                        prefs.defaultRootPath
-                    } else {
+                    val searchResult = api.search(server, queryJson, cookies, apiPrefix)
+                    val sortedDirectory = sortDirectory(searchResult)
+                    _galleryState.value = GalleryUiState.Success(sortedDirectory)
+                } else if (isDateOrFlattened) {
+                    val rootPath = if (isFlattened.value && !currentPath.startsWith("year:") && !currentPath.startsWith("month:")) {
                         path
+                    } else {
+                        prefs.defaultRootPath
                     }
-                    var lastEmittedDir: ApiDirectory? = null
-                    getOrFetchAllMediaProgressive(server, rootPath, cookies, apiPrefix) { partialList ->
-                        val filteredMedia = filterFlattenedMedia(currentPath, partialList)
-                        val partialDir = ApiDirectory(
-                            id = -1,
-                            name = if (currentPath.isEmpty() || currentPath == prefs.defaultRootPath) "Flattened Gallery" else currentPath.substringAfterLast('/'),
-                            path = currentPath,
-                            directories = emptyList(),
-                            media = filteredMedia
-                        )
-                        lastEmittedDir = partialDir
-                        _galleryState.value = GalleryUiState.Success(sortDirectory(partialDir))
+                    val cleanRoot = rootPath.trim('/').replace("\\", "/")
+                    val cacheKey = cleanRoot.ifEmpty { "ROOT" }
+                    val currentDisplayedMedia = cachedFlattenedMedia[cacheKey]
+
+                    // If cached data was already emitted, do NOT emit partial 250ms chunks that would overwrite
+                    // full counts with small numbers. Only emit progress if there was no cache!
+                    val emitIntermediate = !cachedEmitted
+
+                    val finalMediaList = getOrFetchAllMediaProgressive(
+                        serverUrl = server,
+                        rootPath = cleanRoot,
+                        cookies = cookies,
+                        apiPrefix = apiPrefix,
+                        emitIntermediateBatches = emitIntermediate,
+                        forceNetworkScan = forceRefresh || cachedEmitted
+                    ) { partialList ->
+                        if (emitIntermediate) {
+                            val partialDir = if (isFlattened.value) {
+                                val filtered = filterFlattenedMedia(currentPath, partialList)
+                                ApiDirectory(
+                                    id = -1,
+                                    name = if (currentPath.isEmpty() || currentPath == prefs.defaultRootPath) "Flattened Gallery" else currentPath.substringAfterLast('/'),
+                                    path = currentPath,
+                                    directories = emptyList(),
+                                    media = filtered
+                                )
+                            } else {
+                                buildDateViewDirectory(currentPath, partialList)
+                            }
+                            _galleryState.value = GalleryUiState.Success(sortDirectory(partialDir))
+                        }
                     }
-                    lastEmittedDir ?: ApiDirectory(id = -1, name = "Flattened Gallery", path = currentPath, directories = emptyList(), media = emptyList())
-                } else if (galleryViewMode.value == GalleryViewMode.DATE) {
-                    val rootPath = prefs.defaultRootPath
-                    var lastEmittedDir: ApiDirectory? = null
-                    getOrFetchAllMediaProgressive(server, rootPath, cookies, apiPrefix) { partialList ->
-                        val partialDir = buildDateViewDirectory(currentPath, partialList)
-                        lastEmittedDir = partialDir
-                        _galleryState.value = GalleryUiState.Success(sortDirectory(partialDir))
+
+                    lastBackgroundSyncTime[cacheKey] = System.currentTimeMillis()
+
+                    if (cachedEmitted) {
+                        // Only update state if new items arrived or counts changed!
+                        if (hasMediaChanged(currentDisplayedMedia, finalMediaList)) {
+                            val updatedDir = if (isFlattened.value) {
+                                val filtered = filterFlattenedMedia(currentPath, finalMediaList)
+                                ApiDirectory(
+                                    id = -1,
+                                    name = if (currentPath.isEmpty() || currentPath == prefs.defaultRootPath) "Flattened Gallery" else currentPath.substringAfterLast('/'),
+                                    path = currentPath,
+                                    directories = emptyList(),
+                                    media = filtered
+                                )
+                            } else {
+                                buildDateViewDirectory(currentPath, finalMediaList)
+                            }
+                            _galleryState.value = GalleryUiState.Success(sortDirectory(updatedDir))
+                        }
+                    } else {
+                        // First load without any cache: emit the final complete directory
+                        val finalDir = if (isFlattened.value) {
+                            val filtered = filterFlattenedMedia(currentPath, finalMediaList)
+                            ApiDirectory(
+                                id = -1,
+                                name = if (currentPath.isEmpty() || currentPath == prefs.defaultRootPath) "Flattened Gallery" else currentPath.substringAfterLast('/'),
+                                path = currentPath,
+                                directories = emptyList(),
+                                media = filtered
+                            )
+                        } else {
+                            buildDateViewDirectory(currentPath, finalMediaList)
+                        }
+                        _galleryState.value = GalleryUiState.Success(sortDirectory(finalDir))
                     }
-                    lastEmittedDir ?: ApiDirectory(id = -1, name = "Gallery", path = currentPath, directories = emptyList(), media = emptyList())
                 } else {
-                    api.getGalleryContent(server, path, cookies, apiPrefix)
+                    // Normal folder view
+                    val freshDirectory = api.getGalleryContent(server, path, cookies, apiPrefix)
+                    if (freshDirectory.media != null && searchQuery.value.isEmpty() && !isFlattened.value && galleryViewMode.value == GalleryViewMode.FOLDER) {
+                        repo.saveDirectory(path, freshDirectory.media)
+                    }
+                    val sortedDirectory = sortDirectory(freshDirectory)
+                    _galleryState.value = GalleryUiState.Success(sortedDirectory)
                 }
-
-                // Update cache for FOLDER view
-                if (freshDirectory.media != null && searchQuery.value.isEmpty() && !isFlattened.value && galleryViewMode.value == GalleryViewMode.FOLDER) {
-                    repo.saveDirectory(path, freshDirectory.media)
-                }
-
-                directory = freshDirectory
-
-                // Apply sorting and update UI in background
-                val sortedDirectory = sortDirectory(directory)
-                _galleryState.value = GalleryUiState.Success(sortedDirectory)
             } catch (e: Exception) {
                 if (!cachedEmitted) {
                     _galleryState.value = GalleryUiState.Error(e.localizedMessage ?: "Failed to fetch gallery content")
                 }
+            } finally {
+                _isRefreshing.value = false
             }
         }
     }
@@ -936,62 +1036,92 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         rootPath: String,
         cookies: String,
         apiPrefix: String,
+        emitIntermediateBatches: Boolean = true,
+        forceNetworkScan: Boolean = false,
         onBatchEmit: (List<ApiMedia>) -> Unit
     ): List<ApiMedia> {
-        val cacheKey = rootPath.ifEmpty { "ROOT" }
-        cachedFlattenedMedia[cacheKey]?.let {
-            onBatchEmit(it)
-            return it
+        val cleanRoot = rootPath.trim('/').replace("\\", "/")
+        val cacheKey = cleanRoot.ifEmpty { "ROOT" }
+        if (!forceNetworkScan) {
+            cachedFlattenedMedia[cacheKey]?.let {
+                onBatchEmit(it)
+                return it
+            }
         }
 
         val accumulatedMedia = java.util.concurrent.ConcurrentLinkedQueue<ApiMedia>()
         var lastEmitTime = System.currentTimeMillis()
 
         suspend fun scanDirectory(path: String) {
-            val directory = directoryCache[path] ?: fetchSemaphore.withPermit {
-                directoryCache[path] ?: run {
+            val directory = if (!forceNetworkScan) directoryCache[path] else null
+            val resolvedDirectory = directory ?: fetchSemaphore.withPermit {
+                (if (!forceNetworkScan) directoryCache[path] else null) ?: run {
                     val fetched = api.getGalleryContent(serverUrl, path, cookies, apiPrefix)
                     directoryCache[path] = fetched
                     fetched
                 }
             }
 
-            val currentMedia = (directory.media ?: emptyList()).map { media ->
+            val currentMedia = (resolvedDirectory.media ?: emptyList()).map { media ->
                 if (media.parentPath.isNullOrEmpty()) {
                     media.copy(parentPath = path)
                 } else media
             }
             if (currentMedia.isNotEmpty()) {
                 accumulatedMedia.addAll(currentMedia)
-                val now = System.currentTimeMillis()
-                if (now - lastEmitTime > 250 || accumulatedMedia.size <= currentMedia.size) {
-                    lastEmitTime = now
-                    val snapshot = deduplicateMedia(accumulatedMedia.toList())
-                    onBatchEmit(snapshot)
+                // Persist current directory to Room DB immediately so cache is saved progressively!
+                try {
+                    repo.saveDirectory(path, currentMedia)
+                } catch (e: Exception) {
+                    // Ignore transient DB write errors
+                }
+                if (emitIntermediateBatches) {
+                    val now = System.currentTimeMillis()
+                    if (now - lastEmitTime > 250 || accumulatedMedia.size <= currentMedia.size) {
+                        lastEmitTime = now
+                        val snapshot = deduplicateMedia(accumulatedMedia.toList())
+                        onBatchEmit(snapshot)
+                    }
                 }
             }
 
-            val subDirs = directory.directories ?: emptyList()
+            val subDirs = resolvedDirectory.directories ?: emptyList()
             if (subDirs.isNotEmpty()) {
                 kotlinx.coroutines.coroutineScope {
                     subDirs.map { subFolder ->
                         async(Dispatchers.IO) {
-                            scanDirectory(subFolder.path)
+                            try {
+                                scanDirectory(subFolder.path)
+                            } catch (e: Exception) {
+                                // Ignore single subfolder failure without cancelling overall scan
+                            }
                         }
                     }.awaitAll()
                 }
             }
         }
 
-        scanDirectory(rootPath)
+        try {
+            scanDirectory(cleanRoot)
+        } catch (e: Exception) {
+            // Ignore top-level scan failure
+        }
 
         val finalMediaList = deduplicateMedia(accumulatedMedia.toList())
         if (finalMediaList.isNotEmpty()) {
             cachedFlattenedMedia[cacheKey] = finalMediaList
-            repo.saveAllMedia(finalMediaList)
-            onBatchEmit(finalMediaList)
+            try {
+                repo.saveAllMedia(finalMediaList)
+            } catch (e: Exception) {
+                // Ignore
+            }
+            if (emitIntermediateBatches) {
+                onBatchEmit(finalMediaList)
+            }
         } else if (accumulatedMedia.isEmpty()) {
-            onBatchEmit(emptyList())
+            if (emitIntermediateBatches) {
+                onBatchEmit(emptyList())
+            }
         }
         return finalMediaList
     }
@@ -1350,6 +1480,16 @@ fun loadAlbums() {
     fun setMaxBrightnessEnabled(enabled: Boolean) {
         prefs.maxBrightnessEnabled = enabled
         maxBrightnessEnabled.value = enabled
+    }
+
+    fun setDismissGestureEnabled(enabled: Boolean) {
+        prefs.dismissGestureEnabled = enabled
+        dismissGestureEnabled.value = enabled
+    }
+
+    fun setShowMetadataGestureEnabled(enabled: Boolean) {
+        prefs.showMetadataGestureEnabled = enabled
+        showMetadataGestureEnabled.value = enabled
     }
 
     private fun buildInitialPathStack(defaultRoot: String): List<String> {

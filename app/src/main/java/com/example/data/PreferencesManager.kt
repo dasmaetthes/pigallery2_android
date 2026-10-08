@@ -40,6 +40,8 @@ class PreferencesManager(context: Context) {
         private const val KEY_MAX_BRIGHTNESS = "max_brightness"
         private const val KEY_MAX_BRIGHTNESS_ENABLED = "max_brightness_enabled"
         private const val KEY_GALLERY_VIEW_MODE = "gallery_view_mode"
+        private const val KEY_DISMISS_GESTURE_ENABLED = "dismiss_gesture_enabled"
+        private const val KEY_SHOW_METADATA_GESTURE_ENABLED = "show_metadata_gesture_enabled"
     }
 
     var galleryViewMode: String
@@ -203,6 +205,14 @@ class PreferencesManager(context: Context) {
         }
         prefs.edit().putStringSet("favorite_persons", current).apply()
     }
+
+    var dismissGestureEnabled: Boolean
+        get() = prefs.getBoolean(KEY_DISMISS_GESTURE_ENABLED, true)
+        set(value) = prefs.edit().putBoolean(KEY_DISMISS_GESTURE_ENABLED, value).apply()
+
+    var showMetadataGestureEnabled: Boolean
+        get() = prefs.getBoolean(KEY_SHOW_METADATA_GESTURE_ENABLED, true)
+        set(value) = prefs.edit().putBoolean(KEY_SHOW_METADATA_GESTURE_ENABLED, value).apply()
 
     fun clear() {
         prefs.edit().clear().apply()

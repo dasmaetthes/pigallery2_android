@@ -33,7 +33,7 @@ class GalleryRepository(private val database: AppDatabase) {
     }
 
     suspend fun saveAllMedia(mediaList: List<ApiMedia>) {
-        val existingMap = database.mediaDao().getAllMedia().associateBy { it.id }
+        if (mediaList.isEmpty()) return
         val entities = mediaList.map { media ->
             val parentPath = if (!media.parentPath.isNullOrEmpty()) {
                 media.parentPath
@@ -43,9 +43,8 @@ class GalleryRepository(private val database: AppDatabase) {
             } else {
                 ("$parentPath/${media.name}").hashCode()
             }
-            val existing = existingMap[mediaId]
-            val creationDate = media.metadata?.creationDate ?: existing?.creationDate
-            val fileSize = media.metadata?.fileSize ?: existing?.fileSize
+            val creationDate = media.metadata?.creationDate
+            val fileSize = media.metadata?.fileSize
 
             MediaEntity(
                 id = mediaId,
@@ -55,7 +54,9 @@ class GalleryRepository(private val database: AppDatabase) {
                 fileSize = fileSize
             )
         }
-        database.mediaDao().insertMedia(entities)
+        entities.chunked(500).forEach { chunk ->
+            database.mediaDao().insertMedia(chunk)
+        }
     }
 
     suspend fun saveDirectory(path: String, media: List<ApiMedia>) {
@@ -74,7 +75,9 @@ class GalleryRepository(private val database: AppDatabase) {
             )
         }
         database.mediaDao().deleteMediaByPath(path)
-        database.mediaDao().insertMedia(entities)
+        entities.chunked(500).forEach { chunk ->
+            database.mediaDao().insertMedia(chunk)
+        }
         database.directoryDao().insertDirectory(DirectoryEntity(path, path.substringAfterLast('/'), System.currentTimeMillis()))
     }
 
