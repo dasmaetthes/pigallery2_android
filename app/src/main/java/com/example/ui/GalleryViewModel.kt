@@ -189,10 +189,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val searchQuery = MutableStateFlow("")
     val isFlattened = MutableStateFlow(false)
     val galleryViewMode = MutableStateFlow(try { GalleryViewMode.valueOf(prefs.galleryViewMode) } catch (e: Exception) { GalleryViewMode.FOLDER })
+    val networkConnectionInfo = MutableStateFlow(NetworkConnectionInfo())
 
     private val directoryCache = java.util.concurrent.ConcurrentHashMap<String, ApiDirectory>()
     private val cachedFlattenedMedia = java.util.concurrent.ConcurrentHashMap<String, List<ApiMedia>>()
-    private val fetchSemaphore = Semaphore(12)
+    private val fetchSemaphore = Semaphore(24)
 
     fun setGalleryViewMode(mode: GalleryViewMode) {
         galleryViewMode.value = mode
@@ -885,28 +886,29 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     } else {
                         path
                     }
-                    val allMedia = getOrFetchAllMedia(server, rootPath, cookies, apiPrefix)
-                    val uniqueMedia = deduplicateMedia(allMedia)
-
-                    val filteredMedia = filterFlattenedMedia(currentPath, uniqueMedia)
-
-                    ApiDirectory(
-                        id = -1,
-                        name = if (currentPath.isEmpty() || currentPath == prefs.defaultRootPath) "Flattened Gallery" else currentPath.substringAfterLast('/'),
-                        path = currentPath,
-                        directories = emptyList(),
-                        media = filteredMedia
-                    )
+                    var lastEmittedDir: ApiDirectory? = null
+                    getOrFetchAllMediaProgressive(server, rootPath, cookies, apiPrefix) { partialList ->
+                        val filteredMedia = filterFlattenedMedia(currentPath, partialList)
+                        val partialDir = ApiDirectory(
+                            id = -1,
+                            name = if (currentPath.isEmpty() || currentPath == prefs.defaultRootPath) "Flattened Gallery" else currentPath.substringAfterLast('/'),
+                            path = currentPath,
+                            directories = emptyList(),
+                            media = filteredMedia
+                        )
+                        lastEmittedDir = partialDir
+                        _galleryState.value = GalleryUiState.Success(sortDirectory(partialDir))
+                    }
+                    lastEmittedDir ?: ApiDirectory(id = -1, name = "Flattened Gallery", path = currentPath, directories = emptyList(), media = emptyList())
                 } else if (galleryViewMode.value == GalleryViewMode.DATE) {
                     val rootPath = prefs.defaultRootPath
-                    val allMedia = getOrFetchAllMedia(server, rootPath, cookies, apiPrefix)
-                    val uniqueMedia = deduplicateMedia(allMedia)
-
-                    if (uniqueMedia.isNotEmpty()) {
-                        repo.saveAllMedia(uniqueMedia)
+                    var lastEmittedDir: ApiDirectory? = null
+                    getOrFetchAllMediaProgressive(server, rootPath, cookies, apiPrefix) { partialList ->
+                        val partialDir = buildDateViewDirectory(currentPath, partialList)
+                        lastEmittedDir = partialDir
+                        _galleryState.value = GalleryUiState.Success(sortDirectory(partialDir))
                     }
-
-                    buildDateViewDirectory(currentPath, uniqueMedia)
+                    lastEmittedDir ?: ApiDirectory(id = -1, name = "Gallery", path = currentPath, directories = emptyList(), media = emptyList())
                 } else {
                     api.getGalleryContent(server, path, cookies, apiPrefix)
                 }
@@ -929,37 +931,27 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    private suspend fun getOrFetchAllMedia(
+    private suspend fun getOrFetchAllMediaProgressive(
         serverUrl: String,
         rootPath: String,
         cookies: String,
-        apiPrefix: String
+        apiPrefix: String,
+        onBatchEmit: (List<ApiMedia>) -> Unit
     ): List<ApiMedia> {
         val cacheKey = rootPath.ifEmpty { "ROOT" }
-        cachedFlattenedMedia[cacheKey]?.let { return it }
-
-        val recursiveMedia = fetchAllMediaRecursively(serverUrl, rootPath, cookies, apiPrefix)
-        val uniqueMedia = deduplicateMedia(recursiveMedia)
-        if (uniqueMedia.isNotEmpty()) {
-            cachedFlattenedMedia[cacheKey] = uniqueMedia
+        cachedFlattenedMedia[cacheKey]?.let {
+            onBatchEmit(it)
+            return it
         }
-        return uniqueMedia
-    }
 
-    private suspend fun fetchAllMediaRecursively(
-        serverUrl: String,
-        path: String,
-        cookies: String,
-        apiPrefix: String
-    ): List<ApiMedia> = kotlinx.coroutines.coroutineScope {
-        try {
+        val accumulatedMedia = java.util.concurrent.ConcurrentLinkedQueue<ApiMedia>()
+        var lastEmitTime = System.currentTimeMillis()
+
+        suspend fun scanDirectory(path: String) {
             val directory = directoryCache[path] ?: fetchSemaphore.withPermit {
                 directoryCache[path] ?: run {
                     val fetched = api.getGalleryContent(serverUrl, path, cookies, apiPrefix)
                     directoryCache[path] = fetched
-                    if (fetched.media != null) {
-                        repo.saveDirectory(path, fetched.media)
-                    }
                     fetched
                 }
             }
@@ -969,24 +961,39 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     media.copy(parentPath = path)
                 } else media
             }
-            val subDirs = directory.directories ?: emptyList()
-            
-            if (subDirs.isEmpty()) {
-                return@coroutineScope currentMedia
-            }
-            
-            val deferredMediaList = subDirs.map { subFolder ->
-                async(Dispatchers.IO) {
-                    fetchAllMediaRecursively(serverUrl, subFolder.path, cookies, apiPrefix)
+            if (currentMedia.isNotEmpty()) {
+                accumulatedMedia.addAll(currentMedia)
+                val now = System.currentTimeMillis()
+                if (now - lastEmitTime > 250 || accumulatedMedia.size <= currentMedia.size) {
+                    lastEmitTime = now
+                    val snapshot = deduplicateMedia(accumulatedMedia.toList())
+                    onBatchEmit(snapshot)
                 }
             }
-            
-            val subFoldersMedia = deferredMediaList.awaitAll().flatten()
-            currentMedia + subFoldersMedia
-        } catch (e: Exception) {
-            android.util.Log.e("GalleryViewModel", "Error fetching recursively for path $path: ${e.localizedMessage}")
-            emptyList()
+
+            val subDirs = directory.directories ?: emptyList()
+            if (subDirs.isNotEmpty()) {
+                kotlinx.coroutines.coroutineScope {
+                    subDirs.map { subFolder ->
+                        async(Dispatchers.IO) {
+                            scanDirectory(subFolder.path)
+                        }
+                    }.awaitAll()
+                }
+            }
         }
+
+        scanDirectory(rootPath)
+
+        val finalMediaList = deduplicateMedia(accumulatedMedia.toList())
+        if (finalMediaList.isNotEmpty()) {
+            cachedFlattenedMedia[cacheKey] = finalMediaList
+            repo.saveAllMedia(finalMediaList)
+            onBatchEmit(finalMediaList)
+        } else if (accumulatedMedia.isEmpty()) {
+            onBatchEmit(emptyList())
+        }
+        return finalMediaList
     }
 
     fun enterFolder(folderPath: String) {
@@ -1796,4 +1803,87 @@ fun loadAlbums() {
             else -> "$month"
         }
     }
+
+    fun testNetworkConnections() {
+        viewModelScope.launch(Dispatchers.IO) {
+            networkConnectionInfo.value = networkConnectionInfo.value.copy(isTesting = true)
+
+            val primaryUrl = prefs.serverUrl.let { if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it }.trimEnd('/')
+            val localUrl = prefs.localServerUrl.let { if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it }.trimEnd('/')
+
+            var localStatus = ServerRouteState.NOT_CONFIGURED
+            var localLatency: Long? = null
+
+            if (localUrl.isNotEmpty()) {
+                val start = System.currentTimeMillis()
+                try {
+                    val uri = java.net.URI(localUrl)
+                    val host = uri.host ?: ""
+                    val port = if (uri.port != -1) uri.port else 80
+                    val socket = java.net.Socket()
+                    socket.connect(java.net.InetSocketAddress(host, port), 250)
+                    socket.close()
+                    localLatency = (System.currentTimeMillis() - start).coerceAtLeast(1)
+                    localStatus = ServerRouteState.CONNECTED
+                } catch (e: Exception) {
+                    localStatus = ServerRouteState.UNREACHABLE
+                }
+            }
+
+            var remoteStatus = ServerRouteState.NOT_CONFIGURED
+            var remoteLatency: Long? = null
+
+            if (primaryUrl.isNotEmpty()) {
+                val start = System.currentTimeMillis()
+                try {
+                    val uri = java.net.URI(primaryUrl)
+                    val host = uri.host ?: ""
+                    val port = if (uri.port != -1) uri.port else if (primaryUrl.startsWith("https")) 443 else 80
+                    val socket = java.net.Socket()
+                    socket.connect(java.net.InetSocketAddress(host, port), 800)
+                    socket.close()
+                    remoteLatency = (System.currentTimeMillis() - start).coerceAtLeast(1)
+                    remoteStatus = ServerRouteState.CONNECTED
+                } catch (e: Exception) {
+                    remoteStatus = ServerRouteState.UNREACHABLE
+                }
+            }
+
+            val activeRoute = when {
+                localStatus == ServerRouteState.CONNECTED -> ActiveRouteType.LOCAL_WIFI
+                remoteStatus == ServerRouteState.CONNECTED -> ActiveRouteType.REMOTE_PRIMARY
+                else -> ActiveRouteType.NONE
+            }
+
+            networkConnectionInfo.value = NetworkConnectionInfo(
+                activeRoute = activeRoute,
+                localStatus = localStatus,
+                localLatencyMs = localLatency,
+                remoteStatus = remoteStatus,
+                remoteLatencyMs = remoteLatency,
+                isTesting = false
+            )
+        }
+    }
 }
+
+enum class ServerRouteState {
+    CONNECTED,
+    UNREACHABLE,
+    NOT_CONFIGURED
+}
+
+enum class ActiveRouteType {
+    LOCAL_WIFI,
+    REMOTE_PRIMARY,
+    NONE
+}
+
+data class NetworkConnectionInfo(
+    val activeRoute: ActiveRouteType = ActiveRouteType.NONE,
+    val localStatus: ServerRouteState = ServerRouteState.NOT_CONFIGURED,
+    val localLatencyMs: Long? = null,
+    val remoteStatus: ServerRouteState = ServerRouteState.NOT_CONFIGURED,
+    val remoteLatencyMs: Long? = null,
+    val isTesting: Boolean = false
+)

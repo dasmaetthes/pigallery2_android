@@ -66,6 +66,8 @@ import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
@@ -1718,24 +1720,75 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                     }
                 }
             } else if (selectedSettingsTab == 2) {
-                // --- 4. Server Settings ---
+                // --- 4. Server Settings & Connection Monitor ---
+                val netInfo by viewModel.networkConnectionInfo.collectAsState()
+
+                LaunchedEffect(Unit) {
+                    viewModel.testNetworkConnections()
+                }
+
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "Connection Status",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Server Configuration",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+
+                            val (activeText, activeColor, activeIcon) = when (netInfo.activeRoute) {
+                                com.example.ui.ActiveRouteType.LOCAL_WIFI -> Triple(
+                                    "Local Wi-Fi Active",
+                                    Color(0xFF4CAF50),
+                                    Icons.Default.Wifi
+                                )
+                                com.example.ui.ActiveRouteType.REMOTE_PRIMARY -> Triple(
+                                    "Primary Server Active",
+                                    Color(0xFF2196F3),
+                                    Icons.Default.Cloud
+                                )
+                                com.example.ui.ActiveRouteType.NONE -> Triple(
+                                    "Offline",
+                                    MaterialTheme.colorScheme.error,
+                                    Icons.Default.Close
+                                )
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(20.dp),
+                                color = activeColor.copy(alpha = 0.15f),
+                                contentColor = activeColor
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = activeIcon,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = activeColor
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = activeText,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        Text(
-                            text = "Connected to: ${viewModel.prefs.serverUrl}",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
                         Text(
                             text = "Logged in as: ${if (viewModel.prefs.username.isEmpty()) "Demo / Public User" else viewModel.prefs.username}",
                             style = MaterialTheme.typography.bodyMedium
@@ -1754,7 +1807,7 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true
                         )
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
                         
                         Button(
                             onClick = { viewModel.logout() },
@@ -1767,7 +1820,7 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                         }
                     }
                 }
-                
+
                 // --- Path Configuration ---
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -1799,9 +1852,8 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                         )
                     }
                 }
-                Spacer(modifier = Modifier.height(16.dp))
 
-                // --- Suffix Settings ---
+                // --- API Suffix Settings ---
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp)
@@ -1847,55 +1899,55 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                     }
                 }
 
-        // --- Storage Settings ---
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = "Storage",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                
-                val cacheSize by viewModel.cacheSize.collectAsState()
-                LaunchedEffect(selectedSettingsTab) {
-                    if (selectedSettingsTab == 2) {
-                        viewModel.updateCacheSize()
-                    }
-                }
-
-                Row(
+                // --- Storage Settings ---
+                Card(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    shape = RoundedCornerShape(16.dp)
                 ) {
-                    Column {
+                    Column(modifier = Modifier.padding(16.dp)) {
                         Text(
-                            text = "Cache",
-                            style = MaterialTheme.typography.bodyMedium
+                            text = "Storage",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
                         )
-                        Text(
-                            text = "Currently used: $cacheSize",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Button(
-                        onClick = { 
-                            viewModel.clearCaches() 
-                            android.widget.Toast.makeText(context, "Cache cleared successfully", android.widget.Toast.LENGTH_SHORT).show()
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
-                    ) {
-                        Text("Clear")
+                        Spacer(modifier = Modifier.height(12.dp))
+                        
+                        val cacheSize by viewModel.cacheSize.collectAsState()
+                        LaunchedEffect(selectedSettingsTab) {
+                            if (selectedSettingsTab == 2) {
+                                viewModel.updateCacheSize()
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Cache",
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                Text(
+                                    text = "Currently used: $cacheSize",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Button(
+                                onClick = { 
+                                    viewModel.clearCaches() 
+                                    android.widget.Toast.makeText(context, "Cache cleared successfully", android.widget.Toast.LENGTH_SHORT).show()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                            ) {
+                                Text("Clear")
+                            }
+                        }
                     }
                 }
-            }
-        }
 
 
             }

@@ -22,6 +22,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -431,10 +432,16 @@ fun FilterValueInputSection(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
-    var textInput by remember(row.value) { mutableStateOf(row.value) }
+    var textInput by remember { mutableStateOf(row.value) }
     var suggestions by remember { mutableStateOf<List<String>>(emptyList()) }
     var isFetching by remember { mutableStateOf(false) }
     var suggestionsExpanded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(row.value) {
+        if (row.value != textInput) {
+            textInput = row.value
+        }
+    }
 
     // On text change, fetch suggestions if applicable
     LaunchedEffect(textInput) {
@@ -552,6 +559,7 @@ fun FilterValueInputSection(
                 DropdownMenu(
                     expanded = suggestionsExpanded,
                     onDismissRequest = { suggestionsExpanded = false },
+                    properties = PopupProperties(focusable = false),
                     modifier = Modifier.fillMaxWidth(0.85f)
                 ) {
                     suggestions.forEach { suggestion ->
