@@ -53,4 +53,4 @@ This application leverages modern Android libraries:
 
 
 ## 📄 License
-This project is open-source software released under the [MIT License](https://github.com/dasmaetthes/pigallery2_dev/blob/main/LICENSE). You are free to use, modify, and distribute this software under the terms of the license.
+This project is open-source software released under the MIT License. You are free to use, modify, and distribute this software under the terms of the license.
