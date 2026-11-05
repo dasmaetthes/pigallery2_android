@@ -44,8 +44,6 @@ class PreferencesManager(context: Context) {
         private const val KEY_SHOW_METADATA_GESTURE_ENABLED = "show_metadata_gesture_enabled"
         private const val KEY_BIOMETRIC_LOCK_ENABLED = "biometric_lock_enabled"
         private const val KEY_PROTECTED_FOLDERS = "protected_folders"
-        private const val KEY_PROTECTED_ALBUMS = "protected_albums"
-        private const val KEY_PROTECTED_PERSONS = "protected_persons"
         private const val KEY_HIDE_PROTECTED_ITEMS = "hide_protected_items"
     }
 
@@ -232,8 +230,14 @@ class PreferencesManager(context: Context) {
     }
 
     fun toggleProtectedFolder(path: String) {
+        val clean = path.trim('/').replace("\\", "/")
         val current = getProtectedFolders().toMutableSet()
-        if (current.contains(path)) current.remove(path) else current.add(path)
+        val existing = current.firstOrNull { it.trim('/').replace("\\", "/").equals(clean, ignoreCase = true) }
+        if (existing != null) {
+            current.remove(existing)
+        } else {
+            current.add(clean)
+        }
         prefs.edit().putStringSet(KEY_PROTECTED_FOLDERS, current).apply()
     }
 
@@ -242,36 +246,8 @@ class PreferencesManager(context: Context) {
         val clean = path.trim('/').replace("\\", "/")
         return getProtectedFolders().any {
             val p = it.trim('/').replace("\\", "/")
-            p == clean || clean.startsWith("$p/")
+            p.equals(clean, ignoreCase = true) || clean.startsWith("$p/", ignoreCase = true)
         }
-    }
-
-    fun getProtectedAlbums(): Set<String> {
-        return prefs.getStringSet(KEY_PROTECTED_ALBUMS, emptySet()) ?: emptySet()
-    }
-
-    fun toggleProtectedAlbum(name: String) {
-        val current = getProtectedAlbums().toMutableSet()
-        if (current.contains(name)) current.remove(name) else current.add(name)
-        prefs.edit().putStringSet(KEY_PROTECTED_ALBUMS, current).apply()
-    }
-
-    fun isAlbumProtected(name: String): Boolean {
-        return getProtectedAlbums().contains(name)
-    }
-
-    fun getProtectedPersons(): Set<String> {
-        return prefs.getStringSet(KEY_PROTECTED_PERSONS, emptySet()) ?: emptySet()
-    }
-
-    fun toggleProtectedPerson(name: String) {
-        val current = getProtectedPersons().toMutableSet()
-        if (current.contains(name)) current.remove(name) else current.add(name)
-        prefs.edit().putStringSet(KEY_PROTECTED_PERSONS, current).apply()
-    }
-
-    fun isPersonProtected(name: String): Boolean {
-        return getProtectedPersons().contains(name)
     }
 
     fun clear() {

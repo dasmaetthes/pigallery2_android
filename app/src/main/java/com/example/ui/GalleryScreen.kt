@@ -258,10 +258,15 @@ fun GalleryScreen(
     val protectedFolders by viewModel.protectedFolders.collectAsState()
 
     val mapMediaList = remember(activeTab, galleryState, albumContentState, personContentState, selectedAlbum, selectedPerson, protectedFolders) {
-        val raw = when (activeTab) {
+        when (activeTab) {
             ActiveTab.GALLERY -> {
                 if (galleryState is GalleryUiState.Success) {
-                    (galleryState as GalleryUiState.Success).directory.media ?: emptyList()
+                    val media = (galleryState as GalleryUiState.Success).directory.media ?: emptyList()
+                    if (viewModel.isFolderProtected(viewModel.currentPath)) {
+                        media
+                    } else {
+                        media.filter { !viewModel.isMediaProtected(it) }
+                    }
                 } else emptyList()
             }
             ActiveTab.ALBUMS -> {
@@ -276,7 +281,6 @@ fun GalleryScreen(
             }
             else -> emptyList()
         }
-        raw.filter { !viewModel.isMediaProtected(it) }
     }
 
     // Handle system back navigation nicely
@@ -588,74 +592,7 @@ fun GalleryScreen(
                                     }
                                 )
                             }
-                            if (activeTab == ActiveTab.ALBUMS && selectedAlbum != null) {
-                                val currentAlbum = selectedAlbum!!
-                                val isProtected = viewModel.isAlbumProtected(currentAlbum.name)
-                                DropdownMenuItem(
-                                    text = { Text(if (isProtected) "Unprotect Album" else "Protect Album") },
-                                    onClick = {
-                                        showMoreMenu = false
-                                        val activity = context.findActivity() as? androidx.fragment.app.FragmentActivity
-                                        if (activity != null) {
-                                            com.example.util.BiometricHelper.authenticate(
-                                                activity = activity,
-                                                title = if (isProtected) "Unprotect Album" else "Protect Album",
-                                                subtitle = "Confirm identity to toggle album protection",
-                                                onSuccess = {
-                                                    viewModel.toggleProtectedAlbum(currentAlbum.name)
-                                                },
-                                                onError = { err ->
-                                                    if (err != "Canceled") {
-                                                        android.widget.Toast.makeText(context, err, android.widget.Toast.LENGTH_SHORT).show()
-                                                    }
-                                                }
-                                            )
-                                        } else {
-                                            viewModel.toggleProtectedAlbum(currentAlbum.name)
-                                        }
-                                    },
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = Icons.Default.Lock,
-                                            contentDescription = null
-                                        )
-                                    }
-                                )
-                            }
-                            if (activeTab == ActiveTab.PERSONS && selectedPerson != null) {
-                                val currentPerson = selectedPerson!!
-                                val isProtected = viewModel.isPersonProtected(currentPerson.name)
-                                DropdownMenuItem(
-                                    text = { Text(if (isProtected) "Unprotect Person" else "Protect Person") },
-                                    onClick = {
-                                        showMoreMenu = false
-                                        val activity = context.findActivity() as? androidx.fragment.app.FragmentActivity
-                                        if (activity != null) {
-                                            com.example.util.BiometricHelper.authenticate(
-                                                activity = activity,
-                                                title = if (isProtected) "Unprotect Person" else "Protect Person",
-                                                subtitle = "Confirm identity to toggle person protection",
-                                                onSuccess = {
-                                                    viewModel.toggleProtectedPerson(currentPerson.name)
-                                                },
-                                                onError = { err ->
-                                                    if (err != "Canceled") {
-                                                        android.widget.Toast.makeText(context, err, android.widget.Toast.LENGTH_SHORT).show()
-                                                    }
-                                                }
-                                            )
-                                        } else {
-                                            viewModel.toggleProtectedPerson(currentPerson.name)
-                                        }
-                                    },
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = Icons.Default.Lock,
-                                            contentDescription = null
-                                        )
-                                    }
-                                )
-                            }
+
                             DropdownMenuItem(
                                 text = { Text("Settings") },
                                 onClick = {
@@ -1131,15 +1068,8 @@ fun AlbumsTabContent(viewModel: GalleryViewModel) {
                 }
                 is AlbumsUiState.Success -> {
                     val allAlbums = state.albums
-                    val hideProtectedItems by viewModel.hideProtectedItems.collectAsState()
-                    val protectedAlbums by viewModel.protectedAlbums.collectAsState()
-                    val albums = remember(allAlbums, searchQuery, hideProtectedItems, protectedAlbums) {
-                        val filtered = if (searchQuery.isBlank()) allAlbums else allAlbums.filter { it.name.contains(searchQuery, ignoreCase = true) }
-                        if (hideProtectedItems) {
-                            filtered.filter { !viewModel.isAlbumProtected(it.name) }
-                        } else {
-                            filtered
-                        }
+                    val albums = remember(allAlbums, searchQuery) {
+                        if (searchQuery.isBlank()) allAlbums else allAlbums.filter { it.name.contains(searchQuery, ignoreCase = true) }
                     }
                     
                     Column(modifier = Modifier.fillMaxSize()) {
@@ -2350,29 +2280,8 @@ fun AlbumCard(
 ) {
     val context = LocalContext.current
     val cookies = viewModel.getCookiesHeader()
-    val isProtected = viewModel.isAlbumProtected(album.name)
-
     val handleAlbumClick = {
-        if (isProtected) {
-            val activity = context.findActivity() as? androidx.fragment.app.FragmentActivity
-            if (activity != null) {
-                com.example.util.BiometricHelper.authenticate(
-                    activity = activity,
-                    title = "Protected Album",
-                    subtitle = "Authenticate to view ${album.name}",
-                    onSuccess = { onClick() },
-                    onError = { err ->
-                        if (err != "Canceled") {
-                            android.widget.Toast.makeText(context, err, android.widget.Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                )
-            } else {
-                onClick()
-            }
-        } else {
-            onClick()
-        }
+        onClick()
     }
 
     val cardRatio = if (aspectRatio > 0f) aspectRatio else 1f
@@ -2432,23 +2341,7 @@ fun AlbumCard(
                 count = "${album.cache?.itemCount ?: 0}"
             )
 
-            // Protection Badge
-            if (isProtected) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(8.dp)
-                        .background(Color.Black.copy(alpha = 0.6f), CircleShape)
-                        .padding(5.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Lock,
-                        contentDescription = "Protected Album",
-                        tint = Color.White,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-            }
+
         }
     }
 }
@@ -3286,15 +3179,8 @@ fun PersonsTabContent(viewModel: GalleryViewModel) {
                 }
                 is PersonsUiState.Success -> {
                     val allPersons = state.persons
-                    val hideProtectedItems by viewModel.hideProtectedItems.collectAsState()
-                    val protectedPersons by viewModel.protectedPersons.collectAsState()
-                    val persons = remember(allPersons, searchQuery, hideProtectedItems, protectedPersons) {
-                        val filtered = if (searchQuery.isBlank()) allPersons else allPersons.filter { it.name.contains(searchQuery, ignoreCase = true) }
-                        if (hideProtectedItems) {
-                            filtered.filter { !viewModel.isPersonProtected(it.name) }
-                        } else {
-                            filtered
-                        }
+                    val persons = remember(allPersons, searchQuery) {
+                        if (searchQuery.isBlank()) allPersons else allPersons.filter { it.name.contains(searchQuery, ignoreCase = true) }
                     }
                     
                     Column(modifier = Modifier.fillMaxSize()) {
@@ -3378,29 +3264,8 @@ fun PersonItem(modifier: Modifier = Modifier, person: com.example.data.ApiPerson
     val cornerRadius by viewModel.cornerRadius.collectAsState()
     val aspectRatio by viewModel.aspectRatio.collectAsState()
     val cardRatio = if (aspectRatio > 0f) aspectRatio else 1f
-    val isProtected = viewModel.isPersonProtected(person.name)
-
     val handlePersonClick = {
-        if (isProtected) {
-            val activity = context.findActivity() as? androidx.fragment.app.FragmentActivity
-            if (activity != null) {
-                com.example.util.BiometricHelper.authenticate(
-                    activity = activity,
-                    title = "Protected Person",
-                    subtitle = "Authenticate to view ${person.name}",
-                    onSuccess = { onClick() },
-                    onError = { err ->
-                        if (err != "Canceled") {
-                            android.widget.Toast.makeText(context, err, android.widget.Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                )
-            } else {
-                onClick()
-            }
-        } else {
-            onClick()
-        }
+        onClick()
     }
 
     val imgRequest = ImageRequest.Builder(LocalContext.current)
@@ -3446,20 +3311,6 @@ fun PersonItem(modifier: Modifier = Modifier, person: com.example.data.ApiPerson
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                if (isProtected) {
-                    Box(
-                        modifier = Modifier
-                            .background(Color.Black.copy(alpha = 0.6f), CircleShape)
-                            .padding(5.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Lock,
-                            contentDescription = "Protected Person",
-                            tint = Color.White,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                }
                 IconButton(
                     onClick = { viewModel.togglePersonFavourite(person) },
                     modifier = Modifier
@@ -3858,14 +3709,39 @@ fun AboutScreen(viewModel: GalleryViewModel, onBack: () -> Unit) {
                     Spacer(modifier = Modifier.height(8.dp))
 
                     val annotatedString = androidx.compose.ui.text.buildAnnotatedString {
-                        append("Built with open source software:\n")
+                        append("PiGallery2 Android Client is open-source software licensed under the ")
+
+                        val licenseStartIndex = length
+                        append("MIT License")
+                        val licenseEndIndex = length
+
+                        addStyle(
+                            style = androidx.compose.ui.text.SpanStyle(
+                                color = MaterialTheme.colorScheme.primary,
+                                textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
+                            ),
+                            start = licenseStartIndex,
+                            end = licenseEndIndex
+                        )
+                        addLink(
+                            androidx.compose.ui.text.LinkAnnotation.Url(
+                                url = "https://github.com/dasmaetthes/pigallery2_android/tree/main?tab=MIT-1-ov-file#MIT-1-ov-file",
+                                linkInteractionListener = androidx.compose.ui.text.LinkInteractionListener {
+                                    uriHandler.openUri("https://github.com/dasmaetthes/pigallery2_android/tree/main?tab=MIT-1-ov-file#MIT-1-ov-file")
+                                }
+                            ),
+                            start = licenseStartIndex,
+                            end = licenseEndIndex
+                        )
+
+                        append(".\n\nBuilt with open source software:\n")
                         append("• Android Jetpack & Compose (Apache 2.0)\n")
                         append("• Kotlin & Coroutines (Apache 2.0)\n")
                         append("• Coil Image Loader (Apache 2.0)\n")
                         append("• OkHttp & Retrofit (Apache 2.0)\n")
                         append("• Moshi (Apache 2.0)\n")
                         append("• Room Database (Apache 2.0)\n\n")
-                        append("These libraries are licensed under the Apache License, Version 2.0. ")
+                        append("These third-party libraries are licensed under the Apache License, Version 2.0. ")
                         append("You may obtain a copy of the License at ")
 
                         val startIndex = length

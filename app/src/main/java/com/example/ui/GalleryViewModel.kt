@@ -189,8 +189,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val isBiometricLockEnabled = MutableStateFlow(prefs.biometricLockEnabled)
     val isAppLocked = MutableStateFlow(prefs.biometricLockEnabled)
     val protectedFolders = MutableStateFlow(prefs.getProtectedFolders())
-    val protectedAlbums = MutableStateFlow(prefs.getProtectedAlbums())
-    val protectedPersons = MutableStateFlow(prefs.getProtectedPersons())
     val hideProtectedItems = MutableStateFlow(prefs.hideProtectedItems)
 
     // Search and directory flattening states
@@ -612,7 +610,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 else -> dirs
             }
 
-            val media = directory.media.orEmpty().filter { !isMediaProtected(it) }
+            val media = directory.media.orEmpty()
             val sortedMedia = when (mSort.lowercase()) {
                 "name" -> {
                     if (mAsc) media.sortedBy { it.name.lowercase() }
@@ -879,7 +877,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun filterFlattenedMedia(currentPathStr: String, rawMedia: List<ApiMedia>): List<ApiMedia> {
-        val uniqueMedia = rawMedia.filter { !isMediaProtected(it) }
+        val uniqueMedia = if (isFolderProtected(currentPathStr)) rawMedia else rawMedia.filter { !isMediaProtected(it) }
         return if (currentPathStr.startsWith("year:") && !currentPathStr.contains("month:")) {
             val year = currentPathStr.substringAfter("year:").substringBefore("/").toIntOrNull() ?: 0
             uniqueMedia.filter { media ->
@@ -1158,7 +1156,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     val query = parseSearchStringToQuery(searchQuery.value)
                     val queryJson = api.serializeQuery(query)
                     val searchResult = api.search(server, queryJson, cookies, apiPrefix)
-                    val sortedDirectory = sortDirectory(searchResult)
+                    val filteredMedia = searchResult.media.orEmpty().filter { !isMediaProtected(it) }
+                    val sortedDirectory = sortDirectory(searchResult.copy(media = filteredMedia))
                     _galleryState.value = GalleryUiState.Success(sortedDirectory)
                 } else {
                     // Normal folder view
@@ -1350,7 +1349,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val adapter = moshi.adapter<Map<String, Any>>(type)
                 val searchQueryJson = adapter.toJson(searchQuery)
                 val dummyDir = api.search(server, searchQueryJson, cookies, apiPrefix)
-                val sortedDirectory = sortDirectory(dummyDir)
+                val filteredMedia = dummyDir.media.orEmpty().filter { !isMediaFromProtectedFolder(it) }
+                val sortedDirectory = sortDirectory(dummyDir.copy(media = filteredMedia))
                 _personContentState.value = GalleryUiState.Success(sortedDirectory)
             } catch (e: Exception) {
                 _personContentState.value = GalleryUiState.Error(e.localizedMessage ?: "Failed to fetch person content")
@@ -1419,7 +1419,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val adapter = moshi.adapter<Map<String, Any>>(type)
                 val searchQueryJson = adapter.toJson(searchQuery)
                 val dummyDir = api.search(server, searchQueryJson, cookies, apiPrefix)
-                val sortedDirectory = sortDirectory(dummyDir)
+                val filteredMedia = dummyDir.media.orEmpty().filter { !isMediaFromProtectedFolder(it) }
+                val sortedDirectory = sortDirectory(dummyDir.copy(media = filteredMedia))
                 _personContentState.value = GalleryUiState.Success(sortedDirectory)
             } catch (e: Exception) {
                 // Keep showing existing data
@@ -1470,7 +1471,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             try {
                 val queryJson = api.serializeQuery(query)
                 val directory = api.search(server, queryJson, cookies, apiPrefix)
-                val sortedDirectory = sortDirectory(directory)
+                val filteredMedia = directory.media.orEmpty().filter { !isMediaFromProtectedFolder(it) }
+                val sortedDirectory = sortDirectory(directory.copy(media = filteredMedia))
                 _albumContentState.value = GalleryUiState.Success(sortedDirectory)
             } catch (e: Exception) {
                 _albumContentState.value = GalleryUiState.Error(e.localizedMessage ?: "Failed to load album content")
@@ -1520,7 +1522,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 if (server.isNotEmpty()) {
                     val queryJson = api.serializeQuery(query)
                     val directory = api.search(server, queryJson, cookies, apiPrefix)
-                    val sortedDirectory = sortDirectory(directory)
+                    val filteredMedia = directory.media.orEmpty().filter { !isMediaFromProtectedFolder(it) }
+                    val sortedDirectory = sortDirectory(directory.copy(media = filteredMedia))
                     _albumContentState.value = GalleryUiState.Success(sortedDirectory)
                 }
             } catch (e: Exception) {
@@ -1695,18 +1698,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         prefs.toggleProtectedFolder(path)
         protectedFolders.value = prefs.getProtectedFolders()
         loadRediscover()
-    }
-
-    fun toggleProtectedAlbum(name: String) {
-        prefs.toggleProtectedAlbum(name)
-        protectedAlbums.value = prefs.getProtectedAlbums()
-        loadRediscover()
-    }
-
-    fun toggleProtectedPerson(name: String) {
-        prefs.toggleProtectedPerson(name)
-        protectedPersons.value = prefs.getProtectedPersons()
-        loadRediscover()
+        _selectedAlbum.value?.let { loadAlbumContent(it) }
+        _selectedPerson.value?.let { loadPersonContent(it) }
     }
 
     fun setHideProtectedItems(hide: Boolean) {
@@ -1718,38 +1711,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         return prefs.isFolderProtected(path)
     }
 
-    fun isAlbumProtected(name: String): Boolean {
-        return prefs.isAlbumProtected(name)
-    }
-
-    fun isPersonProtected(name: String): Boolean {
-        return prefs.isPersonProtected(name)
+    fun isMediaFromProtectedFolder(media: ApiMedia): Boolean {
+        val parent = media.parentPath ?: ""
+        return isFolderProtected(parent)
     }
 
     fun isMediaProtected(media: ApiMedia): Boolean {
-        val parent = media.parentPath ?: ""
-        if (isFolderProtected(parent)) return true
-        
-        // Also check if any tagged person in this media is protected
-        val faces = media.metadata?.faces
-        if (!faces.isNullOrEmpty()) {
-            val hasProtectedFace = faces.any { face ->
-                val faceName = face.name
-                !faceName.isNullOrBlank() && isPersonProtected(faceName)
-            }
-            if (hasProtectedFace) return true
-        }
-
-        // Also check if any keyword corresponds to a protected person
-        val keywords = media.metadata?.keywords
-        if (!keywords.isNullOrEmpty()) {
-            val hasProtectedKeyword = keywords.any { kw ->
-                kw.isNotBlank() && isPersonProtected(kw)
-            }
-            if (hasProtectedKeyword) return true
-        }
-
-        return false
+        return isMediaFromProtectedFolder(media)
     }
 
     private fun buildInitialPathStack(defaultRoot: String): List<String> {
