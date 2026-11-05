@@ -5,7 +5,7 @@ import coil.Coil
 import coil.ImageLoader
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -42,7 +42,7 @@ tailrec fun Context.findActivity(): Activity? = when (this) {
     else -> null
 }
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
@@ -134,6 +134,21 @@ class MainActivity : ComponentActivity() {
             val themeColorOption by viewModel.themeColorOption.collectAsState()
             val themeMode by viewModel.themeMode.collectAsState()
             val maxBrightnessEnabled by viewModel.maxBrightnessEnabled.collectAsState()
+
+            val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+            androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+                val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+                    if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
+                        if (viewModel.isBiometricLockEnabled.value) {
+                            viewModel.lockApp()
+                        }
+                    }
+                }
+                lifecycleOwner.lifecycle.addObserver(observer)
+                onDispose {
+                    lifecycleOwner.lifecycle.removeObserver(observer)
+                }
+            }
 
             val isSystemDark = isSystemInDarkTheme()
             val darkTheme = when (themeMode) {

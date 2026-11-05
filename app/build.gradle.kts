@@ -19,8 +19,8 @@ android {
     applicationId = "com.aistudio.pigallery.dasmaetthes"
     minSdk = 24
     targetSdk = 36
-    versionCode = 4
-    versionName = "2.5"
+    versionCode = 6
+    versionName = "2.6"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -96,6 +96,7 @@ dependencies {
   implementation(libs.androidx.compose.ui.graphics)
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.core.ktx)
+  implementation(libs.androidx.biometric)
    implementation(libs.androidx.datastore.preferences)
   implementation(libs.androidx.media3.exoplayer)
   implementation(libs.androidx.media3.ui)

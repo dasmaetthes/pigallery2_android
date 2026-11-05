@@ -186,6 +186,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val defaultRootPath = MutableStateFlow(prefs.defaultRootPath)
     val dismissGestureEnabled = MutableStateFlow(prefs.dismissGestureEnabled)
     val showMetadataGestureEnabled = MutableStateFlow(prefs.showMetadataGestureEnabled)
+    val isBiometricLockEnabled = MutableStateFlow(prefs.biometricLockEnabled)
+    val isAppLocked = MutableStateFlow(prefs.biometricLockEnabled)
+    val protectedFolders = MutableStateFlow(prefs.getProtectedFolders())
+    val protectedAlbums = MutableStateFlow(prefs.getProtectedAlbums())
+    val protectedPersons = MutableStateFlow(prefs.getProtectedPersons())
+    val hideProtectedItems = MutableStateFlow(prefs.hideProtectedItems)
 
     // Search and directory flattening states
     val isSearchActive = MutableStateFlow(false)
@@ -580,7 +586,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             val fAsc = fDir.lowercase() == "asc"
             val mAsc = mDir.lowercase() == "asc"
 
-            val dirs = directory.directories.orEmpty()
+            val rawDirs = directory.directories.orEmpty()
+            val dirs = if (hideProtectedItems.value) rawDirs.filter { !isFolderProtected(it.path) } else rawDirs
             val isMonthFolders = dirs.isNotEmpty() && dirs.all { getMonthNumber(it) != null }
             val isYearFolders = dirs.isNotEmpty() && dirs.all { it.name.toIntOrNull() != null }
 
@@ -605,7 +612,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 else -> dirs
             }
 
-            val media = directory.media.orEmpty()
+            val media = directory.media.orEmpty().filter { !isMediaProtected(it) }
             val sortedMedia = when (mSort.lowercase()) {
                 "name" -> {
                     if (mAsc) media.sortedBy { it.name.lowercase() }
@@ -756,7 +763,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    private fun buildDateViewDirectory(currentPathStr: String, uniqueMedia: List<ApiMedia>): ApiDirectory {
+    private fun buildDateViewDirectory(currentPathStr: String, rawMedia: List<ApiMedia>): ApiDirectory {
+        val uniqueMedia = rawMedia.filter { !isMediaProtected(it) }
         return try {
             val rootPath = prefs.defaultRootPath
             val isRootDateView = currentPathStr.isEmpty() ||
@@ -870,7 +878,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    private fun filterFlattenedMedia(currentPathStr: String, uniqueMedia: List<ApiMedia>): List<ApiMedia> {
+    private fun filterFlattenedMedia(currentPathStr: String, rawMedia: List<ApiMedia>): List<ApiMedia> {
+        val uniqueMedia = rawMedia.filter { !isMediaProtected(it) }
         return if (currentPathStr.startsWith("year:") && !currentPathStr.contains("month:")) {
             val year = currentPathStr.substringAfter("year:").substringBefore("/").toIntOrNull() ?: 0
             uniqueMedia.filter { media ->
@@ -1553,8 +1562,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val allMedia = mutableListOf<ApiMedia>()
                 everyYearDir?.media?.let { allMedia.addAll(it) }
 
-                // Deduplicate by name and parent path
-                val uniqueMedia = allMedia.distinctBy { getMediaFullPath(it) }
+                // Deduplicate by name and parent path and filter out protected media
+                val uniqueMedia = allMedia.distinctBy { getMediaFullPath(it) }.filter { !isMediaProtected(it) }
 
                 // Group by year, excluding the current year and media with invalid creationDate
                 val currentYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
@@ -1662,6 +1671,85 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun setShowMetadataGestureEnabled(enabled: Boolean) {
         prefs.showMetadataGestureEnabled = enabled
         showMetadataGestureEnabled.value = enabled
+    }
+
+    fun setBiometricLockEnabled(enabled: Boolean) {
+        prefs.biometricLockEnabled = enabled
+        isBiometricLockEnabled.value = enabled
+        if (!enabled) {
+            isAppLocked.value = false
+        }
+    }
+
+    fun lockApp() {
+        if (isBiometricLockEnabled.value) {
+            isAppLocked.value = true
+        }
+    }
+
+    fun unlockApp() {
+        isAppLocked.value = false
+    }
+
+    fun toggleProtectedFolder(path: String) {
+        prefs.toggleProtectedFolder(path)
+        protectedFolders.value = prefs.getProtectedFolders()
+        loadRediscover()
+    }
+
+    fun toggleProtectedAlbum(name: String) {
+        prefs.toggleProtectedAlbum(name)
+        protectedAlbums.value = prefs.getProtectedAlbums()
+        loadRediscover()
+    }
+
+    fun toggleProtectedPerson(name: String) {
+        prefs.toggleProtectedPerson(name)
+        protectedPersons.value = prefs.getProtectedPersons()
+        loadRediscover()
+    }
+
+    fun setHideProtectedItems(hide: Boolean) {
+        prefs.hideProtectedItems = hide
+        hideProtectedItems.value = hide
+    }
+
+    fun isFolderProtected(path: String): Boolean {
+        return prefs.isFolderProtected(path)
+    }
+
+    fun isAlbumProtected(name: String): Boolean {
+        return prefs.isAlbumProtected(name)
+    }
+
+    fun isPersonProtected(name: String): Boolean {
+        return prefs.isPersonProtected(name)
+    }
+
+    fun isMediaProtected(media: ApiMedia): Boolean {
+        val parent = media.parentPath ?: ""
+        if (isFolderProtected(parent)) return true
+        
+        // Also check if any tagged person in this media is protected
+        val faces = media.metadata?.faces
+        if (!faces.isNullOrEmpty()) {
+            val hasProtectedFace = faces.any { face ->
+                val faceName = face.name
+                !faceName.isNullOrBlank() && isPersonProtected(faceName)
+            }
+            if (hasProtectedFace) return true
+        }
+
+        // Also check if any keyword corresponds to a protected person
+        val keywords = media.metadata?.keywords
+        if (!keywords.isNullOrEmpty()) {
+            val hasProtectedKeyword = keywords.any { kw ->
+                kw.isNotBlank() && isPersonProtected(kw)
+            }
+            if (hasProtectedKeyword) return true
+        }
+
+        return false
     }
 
     private fun buildInitialPathStack(defaultRoot: String): List<String> {
@@ -2093,7 +2181,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     val htmlUrl = json.optString("html_url", "https://github.com/dasmaetthes/pigallery2_android/releases")
                     val releaseNotes = json.optString("body", "No release notes provided.")
 
-                    val currentVersion = try { com.example.BuildConfig.VERSION_NAME } catch (e: Exception) { "2.5" } ?: "2.5"
+                    val currentVersion = try { com.example.BuildConfig.VERSION_NAME } catch (e: Exception) { "2.6" } ?: "2.6"
                     val cleanRemote = tagName.removePrefix("v").trim()
                     val cleanCurrent = currentVersion.removePrefix("v").trim()
 

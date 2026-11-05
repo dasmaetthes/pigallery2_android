@@ -42,6 +42,11 @@ class PreferencesManager(context: Context) {
         private const val KEY_GALLERY_VIEW_MODE = "gallery_view_mode"
         private const val KEY_DISMISS_GESTURE_ENABLED = "dismiss_gesture_enabled"
         private const val KEY_SHOW_METADATA_GESTURE_ENABLED = "show_metadata_gesture_enabled"
+        private const val KEY_BIOMETRIC_LOCK_ENABLED = "biometric_lock_enabled"
+        private const val KEY_PROTECTED_FOLDERS = "protected_folders"
+        private const val KEY_PROTECTED_ALBUMS = "protected_albums"
+        private const val KEY_PROTECTED_PERSONS = "protected_persons"
+        private const val KEY_HIDE_PROTECTED_ITEMS = "hide_protected_items"
     }
 
     var galleryViewMode: String
@@ -213,6 +218,61 @@ class PreferencesManager(context: Context) {
     var showMetadataGestureEnabled: Boolean
         get() = prefs.getBoolean(KEY_SHOW_METADATA_GESTURE_ENABLED, true)
         set(value) = prefs.edit().putBoolean(KEY_SHOW_METADATA_GESTURE_ENABLED, value).apply()
+
+    var biometricLockEnabled: Boolean
+        get() = prefs.getBoolean(KEY_BIOMETRIC_LOCK_ENABLED, false)
+        set(value) = prefs.edit().putBoolean(KEY_BIOMETRIC_LOCK_ENABLED, value).apply()
+
+    var hideProtectedItems: Boolean
+        get() = prefs.getBoolean(KEY_HIDE_PROTECTED_ITEMS, false)
+        set(value) = prefs.edit().putBoolean(KEY_HIDE_PROTECTED_ITEMS, value).apply()
+
+    fun getProtectedFolders(): Set<String> {
+        return prefs.getStringSet(KEY_PROTECTED_FOLDERS, emptySet()) ?: emptySet()
+    }
+
+    fun toggleProtectedFolder(path: String) {
+        val current = getProtectedFolders().toMutableSet()
+        if (current.contains(path)) current.remove(path) else current.add(path)
+        prefs.edit().putStringSet(KEY_PROTECTED_FOLDERS, current).apply()
+    }
+
+    fun isFolderProtected(path: String): Boolean {
+        if (path.isBlank()) return false
+        val clean = path.trim('/').replace("\\", "/")
+        return getProtectedFolders().any {
+            val p = it.trim('/').replace("\\", "/")
+            p == clean || clean.startsWith("$p/")
+        }
+    }
+
+    fun getProtectedAlbums(): Set<String> {
+        return prefs.getStringSet(KEY_PROTECTED_ALBUMS, emptySet()) ?: emptySet()
+    }
+
+    fun toggleProtectedAlbum(name: String) {
+        val current = getProtectedAlbums().toMutableSet()
+        if (current.contains(name)) current.remove(name) else current.add(name)
+        prefs.edit().putStringSet(KEY_PROTECTED_ALBUMS, current).apply()
+    }
+
+    fun isAlbumProtected(name: String): Boolean {
+        return getProtectedAlbums().contains(name)
+    }
+
+    fun getProtectedPersons(): Set<String> {
+        return prefs.getStringSet(KEY_PROTECTED_PERSONS, emptySet()) ?: emptySet()
+    }
+
+    fun toggleProtectedPerson(name: String) {
+        val current = getProtectedPersons().toMutableSet()
+        if (current.contains(name)) current.remove(name) else current.add(name)
+        prefs.edit().putStringSet(KEY_PROTECTED_PERSONS, current).apply()
+    }
+
+    fun isPersonProtected(name: String): Boolean {
+        return getProtectedPersons().contains(name)
+    }
 
     fun clear() {
         prefs.edit().clear().apply()
