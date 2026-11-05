@@ -246,7 +246,11 @@ class PreferencesManager(context: Context) {
         val clean = path.trim('/').replace("\\", "/")
         return getProtectedFolders().any {
             val p = it.trim('/').replace("\\", "/")
-            p.equals(clean, ignoreCase = true) || clean.startsWith("$p/", ignoreCase = true)
+            if (p.isEmpty()) return@any false
+            clean.equals(p, ignoreCase = true) ||
+                clean.startsWith("$p/", ignoreCase = true) ||
+                clean.endsWith("/$p", ignoreCase = true) ||
+                clean.contains("/$p/", ignoreCase = true)
         }
     }
 

@@ -3313,9 +3313,7 @@ fun PersonItem(modifier: Modifier = Modifier, person: com.example.data.ApiPerson
             ) {
                 IconButton(
                     onClick = { viewModel.togglePersonFavourite(person) },
-                    modifier = Modifier
-                        .size(28.dp)
-                        .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                    modifier = Modifier.size(32.dp)
                 ) {
                     val isFav = person.isFavourite == true
                     Icon(
