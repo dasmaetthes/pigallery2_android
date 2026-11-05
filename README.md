@@ -50,3 +50,7 @@ This application leverages modern Android libraries:
 
 - **Inspired by:** **[pigallery2_android_test](https://github.com/Lakjdf/pigallery2_android_test)** by Lakjdf.
 - **Developed with AI:** This application was developed and optimized with the assistance of advanced AI models.
+
+
+## 📄 License
+This project is open-source software released under the [MIT License](https://github.com/dasmaetthes/pigallery2_dev/blob/main/LICENSE). You are free to use, modify, and distribute this software under the terms of the license.
