@@ -196,7 +196,8 @@ class PreferencesManager(context: Context) {
         set(value) = prefs.edit().putBoolean(KEY_PEOPLE_FALLBACK_TO_KEYWORDS, value).apply()
 
     fun getFavoritePersons(): Set<String> {
-        return prefs.getStringSet("favorite_persons", emptySet()) ?: emptySet()
+        val set = prefs.getStringSet("favorite_persons", emptySet()) ?: emptySet()
+        return HashSet(set)
     }
 
     fun setFavoritePerson(name: String, isFavourite: Boolean) {
@@ -226,7 +227,8 @@ class PreferencesManager(context: Context) {
         set(value) = prefs.edit().putBoolean(KEY_HIDE_PROTECTED_ITEMS, value).apply()
 
     fun getProtectedFolders(): Set<String> {
-        return prefs.getStringSet(KEY_PROTECTED_FOLDERS, emptySet()) ?: emptySet()
+        val set = prefs.getStringSet(KEY_PROTECTED_FOLDERS, emptySet()) ?: emptySet()
+        return HashSet(set)
     }
 
     fun toggleProtectedFolder(path: String) {

@@ -271,12 +271,14 @@ fun GalleryScreen(
             }
             ActiveTab.ALBUMS -> {
                 if (selectedAlbum != null && albumContentState is GalleryUiState.Success) {
-                    (albumContentState as GalleryUiState.Success).directory.media ?: emptyList()
+                    val media = (albumContentState as GalleryUiState.Success).directory.media ?: emptyList()
+                    media.filter { !viewModel.isMediaProtected(it) }
                 } else emptyList()
             }
             ActiveTab.PERSONS -> {
                 if (selectedPerson != null && personContentState is GalleryUiState.Success) {
-                    (personContentState as GalleryUiState.Success).directory.media ?: emptyList()
+                    val media = (personContentState as GalleryUiState.Success).directory.media ?: emptyList()
+                    media.filter { !viewModel.isMediaProtected(it) }
                 } else emptyList()
             }
             else -> emptyList()
