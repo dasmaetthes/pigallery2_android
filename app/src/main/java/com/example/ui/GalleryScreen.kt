@@ -2513,7 +2513,7 @@ fun GalleryContentGrid(
     val cornerRadiusDp = cornerRadius.dp
 
 
-    val currentMediaSort = remember(subfolders, mediaList) { viewModel.getCurrentMediaSortBy().lowercase() }
+    val currentMediaSort = viewModel.getCurrentMediaSortBy().lowercase()
     val isDateSort = currentMediaSort == "date"
 
     val groupedMedia = remember(mediaList, isDateSort) {
@@ -3211,18 +3211,34 @@ fun SortDialog(
         val g_mSort = viewModel.prefs.getMediaSortBy(globalPath, defaultMSort)
         val g_mDir = viewModel.prefs.getMediaSortDirection(globalPath, defaultMDir)
 
-        var folderSortBy by remember { mutableStateOf(viewModel.prefs.getFolderSortBy(currentPath, g_fSort)) }
-        var folderSortDir by remember { mutableStateOf(viewModel.prefs.getFolderSortDirection(currentPath, g_fDir)) }
-
-        var mediaSortBy by remember { mutableStateOf(viewModel.prefs.getMediaSortBy(currentPath, g_mSort)) }
-        var mediaSortDir by remember { mutableStateOf(viewModel.prefs.getMediaSortDirection(currentPath, g_mDir)) }
-
-        // When inside an album or person, or when inside a specific folder with a custom sort, default to true
-        var currentFolderOnly by remember {
+        var folderSortBy by remember {
             mutableStateOf(
-                if (isInsideAlbum || isInsidePerson) true
-                else viewModel.hasSpecificSortForCurrentPath() || viewModel.currentPath.isNotBlank()
+                if (viewModel.prefs.hasFolderSort(currentPath)) viewModel.prefs.getFolderSortBy(currentPath, g_fSort)
+                else g_fSort
             )
+        }
+        var folderSortDir by remember {
+            mutableStateOf(
+                if (viewModel.prefs.hasFolderSort(currentPath)) viewModel.prefs.getFolderSortDirection(currentPath, g_fDir)
+                else g_fDir
+            )
+        }
+
+        var mediaSortBy by remember {
+            mutableStateOf(
+                if (viewModel.prefs.hasMediaSort(currentPath)) viewModel.prefs.getMediaSortBy(currentPath, g_mSort)
+                else g_mSort
+            )
+        }
+        var mediaSortDir by remember {
+            mutableStateOf(
+                if (viewModel.prefs.hasMediaSort(currentPath)) viewModel.prefs.getMediaSortDirection(currentPath, g_mDir)
+                else g_mDir
+            )
+        }
+
+        var currentFolderOnly by remember {
+            mutableStateOf(true)
         }
 
         val dialogTitle = when {

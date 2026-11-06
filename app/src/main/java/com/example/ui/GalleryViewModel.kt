@@ -329,10 +329,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val cover = folder.cache?.cover ?: return null
         val coverName = cover.name
         val coverDir = cover.directory
-        val dirPath = if (coverDir.path.isEmpty() || coverDir.path == ".") {
-            coverDir.name
-        } else {
-            "${coverDir.path}/${coverDir.name}"
+        val cleanDirPath = coverDir.path.replace('\\', '/').trim().trim('/').let {
+            if (it == "." || it == "./") "" else it.removePrefix("./").trim('/')
+        }
+        val cleanDirName = coverDir.name.replace('\\', '/').trim().trim('/').let {
+            if (it == "." || it == "./") "" else it.removePrefix("./").trim('/')
+        }
+        val dirPath = when {
+            cleanDirPath.isEmpty() -> cleanDirName
+            cleanDirName.isEmpty() -> cleanDirPath
+            else -> "$cleanDirPath/$cleanDirName"
         }
         val fullPath = if (dirPath.isEmpty()) coverName else "$dirPath/$coverName"
         val sanitizedBase = prefs.serverUrl.trimEnd('/')
@@ -393,7 +399,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun normalizeSortPath(path: String): String {
-        val clean = path.trim().replace('\\', '/').trim('/')
+        val clean = path.replace('\\', '/').trim().trim('/').let {
+            if (it == "." || it == "./") "" else it.removePrefix("./").trim('/')
+        }
         return clean.ifEmpty { "root" }
     }
 
@@ -409,8 +417,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
             else -> {
                 if (galleryViewMode.value == GalleryViewMode.DATE) {
-                    val path = currentPath.trim().replace('\\', '/').trim('/')
-                    if (path.isEmpty()) "date_mode_root" else "date_mode_$path"
+                    val path = normalizeSortPath(currentPath)
+                    if (path == "root") "date_mode_root" else "date_mode_$path"
                 } else {
                     normalizeSortPath(currentPath)
                 }
@@ -430,7 +438,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 if (album != null) {
                     val albumPath = "album_${album.name}"
                     val g_mSort = prefs.getMediaSortBy("global", "date")
-                    prefs.getMediaSortBy(albumPath, g_mSort)
+                    if (prefs.hasMediaSort(albumPath)) prefs.getMediaSortBy(albumPath, g_mSort) else g_mSort
                 } else "name"
             }
             ActiveTab.PERSONS -> {
@@ -438,7 +446,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 if (person != null) {
                     val personPath = "person_${person.name}"
                     val g_mSort = prefs.getMediaSortBy("global", "date")
-                    prefs.getMediaSortBy(personPath, g_mSort)
+                    if (prefs.hasMediaSort(personPath)) prefs.getMediaSortBy(personPath, g_mSort) else g_mSort
                 } else "name"
             }
             else -> {
@@ -446,7 +454,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val globalPath = if (isDateMode) "date_mode_global" else "global"
                 val g_mSort = prefs.getMediaSortBy(globalPath, "date")
                 val currentContextPath = getSortPath()
-                prefs.getMediaSortBy(currentContextPath, g_mSort)
+                if (prefs.hasMediaSort(currentContextPath)) {
+                    prefs.getMediaSortBy(currentContextPath, g_mSort)
+                } else {
+                    g_mSort
+                }
             }
         }
     }
@@ -480,7 +492,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         mediaSortDirection: String,
         currentFolderOnly: Boolean
     ) {
-        val path = if (currentFolderOnly) {
+        val targetPath = if (currentFolderOnly) {
             getSortPath()
         } else if (galleryViewMode.value == GalleryViewMode.DATE) {
             "date_mode_global"
@@ -488,10 +500,19 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             "global"
         }
         
-        prefs.setFolderSortBy(path, folderSortBy)
-        prefs.setFolderSortDirection(path, folderSortDirection)
-        prefs.setMediaSortBy(path, mediaSortBy)
-        prefs.setMediaSortDirection(path, mediaSortDirection)
+        prefs.setFolderSortBy(targetPath, folderSortBy)
+        prefs.setFolderSortDirection(targetPath, folderSortDirection)
+        prefs.setMediaSortBy(targetPath, mediaSortBy)
+        prefs.setMediaSortDirection(targetPath, mediaSortDirection)
+
+        if (!currentFolderOnly) {
+            // Clear folder-specific overrides so this folder follows global
+            val currentKey = getSortPath()
+            if (currentKey != targetPath) {
+                prefs.removeFolderSort(currentKey)
+                prefs.removeMediaSort(currentKey)
+            }
+        }
         
         if (_activeTab.value == ActiveTab.ALBUMS) {
             val album = _selectedAlbum.value
@@ -648,7 +669,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     if (isDateMode) {
                         getSortPath()
                     } else {
-                        val path = if (directory.path.isNotBlank()) directory.path else currentPath
+                        val path = if (currentPath.isNotBlank()) currentPath else directory.path
                         normalizeSortPath(path)
                     }
                 }
@@ -656,10 +677,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
             // Look up specific preference for this folder; if not set, fall back to global default!
             // This guarantees that "Only this folder" does NOT leak into subfolders or other folders!
-            val fSort = prefs.getFolderSortBy(contextPath, g_fSort)
-            val fDir = prefs.getFolderSortDirection(contextPath, g_fDir)
-            val mSort = prefs.getMediaSortBy(contextPath, g_mSort)
-            val mDir = prefs.getMediaSortDirection(contextPath, g_mDir)
+            val fSort = if (prefs.hasFolderSort(contextPath)) prefs.getFolderSortBy(contextPath, g_fSort) else g_fSort
+            val fDir = if (prefs.hasFolderSort(contextPath)) prefs.getFolderSortDirection(contextPath, g_fDir) else g_fDir
+            val mSort = if (prefs.hasMediaSort(contextPath)) prefs.getMediaSortBy(contextPath, g_mSort) else g_mSort
+            val mDir = if (prefs.hasMediaSort(contextPath)) prefs.getMediaSortDirection(contextPath, g_mDir) else g_mDir
             
             val fAsc = fDir.lowercase() == "asc"
             val mAsc = mDir.lowercase() == "asc"
@@ -697,12 +718,19 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     else media.sortedWith(compareByDescending(String.CASE_INSENSITIVE_ORDER) { it.name })
                 }
                 "date" -> {
-                    if (mAsc) media.sortedBy { 
-                        val time = DateUtils.getLocalTimeMs(it.metadata?.creationDate, it.metadata?.creationDateOffset)
-                        if (time <= 0L) Long.MAX_VALUE else time
-                    }
-                    else media.sortedByDescending { 
-                        DateUtils.getLocalTimeMs(it.metadata?.creationDate, it.metadata?.creationDateOffset)
+                    if (mAsc) {
+                        media.sortedWith(
+                            compareBy<ApiMedia> { 
+                                val time = DateUtils.getLocalTimeMs(it.metadata?.creationDate, it.metadata?.creationDateOffset)
+                                if (time <= 0L) Long.MAX_VALUE else time
+                            }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+                        )
+                    } else {
+                        media.sortedWith(
+                            compareByDescending<ApiMedia> { 
+                                DateUtils.getLocalTimeMs(it.metadata?.creationDate, it.metadata?.creationDateOffset)
+                            }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+                        )
                     }
                 }
                 "random" -> media.shuffled()
@@ -1268,14 +1296,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun enterFolder(folderPath: String) {
-        val clean = folderPath.trim('/').replace('\\', '/')
-        val fullPath = if (clean.startsWith(currentPath, ignoreCase = true) || currentPath.isEmpty()) {
-            clean
-        } else {
-            "$currentPath/$clean"
+        val clean = folderPath.replace('\\', '/').trim().trim('/').let {
+            if (it == "." || it == "./") "" else it.removePrefix("./").trim('/')
         }
         val currentStack = _pathHistory.value.toMutableList()
-        currentStack.add(fullPath)
+        currentStack.add(clean)
         _pathHistory.value = currentStack
         loadCurrentDirectory()
     }
@@ -1803,32 +1828,29 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun isFolderProtected(path: String): Boolean {
-        if (prefs.isFolderProtected(path)) return true
-
-        // If path is a subfolder relative to currentPath
-        val clean = path.trim('/').replace('\\', '/')
-        if (clean.isNotEmpty() && currentPath.isNotEmpty()) {
-            if (prefs.isFolderProtected(currentPath)) return true
-            val combined = "$currentPath/$clean"
-            if (prefs.isFolderProtected(combined)) return true
+        val clean = path.replace('\\', '/').trim().trim('/').let {
+            if (it == "." || it == "./") "" else it.removePrefix("./").trim('/')
         }
+        if (clean.isEmpty()) return false
 
-        // If any ancestor folder in current path history is protected
-        if (_pathHistory.value.any { it.isNotBlank() && prefs.isFolderProtected(it) }) {
-            return true
+        // Check against protected folders configured in prefs
+        if (prefs.isFolderProtected(clean)) return true
+
+        // If currently browsing inside a protected folder, subfolders inherit protection
+        if (currentPath.isNotEmpty() && prefs.isFolderProtected(currentPath)) {
+            if (clean == currentPath || clean.startsWith("$currentPath/")) {
+                return true
+            }
         }
 
         return false
     }
 
     fun isMediaFromProtectedFolder(media: ApiMedia): Boolean {
-        val parent = media.parentPath.orEmpty()
-        if (parent.isNotEmpty() && isFolderProtected(parent)) return true
-
-        val fullPath = getMediaFullPath(media)
-        if (fullPath.isNotEmpty() && isFolderProtected(fullPath)) return true
-
-        return false
+        val parent = media.parentPath.orEmpty().replace('\\', '/').trim().trim('/').let {
+            if (it == "." || it == "./") "" else it.removePrefix("./").trim('/')
+        }
+        return parent.isNotEmpty() && isFolderProtected(parent)
     }
 
     fun isMediaProtected(media: ApiMedia): Boolean {

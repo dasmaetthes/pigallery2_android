@@ -545,12 +545,17 @@ class PiGalleryApi(private val context: android.content.Context) {
         val name = (map["name"] as? String) ?: (map["n"] as? String) ?: ""
         val path = (map["path"] as? String) ?: (map["p"] as? String) ?: ""
         
-        val directoryFullPath = if (path.isEmpty() || path == "./") {
-            name
-        } else if (name.isEmpty() || name == ".") {
-            path.replace("./", "").trim('/')
-        } else {
-            "${path.replace("./", "").trim('/')}/$name"
+        val cleanParent = path.replace('\\', '/').trim().trim('/').let {
+            if (it == "." || it == "./") "" else it.removePrefix("./").trim('/')
+        }
+        val cleanName = name.replace('\\', '/').trim().trim('/').let {
+            if (it == "." || it == "./") "" else it.removePrefix("./").trim('/')
+        }
+        
+        val directoryFullPath = when {
+            cleanParent.isEmpty() -> cleanName
+            cleanName.isEmpty() -> cleanParent
+            else -> "$cleanParent/$cleanName"
         }
         
         val directoriesList = map["directories"] as? List<*>
@@ -566,17 +571,14 @@ class PiGalleryApi(private val context: android.content.Context) {
                 ?: (cache?.get("mediaCount") as? Number)?.toInt()
                 ?: 0
                 
-            val subFullPath = if (subPath.isEmpty() || subPath == "." || subPath == "./") {
-                if (directoryFullPath.isNotEmpty()) "$directoryFullPath/$subName" else subName
-            } else {
-                val cleanSub = subPath.replace("./", "").trim('/')
-                if (cleanSub.isEmpty()) {
-                    if (directoryFullPath.isNotEmpty()) "$directoryFullPath/$subName" else subName
-                } else if (!cleanSub.startsWith(directoryFullPath, ignoreCase = true) && directoryFullPath.isNotEmpty()) {
-                    "$directoryFullPath/$cleanSub/$subName"
-                } else {
-                    "$cleanSub/$subName"
-                }
+            val cleanSub = subPath.replace('\\', '/').trim().trim('/').let {
+                if (it == "." || it == "./") "" else it.removePrefix("./").trim('/')
+            }
+
+            val subFullPath = when {
+                directoryFullPath.isNotEmpty() -> "$directoryFullPath/$subName"
+                cleanSub.isNotEmpty() -> "$cleanSub/$subName"
+                else -> subName
             }
                 
             ApiSubFolder(subId, subName, subFullPath, mediaCount, parseSubFolderCache(cache))
@@ -602,7 +604,7 @@ class PiGalleryApi(private val context: android.content.Context) {
             ApiMedia(medId, medName, metadata, directoryFullPath)
         } ?: emptyList()
         
-        return ApiDirectory(id, name, path, directories, media)
+        return ApiDirectory(id, name, directoryFullPath, directories, media)
     }
 
     /**
