@@ -165,6 +165,10 @@ class PreferencesManager(context: Context) {
         prefs.edit().putString("folder_sort_direction_$path", value).apply()
     }
 
+    fun hasFolderSort(path: String): Boolean {
+        return prefs.contains("folder_sort_by_$path")
+    }
+
     fun getMediaSortBy(path: String = "global", fallback: String = "date"): String {
         return prefs.getString("media_sort_by_$path", null) ?: fallback
     }
@@ -177,6 +181,40 @@ class PreferencesManager(context: Context) {
     }
     fun setMediaSortDirection(path: String = "global", value: String) {
         prefs.edit().putString("media_sort_direction_$path", value).apply()
+    }
+
+    fun hasMediaSort(path: String): Boolean {
+        return prefs.contains("media_sort_by_$path")
+    }
+
+    // Dedicated Album Sorting (completely independent from folder sort)
+    fun getAlbumSortBy(fallback: String = "name"): String {
+        return prefs.getString("album_sort_by", null) ?: fallback
+    }
+    fun setAlbumSortBy(value: String) {
+        prefs.edit().putString("album_sort_by", value).apply()
+    }
+
+    fun getAlbumSortDirection(fallback: String = "asc"): String {
+        return prefs.getString("album_sort_direction", null) ?: fallback
+    }
+    fun setAlbumSortDirection(value: String) {
+        prefs.edit().putString("album_sort_direction", value).apply()
+    }
+
+    // Dedicated Person Sorting (completely independent from folder sort)
+    fun getPersonSortBy(fallback: String = "name"): String {
+        return prefs.getString("person_sort_by", null) ?: fallback
+    }
+    fun setPersonSortBy(value: String) {
+        prefs.edit().putString("person_sort_by", value).apply()
+    }
+
+    fun getPersonSortDirection(fallback: String = "asc"): String {
+        return prefs.getString("person_sort_direction", null) ?: fallback
+    }
+    fun setPersonSortDirection(value: String) {
+        prefs.edit().putString("person_sort_direction", value).apply()
     }
 
     var sortDirection: String
@@ -241,6 +279,14 @@ class PreferencesManager(context: Context) {
             current.add(clean)
         }
         prefs.edit().putStringSet(KEY_PROTECTED_FOLDERS, current).apply()
+    }
+
+    fun isFolderDirectlyProtected(path: String): Boolean {
+        if (path.isBlank()) return false
+        val clean = path.trim('/').replace("\\", "/")
+        return getProtectedFolders().any {
+            it.trim('/').replace("\\", "/").equals(clean, ignoreCase = true)
+        }
     }
 
     fun isFolderProtected(path: String): Boolean {

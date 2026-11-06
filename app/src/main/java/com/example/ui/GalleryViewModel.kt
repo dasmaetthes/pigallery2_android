@@ -392,6 +392,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun normalizeSortPath(path: String): String {
+        val clean = path.trim().replace('\\', '/').trim('/')
+        return clean.ifEmpty { "root" }
+    }
+
     fun getSortPath(): String {
         return when (_activeTab.value) {
             ActiveTab.ALBUMS -> {
@@ -404,13 +409,67 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
             else -> {
                 if (galleryViewMode.value == GalleryViewMode.DATE) {
-                    val path = currentPath
+                    val path = currentPath.trim().replace('\\', '/').trim('/')
                     if (path.isEmpty()) "date_mode_root" else "date_mode_$path"
                 } else {
-                    val path = currentPath
-                    if (path.isEmpty()) "global" else path
+                    normalizeSortPath(currentPath)
                 }
             }
+        }
+    }
+
+    fun hasSpecificSortForCurrentPath(): Boolean {
+        val pathKey = getSortPath()
+        return prefs.hasFolderSort(pathKey) || prefs.hasMediaSort(pathKey)
+    }
+
+    fun getCurrentMediaSortBy(): String {
+        return when (_activeTab.value) {
+            ActiveTab.ALBUMS -> {
+                val album = _selectedAlbum.value
+                if (album != null) {
+                    val albumPath = "album_${album.name}"
+                    val g_mSort = prefs.getMediaSortBy("global", "date")
+                    prefs.getMediaSortBy(albumPath, g_mSort)
+                } else "name"
+            }
+            ActiveTab.PERSONS -> {
+                val person = _selectedPerson.value
+                if (person != null) {
+                    val personPath = "person_${person.name}"
+                    val g_mSort = prefs.getMediaSortBy("global", "date")
+                    prefs.getMediaSortBy(personPath, g_mSort)
+                } else "name"
+            }
+            else -> {
+                val isDateMode = galleryViewMode.value == GalleryViewMode.DATE
+                val globalPath = if (isDateMode) "date_mode_global" else "global"
+                val g_mSort = prefs.getMediaSortBy(globalPath, "date")
+                val currentContextPath = getSortPath()
+                prefs.getMediaSortBy(currentContextPath, g_mSort)
+            }
+        }
+    }
+
+    fun updateAlbumSort(sortBy: String, sortDir: String) {
+        prefs.setAlbumSortBy(sortBy)
+        prefs.setAlbumSortDirection(sortDir)
+        val currentContent = _albumsState.value
+        if (currentContent is AlbumsUiState.Success) {
+            _albumsState.value = AlbumsUiState.Success(sortAlbums(currentContent.albums))
+        } else {
+            loadAlbums()
+        }
+    }
+
+    fun updatePersonSort(sortBy: String, sortDir: String) {
+        prefs.setPersonSortBy(sortBy)
+        prefs.setPersonSortDirection(sortDir)
+        val currentContent = _personsState.value
+        if (currentContent is PersonsUiState.Success) {
+            _personsState.value = PersonsUiState.Success(sortPersons(currentContent.persons))
+        } else {
+            loadPersons()
         }
     }
 
@@ -481,22 +540,26 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun sortAlbums(albums: List<com.example.data.ApiAlbum>): List<com.example.data.ApiAlbum> {
         return try {
-            val currentContextPath = getSortPath()
-            val g_fSort = prefs.getFolderSortBy("global")
-            val g_fDir = prefs.getFolderSortDirection("global")
+            val aSort = prefs.getAlbumSortBy("name")
+            val aDir = prefs.getAlbumSortDirection("asc")
+            val aAsc = aDir.lowercase() == "asc"
             
-            val fSort = prefs.getFolderSortBy(currentContextPath, g_fSort)
-            val fDir = prefs.getFolderSortDirection(currentContextPath, g_fDir)
-            
-            val fAsc = fDir == "asc"
-            
-            when (fSort.lowercase()) {
-                "name", "date" -> {
-                    if (fAsc) albums.sortedBy { it.name.lowercase() }
-                    else albums.sortedByDescending { it.name.lowercase() }
+            when (aSort.lowercase()) {
+                "name" -> {
+                    if (aAsc) albums.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+                    else albums.sortedWith(compareByDescending(String.CASE_INSENSITIVE_ORDER) { it.name })
+                }
+                "date" -> {
+                    if (aAsc) albums.sortedBy { 
+                        val t = it.cache?.youngestMedia ?: it.cache?.oldestMedia ?: 0L
+                        if (t <= 0L) Long.MAX_VALUE else t
+                    }
+                    else albums.sortedByDescending { 
+                        it.cache?.youngestMedia ?: it.cache?.oldestMedia ?: 0L 
+                    }
                 }
                 "count" -> {
-                    if (fAsc) albums.sortedBy { it.cache?.itemCount ?: 0 }
+                    if (aAsc) albums.sortedBy { it.cache?.itemCount ?: 0 }
                     else albums.sortedByDescending { it.cache?.itemCount ?: 0 }
                 }
                 "random" -> albums.shuffled()
@@ -509,22 +572,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun sortPersons(persons: List<com.example.data.ApiPerson>): List<com.example.data.ApiPerson> {
         return try {
-            val currentContextPath = getSortPath()
-            val g_fSort = prefs.getFolderSortBy("global")
-            val g_fDir = prefs.getFolderSortDirection("global")
+            val pSort = prefs.getPersonSortBy("name")
+            val pDir = prefs.getPersonSortDirection("asc")
+            val pAsc = pDir.lowercase() == "asc"
             
-            val fSort = prefs.getFolderSortBy(currentContextPath, g_fSort)
-            val fDir = prefs.getFolderSortDirection(currentContextPath, g_fDir)
-            
-            val fAsc = fDir == "asc"
-            
-            val sorted = when (fSort.lowercase()) {
-                "name", "date" -> {
-                    if (fAsc) persons.sortedBy { it.name.lowercase() }
-                    else persons.sortedByDescending { it.name.lowercase() }
+            val sorted = when (pSort.lowercase()) {
+                "name" -> {
+                    if (pAsc) persons.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+                    else persons.sortedWith(compareByDescending(String.CASE_INSENSITIVE_ORDER) { it.name })
                 }
                 "count" -> {
-                    if (fAsc) persons.sortedBy { it.cache?.count ?: 0 }
+                    if (pAsc) persons.sortedBy { it.cache?.count ?: 0 }
                     else persons.sortedByDescending { it.cache?.count ?: 0 }
                 }
                 "random" -> persons.shuffled()
@@ -562,7 +620,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun sortDirectory(directory: ApiDirectory): ApiDirectory {
         return try {
-            val currentContextPath = getSortPath()
             val isDateMode = galleryViewMode.value == GalleryViewMode.DATE
 
             val defaultFSort = if (isDateMode) "date" else "name"
@@ -576,10 +633,33 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             val g_mSort = prefs.getMediaSortBy(globalPath, defaultMSort)
             val g_mDir = prefs.getMediaSortDirection(globalPath, defaultMDir)
 
-            val fSort = prefs.getFolderSortBy(currentContextPath, g_fSort)
-            val fDir = prefs.getFolderSortDirection(currentContextPath, g_fDir)
-            val mSort = prefs.getMediaSortBy(currentContextPath, g_mSort)
-            val mDir = prefs.getMediaSortDirection(currentContextPath, g_mDir)
+            // Resolve context path specifically for this directory:
+            // When in gallery, directory.path is used (normalized), never defaulting to "global"
+            val contextPath = when (_activeTab.value) {
+                ActiveTab.ALBUMS -> {
+                    val album = _selectedAlbum.value
+                    if (album != null) "album_${album.name}" else "albums_root"
+                }
+                ActiveTab.PERSONS -> {
+                    val person = _selectedPerson.value
+                    if (person != null) "person_${person.name}" else "persons_root"
+                }
+                else -> {
+                    if (isDateMode) {
+                        getSortPath()
+                    } else {
+                        val path = if (directory.path.isNotBlank()) directory.path else currentPath
+                        normalizeSortPath(path)
+                    }
+                }
+            }
+
+            // Look up specific preference for this folder; if not set, fall back to global default!
+            // This guarantees that "Only this folder" does NOT leak into subfolders or other folders!
+            val fSort = prefs.getFolderSortBy(contextPath, g_fSort)
+            val fDir = prefs.getFolderSortDirection(contextPath, g_fDir)
+            val mSort = prefs.getMediaSortBy(contextPath, g_mSort)
+            val mDir = prefs.getMediaSortDirection(contextPath, g_mDir)
             
             val fAsc = fDir.lowercase() == "asc"
             val mAsc = mDir.lowercase() == "asc"
@@ -598,8 +678,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         if (fAsc) dirs.sortedBy { it.name.toIntOrNull() ?: 0 }
                         else dirs.sortedByDescending { it.name.toIntOrNull() ?: 0 }
                     } else {
-                        if (fAsc) dirs.sortedBy { it.name.lowercase() }
-                        else dirs.sortedByDescending { it.name.lowercase() }
+                        if (fAsc) dirs.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+                        else dirs.sortedWith(compareByDescending(String.CASE_INSENSITIVE_ORDER) { it.name })
                     }
                 }
                 "count" -> {
@@ -613,12 +693,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             val media = directory.media.orEmpty()
             val sortedMedia = when (mSort.lowercase()) {
                 "name" -> {
-                    if (mAsc) media.sortedBy { it.name.lowercase() }
-                    else media.sortedByDescending { it.name.lowercase() }
+                    if (mAsc) media.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+                    else media.sortedWith(compareByDescending(String.CASE_INSENSITIVE_ORDER) { it.name })
                 }
                 "date" -> {
-                    if (mAsc) media.sortedBy { DateUtils.getLocalTimeMs(it.metadata?.creationDate, it.metadata?.creationDateOffset) }
-                    else media.sortedByDescending { DateUtils.getLocalTimeMs(it.metadata?.creationDate, it.metadata?.creationDateOffset) }
+                    if (mAsc) media.sortedBy { 
+                        val time = DateUtils.getLocalTimeMs(it.metadata?.creationDate, it.metadata?.creationDateOffset)
+                        if (time <= 0L) Long.MAX_VALUE else time
+                    }
+                    else media.sortedByDescending { 
+                        DateUtils.getLocalTimeMs(it.metadata?.creationDate, it.metadata?.creationDateOffset)
+                    }
                 }
                 "random" -> media.shuffled()
                 else -> media
@@ -1183,8 +1268,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun enterFolder(folderPath: String) {
+        val clean = folderPath.trim('/').replace('\\', '/')
+        val fullPath = if (clean.startsWith(currentPath, ignoreCase = true) || currentPath.isEmpty()) {
+            clean
+        } else {
+            "$currentPath/$clean"
+        }
         val currentStack = _pathHistory.value.toMutableList()
-        currentStack.add(folderPath)
+        currentStack.add(fullPath)
         _pathHistory.value = currentStack
         loadCurrentDirectory()
     }
@@ -1707,8 +1798,27 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         hideProtectedItems.value = hide
     }
 
+    fun isFolderDirectlyProtected(path: String): Boolean {
+        return prefs.isFolderDirectlyProtected(path)
+    }
+
     fun isFolderProtected(path: String): Boolean {
-        return prefs.isFolderProtected(path)
+        if (prefs.isFolderProtected(path)) return true
+
+        // If path is a subfolder relative to currentPath
+        val clean = path.trim('/').replace('\\', '/')
+        if (clean.isNotEmpty() && currentPath.isNotEmpty()) {
+            if (prefs.isFolderProtected(currentPath)) return true
+            val combined = "$currentPath/$clean"
+            if (prefs.isFolderProtected(combined)) return true
+        }
+
+        // If any ancestor folder in current path history is protected
+        if (_pathHistory.value.any { it.isNotBlank() && prefs.isFolderProtected(it) }) {
+            return true
+        }
+
+        return false
     }
 
     fun isMediaFromProtectedFolder(media: ApiMedia): Boolean {

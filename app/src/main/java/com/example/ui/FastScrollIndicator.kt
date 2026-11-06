@@ -33,16 +33,22 @@ fun FastScrollIndicator(
     groupedMedia: Map<String, List<ApiMedia>>,
     subfolders: List<ApiSubFolder> = emptyList(),
     subfoldersCount: Int = subfolders.size,
+    hasHeaders: Boolean = true,
+    mediaList: List<ApiMedia> = emptyList(),
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
     val density = LocalDensity.current
 
     // Calculate total grid items count (subfolders + headers + media items)
-    val totalGridItemsCount = remember(subfoldersCount, groupedMedia) {
+    val totalGridItemsCount = remember(subfoldersCount, groupedMedia, hasHeaders, mediaList.size) {
         var count = subfoldersCount
-        for ((_, items) in groupedMedia) {
-            count += 1 + items.size // 1 for header + items.size
+        if (hasHeaders) {
+            for ((_, items) in groupedMedia) {
+                count += 1 + items.size // 1 for header + items.size
+            }
+        } else {
+            count += mediaList.size
         }
         count
     }
@@ -69,34 +75,42 @@ fun FastScrollIndicator(
         (activeFraction * (totalItems - 1)).roundToInt().coerceIn(0, totalItems - 1)
     }
 
-    val currentDateLabel = remember(activeIndex, groupedMedia, subfolders, subfoldersCount) {
-        if (groupedMedia.isEmpty() && subfoldersCount == 0) ""
+    val currentDateLabel = remember(activeIndex, groupedMedia, subfolders, subfoldersCount, hasHeaders, mediaList) {
+        if (groupedMedia.isEmpty() && subfoldersCount == 0 && mediaList.isEmpty()) ""
         else if (activeIndex < subfoldersCount) {
             val folder = subfolders.getOrNull(activeIndex)
             if (folder != null) "Folder: ${folder.name}" else "Folders"
         } else {
-            var indexTracker = subfoldersCount
-            var label = ""
-            for ((header, items) in groupedMedia) {
-                val groupStart = indexTracker
-                val groupEnd = indexTracker + 1 + items.size
-                if (activeIndex in groupStart until groupEnd) {
-                    val itemOffset = activeIndex - groupStart
-                    val media = if (itemOffset == 0) items.firstOrNull() else items.getOrNull(itemOffset - 1)
-                    if (media != null && media.metadata?.creationDate != null) {
-                        label = DateUtils.formatMediaDate(
-                            media.metadata?.creationDate,
-                            media.metadata?.creationDateOffset,
-                            "d. MMMM yyyy"
-                        )
-                    } else {
-                        label = header
+            if (hasHeaders) {
+                var indexTracker = subfoldersCount
+                var label = ""
+                for ((header, items) in groupedMedia) {
+                    val groupStart = indexTracker
+                    val groupEnd = indexTracker + 1 + items.size
+                    if (activeIndex in groupStart until groupEnd) {
+                        val itemOffset = activeIndex - groupStart
+                        val media = if (itemOffset == 0) items.firstOrNull() else items.getOrNull(itemOffset - 1)
+                        if (media != null && media.metadata?.creationDate != null) {
+                            label = DateUtils.formatMediaDate(
+                                media.metadata?.creationDate,
+                                media.metadata?.creationDateOffset,
+                                "d. MMMM yyyy"
+                            )
+                        } else {
+                            label = header
+                        }
+                        break
                     }
-                    break
+                    indexTracker = groupEnd
                 }
-                indexTracker = groupEnd
+                if (label.isEmpty()) groupedMedia.keys.firstOrNull() ?: "" else label
+            } else {
+                val mediaIndex = activeIndex - subfoldersCount
+                val media = mediaList.getOrNull(mediaIndex)
+                if (media != null) {
+                    media.name
+                } else ""
             }
-            if (label.isEmpty()) groupedMedia.keys.firstOrNull() ?: "" else label
         }
     }
 

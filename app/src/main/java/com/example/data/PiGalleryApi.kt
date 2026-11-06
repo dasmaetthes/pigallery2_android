@@ -567,9 +567,16 @@ class PiGalleryApi(private val context: android.content.Context) {
                 ?: 0
                 
             val subFullPath = if (subPath.isEmpty() || subPath == "." || subPath == "./") {
-                subName
+                if (directoryFullPath.isNotEmpty()) "$directoryFullPath/$subName" else subName
             } else {
-                "${subPath.replace("./", "").trim('/')}/$subName"
+                val cleanSub = subPath.replace("./", "").trim('/')
+                if (cleanSub.isEmpty()) {
+                    if (directoryFullPath.isNotEmpty()) "$directoryFullPath/$subName" else subName
+                } else if (!cleanSub.startsWith(directoryFullPath, ignoreCase = true) && directoryFullPath.isNotEmpty()) {
+                    "$directoryFullPath/$cleanSub/$subName"
+                } else {
+                    "$cleanSub/$subName"
+                }
             }
                 
             ApiSubFolder(subId, subName, subFullPath, mediaCount, parseSubFolderCache(cache))
