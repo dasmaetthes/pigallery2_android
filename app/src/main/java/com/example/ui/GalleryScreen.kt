@@ -2704,23 +2704,7 @@ fun GalleryContentGrid(
                         }
                     }
 
-                    // Protection Badge
-                    if (isFolderProtected) {
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(8.dp)
-                                .background(Color.Black.copy(alpha = 0.65f), CircleShape)
-                                .padding(5.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Lock,
-                                contentDescription = "Protected Folder",
-                                tint = Color.White,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                    }
+
                 }
             }
         }
