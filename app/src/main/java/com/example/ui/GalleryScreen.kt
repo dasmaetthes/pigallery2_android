@@ -2556,10 +2556,11 @@ fun GalleryContentGrid(
             val coverUrl = viewModel.getFolderCoverUrl(folder)
             val isFolderProtected = viewModel.isFolderProtected(folder.path)
             val isCurrentFolderAlreadyProtected = viewModel.currentPath.isNotEmpty() && viewModel.isFolderProtected(viewModel.currentPath)
+            val shouldShowLockAndBlur = isFolderProtected && !isCurrentFolderAlreadyProtected
 
             val handleFolderCardClick = {
                 // If user is already inside a protected folder session, subfolders do not need to be unlocked separately
-                if (isFolderProtected && !isCurrentFolderAlreadyProtected) {
+                if (shouldShowLockAndBlur) {
                     val activity = context.findActivity() as? androidx.fragment.app.FragmentActivity
                     if (activity != null) {
                         com.example.util.BiometricHelper.authenticate(
@@ -2628,10 +2629,10 @@ fun GalleryContentGrid(
                             contentScale = ContentScale.Crop,
                             modifier = Modifier
                                 .fillMaxSize()
-                                .then(if (isFolderProtected) Modifier.blur(25.dp) else Modifier)
+                                .then(if (shouldShowLockAndBlur) Modifier.blur(25.dp) else Modifier)
                         )
 
-                        if (isFolderProtected) {
+                        if (shouldShowLockAndBlur) {
                             // Frosted privacy scrim to blur/obscure thumbnail across all Android versions
                             Box(
                                 modifier = Modifier
