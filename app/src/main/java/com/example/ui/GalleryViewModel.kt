@@ -1712,8 +1712,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun isMediaFromProtectedFolder(media: ApiMedia): Boolean {
-        val parent = media.parentPath ?: ""
-        return isFolderProtected(parent)
+        val parent = media.parentPath.orEmpty()
+        if (parent.isNotEmpty() && isFolderProtected(parent)) return true
+
+        val fullPath = getMediaFullPath(media)
+        if (fullPath.isNotEmpty() && isFolderProtected(fullPath)) return true
+
+        return false
     }
 
     fun isMediaProtected(media: ApiMedia): Boolean {

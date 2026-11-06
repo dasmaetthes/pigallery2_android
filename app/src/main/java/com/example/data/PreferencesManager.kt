@@ -246,14 +246,62 @@ class PreferencesManager(context: Context) {
     fun isFolderProtected(path: String): Boolean {
         if (path.isBlank()) return false
         val clean = path.trim('/').replace("\\", "/")
-        return getProtectedFolders().any {
-            val p = it.trim('/').replace("\\", "/")
+        if (clean.isEmpty()) return false
+        val cleanSegments = clean.split('/').filter { it.isNotBlank() }
+        if (cleanSegments.isEmpty()) return false
+
+        val protectedSet = getProtectedFolders()
+        if (protectedSet.isEmpty()) return false
+
+        return protectedSet.any { protectedPath ->
+            val p = protectedPath.trim('/').replace("\\", "/")
             if (p.isEmpty()) return@any false
-            clean.equals(p, ignoreCase = true) ||
+
+            // 1. Direct string comparison checks
+            if (clean.equals(p, ignoreCase = true) ||
                 clean.startsWith("$p/", ignoreCase = true) ||
                 clean.endsWith("/$p", ignoreCase = true) ||
                 clean.contains("/$p/", ignoreCase = true)
+            ) {
+                return@any true
+            }
+
+            val pSegments = p.split('/').filter { it.isNotBlank() }
+            if (pSegments.isEmpty()) return@any false
+
+            // 2. Check if pSegments appears contiguously inside cleanSegments
+            if (containsSubList(cleanSegments, pSegments)) {
+                return@any true
+            }
+
+            // 3. Check if cleanSegments appears contiguously inside pSegments
+            if (containsSubList(pSegments, cleanSegments)) {
+                return@any true
+            }
+
+            // 4. Fallback: match on the protected folder name (the last segment of p)
+            val pFolderName = pSegments.last()
+            if (cleanSegments.any { it.equals(pFolderName, ignoreCase = true) }) {
+                return@any true
+            }
+
+            false
         }
+    }
+
+    private fun containsSubList(target: List<String>, sub: List<String>): Boolean {
+        if (sub.isEmpty() || target.isEmpty() || sub.size > target.size) return false
+        for (i in 0..(target.size - sub.size)) {
+            var matches = true
+            for (j in sub.indices) {
+                if (!target[i + j].equals(sub[j], ignoreCase = true)) {
+                    matches = false
+                    break
+                }
+            }
+            if (matches) return true
+        }
+        return false
     }
 
     fun clear() {

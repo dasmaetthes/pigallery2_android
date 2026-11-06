@@ -2301,8 +2301,9 @@ fun AlbumCard(
         Box(modifier = Modifier.fillMaxSize()) {
             val coverName = album.cache?.coverName
             val coverDirectory = album.cache?.coverDirectory
+            val isCoverProtected = coverDirectory != null && viewModel.isFolderProtected(coverDirectory)
 
-            if (coverName != null && coverDirectory != null) {
+            if (coverName != null && coverDirectory != null && !isCoverProtected) {
                 val imageRequest = ImageRequest.Builder(context)
                     .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
                     .diskCachePolicy(coil.request.CachePolicy.ENABLED)

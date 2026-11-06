@@ -668,14 +668,23 @@ class PiGalleryApi(private val context: android.content.Context) {
             val mediaMap = item as? Map<*, *> ?: return@mapNotNull null
             val medName = (mediaMap["name"] as? String) ?: (mediaMap["n"] as? String) ?: ""
             
-            // Find parent path from map directories index or directory object
-            val dIndex = (mediaMap["d"] as? Number)?.toInt()
+            // Find parent path from map directories index, directory object, or direct string
+            val dirStr = (mediaMap["directory"] as? String)
+                ?: (mediaMap["dir"] as? String)
+                ?: (mediaMap["parentPath"] as? String)
+                ?: (mediaMap["path"] as? String)
+                ?: (mediaMap["p"] as? String)
+
             val dirObj = mediaMap["directory"] as? Map<*, *> ?: mediaMap["dir"] as? Map<*, *>
             val dirNameFromObj = (dirObj?.get("name") as? String) ?: (dirObj?.get("n") as? String) ?: ""
             val dirPathFromObj = (dirObj?.get("path") as? String) ?: (dirObj?.get("p") as? String) ?: ""
             val pathFromObj = if (dirPathFromObj.isEmpty()) dirNameFromObj else if (dirNameFromObj.isEmpty()) dirPathFromObj else "$dirPathFromObj/$dirNameFromObj"
 
-            val parentPath = if (pathFromObj.isNotBlank()) {
+            val dIndex = (mediaMap["d"] as? Number)?.toInt()
+
+            val parentPath = if (!dirStr.isNullOrBlank()) {
+                dirStr.replace("./", "").trim('/')
+            } else if (pathFromObj.isNotBlank()) {
                 pathFromObj.replace("./", "").trim('/')
             } else if (dIndex != null && mapDirectories != null && dIndex in mapDirectories.indices) {
                 val dirMap = mapDirectories[dIndex] as? Map<*, *>
@@ -684,7 +693,7 @@ class PiGalleryApi(private val context: android.content.Context) {
                 val joined = if (dirPath.isEmpty()) dirName else if (dirName.isEmpty()) dirPath else "$dirPath/$dirName"
                 joined.replace("./", "").trim('/')
             } else {
-                ((mediaMap["parentPath"] as? String) ?: (mediaMap["path"] as? String) ?: (mediaMap["p"] as? String) ?: "").replace("./", "").trim('/')
+                ""
             }
             val medId = (mediaMap["id"] as? Number)?.toInt() ?: ("$parentPath/$medName").hashCode()
             
