@@ -240,6 +240,7 @@ fun GalleryScreen(
     }
     val isFlattened by viewModel.isFlattened.collectAsState()
     val galleryViewMode by viewModel.galleryViewMode.collectAsState()
+    val defaultRootPath by viewModel.defaultRootPath.collectAsState()
     val searchSuggestions by viewModel.searchSuggestions.collectAsState()
     var showAboutDialog by remember { mutableStateOf(false) }
     var showQueryBuilder by remember { mutableStateOf(false) }
@@ -352,7 +353,7 @@ fun GalleryScreen(
                                 if (galleryViewMode == GalleryViewMode.DATE) {
                                     val currentPath = pathHistory.lastOrNull() ?: ""
                                     when {
-                                        currentPath.isEmpty() || currentPath == viewModel.defaultRootPath.value -> "Gallery"
+                                        currentPath.isEmpty() || currentPath == defaultRootPath -> "Gallery"
                                         currentPath.startsWith("year:") && !currentPath.contains("month:") -> currentPath.substringAfter("year:")
                                         currentPath.contains("month:") -> {
                                             val year = currentPath.substringAfter("year:").substringBefore("/")
@@ -3457,9 +3458,7 @@ fun PersonsTabContent(viewModel: GalleryViewModel) {
 @Composable
 fun PersonItem(modifier: Modifier = Modifier, person: com.example.data.ApiPerson, viewModel: GalleryViewModel, onClick: () -> Unit) {
     val context = LocalContext.current
-    val serverUrl = viewModel.prefs.serverUrl ?: ""
-    val apiPrefix = viewModel.prefs.apiPrefix
-    val thumbnailUrl = "${serverUrl}${apiPrefix}/person/${person.name}/thumbnail"
+    val thumbnailUrl = viewModel.getPersonThumbnailUrl(person)
     val cookies = viewModel.prefs.cookies
     val cornerRadius by viewModel.cornerRadius.collectAsState()
     val aspectRatio by viewModel.aspectRatio.collectAsState()

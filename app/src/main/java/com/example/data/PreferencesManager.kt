@@ -13,6 +13,7 @@ class PreferencesManager(context: Context) {
         private const val KEY_USERNAME = "username"
         private const val KEY_PASSWORD = "password"
         private const val KEY_COOKIES = "cookies"
+        private const val KEY_CSRF_TOKEN = "csrf_token"
         private const val KEY_IS_LOGGED_IN = "is_logged_in"
         private const val KEY_API_PREFIX = "api_prefix"
         private const val KEY_REDISCOVER_DAYS = "rediscover_days"
@@ -95,12 +96,16 @@ class PreferencesManager(context: Context) {
         get() = prefs.getString(KEY_COOKIES, "") ?: ""
         set(value) = prefs.edit().putString(KEY_COOKIES, value).apply()
 
+    var csrfToken: String
+        get() = prefs.getString(KEY_CSRF_TOKEN, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_CSRF_TOKEN, value).apply()
+
     var isLoggedIn: Boolean
         get() = prefs.getBoolean(KEY_IS_LOGGED_IN, false)
         set(value) = prefs.edit().putBoolean(KEY_IS_LOGGED_IN, value).apply()
 
     var apiPrefix: String
-        get() = prefs.getString(KEY_API_PREFIX, "/api") ?: "/api"
+        get() = prefs.getString(KEY_API_PREFIX, "/pgapi") ?: "/pgapi"
         set(value) = prefs.edit().putString(KEY_API_PREFIX, value).apply()
 
     var rediscoverDays: Int

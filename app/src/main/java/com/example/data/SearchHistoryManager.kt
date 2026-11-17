@@ -49,7 +49,7 @@ class SearchHistoryManager(private val context: Context) {
             
             // Trim size
             while (list.size > MAX_HISTORY_SIZE) {
-                list.removeLast()
+                list.removeAt(list.lastIndex)
             }
             
             preferences[HISTORY_KEY] = JSONArray(list).toString()

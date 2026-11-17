@@ -563,11 +563,9 @@ fun MediaViewerDialog(
         (contextActivity as? android.app.Activity)?.window
     }
 
-    // Keep screen on when slideshow is playing
-    DisposableEffect(isSlideshowPlaying, window) {
-        if (isSlideshowPlaying) {
-            window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        }
+    // Keep screen on when on fullscreen media viewer
+    DisposableEffect(window) {
+        window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         onDispose {
             window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
@@ -764,6 +762,7 @@ fun MediaViewerDialog(
                     ) {
                         MetadataContent(
                             media = currentMedia,
+                            viewModel = viewModel,
                             onClose = { showMetadata = false }
                         )
                     }
@@ -792,6 +791,7 @@ fun MediaViewerDialog(
                     ) {
                         MetadataContent(
                             media = currentMedia,
+                            viewModel = viewModel,
                             onClose = { showMetadata = false }
                         )
                     }
@@ -1096,40 +1096,24 @@ fun formatFileSize(bytes: Long): String {
 }
 
 @Composable
-fun MetadataContent(media: ApiMedia, onClose: () -> Unit) {
+fun MetadataContent(media: ApiMedia, viewModel: GalleryViewModel, onClose: () -> Unit) {
     var currentFileSize by remember(media.id) { mutableStateOf(media.metadata?.fileSize) }
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val prefs = remember(context) { PreferencesManager(context) }
 
     LaunchedEffect(media.id, currentFileSize) {
         if (currentFileSize == null || currentFileSize == 0L) {
-            val server = prefs.serverUrl
-            val base = if (server.isNotBlank() && !server.startsWith("http")) "http://$server" else server
-            val sanitizedBase = base.trimEnd('/')
-            val apiPrefix = prefs.apiPrefix
-            val encodedName = java.net.URLEncoder.encode(media.name, "UTF-8").replace("+", "%20")
-            val relativePath = if (!media.parentPath.isNullOrEmpty()) {
-                val pathClean = media.parentPath.trim('/').split("/").joinToString("/") {
-                    java.net.URLEncoder.encode(it, "UTF-8").replace("+", "%20")
-                }
-                "$pathClean/$encodedName"
-            } else {
-                encodedName
-            }
-            val mediaUrl = "$sanitizedBase$apiPrefix/gallery/content/$relativePath"
-            if (sanitizedBase.isNotBlank()) {
+            val mediaUrl = viewModel.getOriginalMediaUrl(media)
+            if (mediaUrl.startsWith("http")) {
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     try {
-                        val client = OkHttpClient()
                         val req = Request.Builder()
                             .url(mediaUrl)
                             .apply {
-                                val userCookies = prefs.cookies
+                                val userCookies = viewModel.getCookiesHeader()
                                 if (userCookies.isNotEmpty()) addHeader("Cookie", userCookies)
                             }
                             .head()
                             .build()
-                        client.newCall(req).execute().use { resp ->
+                        viewModel.api.client.newCall(req).execute().use { resp ->
                             val len = resp.header("Content-Length")?.toLongOrNull()
                             if (len != null && len > 0) {
                                 currentFileSize = len

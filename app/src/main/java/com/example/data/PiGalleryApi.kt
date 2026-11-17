@@ -350,32 +350,68 @@ class PiGalleryApi(private val context: android.content.Context) {
     private val loginAdapter = moshi.adapter(LoginResponse::class.java)
     private val galleryAdapter = moshi.adapter(GalleryResponse::class.java)
 
+    private fun extractSessionCookies(cookieHeaders: List<String>): String {
+        val pairs = cookieHeaders.mapNotNull { header ->
+            val nameValue = header.substringBefore(";").trim()
+            val eqIdx = nameValue.indexOf('=')
+            if (eqIdx <= 0) return@mapNotNull null
+            val name = nameValue.substring(0, eqIdx).trim()
+            val value = nameValue.substring(eqIdx + 1).trim()
+            if (name.isEmpty() || value.isEmpty()) null else "$name=$value"
+        }
+        val preferred = pairs.filter {
+            val lower = it.lowercase()
+            lower.startsWith("pigallery") || lower.startsWith("connect.sid=")
+        }
+        return (if (preferred.isNotEmpty()) preferred else pairs).joinToString("; ")
+    }
+
+    private fun cleanServerPath(path: String?): String {
+        if (path.isNullOrBlank()) return ""
+        return path.replace('\\', '/').trim().trim('/').let {
+            if (it == "." || it == "./") "" else it.removePrefix("./").trim('/')
+        }
+    }
+
+    private fun encodeUrlPath(path: String): String {
+        val cleaned = cleanServerPath(path)
+        if (cleaned.isEmpty()) return ""
+        return cleaned.split('/')
+            .filter { it.isNotEmpty() }
+            .joinToString("/") { URLEncoder.encode(it, "UTF-8").replace("+", "%20") }
+    }
+
+    private fun isHtmlResponse(body: String): Boolean {
+        val trimmed = body.trimStart()
+        return trimmed.startsWith("<")
+    }
+
     /**
      * Performs a login request on the PiGallery2 server.
      * Returns the cookie string and detected prefix if successful, throws exception on failure.
      */
     fun login(serverUrl: String, username: String, password: String): Pair<String, String> {
         val sanitizedUrl = serverUrl.trimEnd('/')
-        // Try the official default prefix "/api" first, then fallback to "/pgapi"
-        val prefixes = listOf("/api", "/pgapi")
+        // Modern PiGallery2 (v2/v3+) uses "/pgapi" by default; keep "/api" as fallback
+        val prefixes = listOf("/pgapi", "/api")
         var lastException: Exception? = null
+
+        val mapType = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
+        val mapAdapter = moshi.adapter<Map<String, Any?>>(mapType)
 
         // 1. Try normal POST login for each prefix (if username is not blank)
         if (username.isNotBlank()) {
+            val loginPayload = mapOf(
+                "loginCredential" to mapOf(
+                    "username" to username,
+                    "password" to password,
+                    "rememberMe" to true
+                )
+            )
+            val jsonBody = mapAdapter.toJson(loginPayload)
+
             for (prefix in prefixes) {
                 val endpoint = "$sanitizedUrl$prefix/user/login"
-
-                // Build login credential body
-                val jsonBody = """
-                    {
-                      "loginCredential": {
-                        "username": "$username",
-                        "password": "$password",
-                        "rememberMe": true
-                      }
-                    }
-                """.trimIndent()
-
                 val requestBody = jsonBody.toRequestBody("application/json; charset=utf-8".toMediaType())
                 val request = Request.Builder()
                     .url(endpoint)
@@ -389,24 +425,27 @@ class PiGalleryApi(private val context: android.content.Context) {
                         }
 
                         val bodyString = response.body?.string() ?: throw IOException("Empty response from server")
-                        
+
                         if (!response.isSuccessful) {
                             throw IOException("Server returned error code: ${response.code}")
                         }
 
-                        val loginResponse = loginAdapter.fromJson(bodyString)
-                        if (loginResponse?.error != null) {
-                            throw IOException(loginResponse.error)
+                        if (isHtmlResponse(bodyString)) {
+                            throw IOException("Server returned HTML instead of JSON on $prefix/user/login")
                         }
 
-                        // Extract pigallery cookies from Set-Cookie headers
-                        val cookieHeaders = response.headers("Set-Cookie")
-                        val filteredCookies = cookieHeaders
-                            .flatMap { it.split(";") }
-                            .map { it.trim() }
-                            .filter { it.startsWith("pigallery") }
-                            .joinToString("; ")
+                        val loginResponse = loginAdapter.fromJson(bodyString)
+                            ?: throw IOException("Invalid JSON response from server")
+                        if (loginResponse.error != null) {
+                            throw IOException(loginResponse.error)
+                        }
+                        if (loginResponse.result == null) {
+                            throw IOException("Login response missing result object")
+                        }
 
+                        prefs.csrfToken = loginResponse.result.csrfToken.orEmpty()
+
+                        val filteredCookies = extractSessionCookies(response.headers("Set-Cookie"))
                         if (filteredCookies.isEmpty()) {
                             throw IOException("No session cookie returned by the server. Check your configuration.")
                         }
@@ -432,26 +471,19 @@ class PiGalleryApi(private val context: android.content.Context) {
                 client.newCall(request).execute().use { response ->
                     if (response.isSuccessful) {
                         val bodyString = response.body?.string() ?: ""
-                        val mapType = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
-                        val mapAdapter = moshi.adapter<Map<String, Any?>>(mapType)
+                        if (isHtmlResponse(bodyString)) return@use
                         val responseMap = try {
                             mapAdapter.fromJson(bodyString)
                         } catch (e: Exception) {
                             null
                         }
-                        
+
                         val result = responseMap?.get("result") as? Map<String, Any?>
                         val directory = result?.get("directory") as? Map<String, Any?>
-                        
-                        if (directory != null) {
-                            // Extract any pigallery cookies from the public access response
-                            val cookieHeaders = response.headers("Set-Cookie")
-                            val filteredCookies = cookieHeaders
-                                .flatMap { it.split(";") }
-                                .map { it.trim() }
-                                .filter { it.startsWith("pigallery") }
-                                .joinToString("; ")
 
+                        if (directory != null) {
+                            prefs.csrfToken = ""
+                            val filteredCookies = extractSessionCookies(response.headers("Set-Cookie"))
                             return Pair(filteredCookies, prefix)
                         }
                     }
@@ -468,21 +500,24 @@ class PiGalleryApi(private val context: android.content.Context) {
      * Serializes search query map to JSON string.
      */
     fun serializeQuery(query: Map<String, Any?>): String {
-        fun cleanMap(map: Map<String, Any?>): Map<String, Any?> {
-            val result = mutableMapOf<String, Any?>()
-            for ((k, v) in map) {
-                if (v is Double && v % 1.0 == 0.0) {
-                    result[k] = v.toLong()
-                } else if (v is Map<*, *>) {
-                    @Suppress("UNCHECKED_CAST")
-                    result[k] = cleanMap(v as Map<String, Any?>)
-                } else {
-                    result[k] = v
+        fun cleanValue(value: Any?): Any? {
+            return when (value) {
+                is Double -> if (value % 1.0 == 0.0) value.toLong() else value
+                is Map<*, *> -> {
+                    val result = mutableMapOf<String, Any?>()
+                    for ((k, v) in value) {
+                        if (k != null) {
+                            result[k.toString()] = cleanValue(v)
+                        }
+                    }
+                    result
                 }
+                is List<*> -> value.map { cleanValue(it) }
+                else -> value
             }
-            return result
         }
-        val cleanedQuery = cleanMap(query)
+        @Suppress("UNCHECKED_CAST")
+        val cleanedQuery = cleanValue(query) as Map<String, Any?>
         val mapType = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
         val adapter = moshi.adapter<Map<String, Any?>>(mapType)
         return adapter.toJson(cleanedQuery)
@@ -493,10 +528,7 @@ class PiGalleryApi(private val context: android.content.Context) {
      */
     fun getGalleryContent(serverUrl: String, relativePath: String, cookies: String, apiPrefix: String): ApiDirectory {
         val sanitizedUrl = serverUrl.trimEnd('/')
-        // URL encode the path segments
-        val encodedPath = relativePath.split('/')
-            .joinToString("/") { URLEncoder.encode(it, "UTF-8").replace("+", "%20") }
-        
+        val encodedPath = encodeUrlPath(relativePath)
         val endpoint = "$sanitizedUrl$apiPrefix/gallery/content/$encodedPath"
 
         val builder = Request.Builder()
@@ -516,16 +548,19 @@ class PiGalleryApi(private val context: android.content.Context) {
                 }
                 throw IOException("Server returned error code: ${response.code}")
             }
-            val source = response.body?.source() ?: throw IOException("Empty response from gallery content endpoint")
+            val bodyString = response.body?.string() ?: throw IOException("Empty response from gallery content endpoint")
+            if (isHtmlResponse(bodyString)) {
+                throw IOException("Server returned HTML instead of JSON. Check your API prefix or session.")
+            }
 
             val mapType = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
             val mapAdapter = moshi.adapter<Map<String, Any?>>(mapType)
             val responseMap = try {
-                mapAdapter.fromJson(source)
+                mapAdapter.fromJson(bodyString)
             } catch (e: Exception) {
                 throw IOException("Failed to parse server response as JSON: ${e.message}")
             }
-            
+
             val errorObj = responseMap?.get("error")
             if (errorObj != null) {
                 throw IOException("Server returned error: $errorObj")
@@ -534,7 +569,7 @@ class PiGalleryApi(private val context: android.content.Context) {
             val result = responseMap?.get("result") as? Map<String, Any?>
             val directoryMap = result?.get("directory") as? Map<String, Any?>
                 ?: throw IOException("Invalid response structure: 'directory' is missing")
-                
+
             val cwMap = result?.get("map") as? Map<String, Any?>
             return parseDirectory(directoryMap, cwMap)
         }
@@ -544,53 +579,48 @@ class PiGalleryApi(private val context: android.content.Context) {
         val id = (map["id"] as? Number)?.toInt()
         val name = (map["name"] as? String) ?: (map["n"] as? String) ?: ""
         val path = (map["path"] as? String) ?: (map["p"] as? String) ?: ""
-        
-        val cleanParent = path.replace('\\', '/').trim().trim('/').let {
-            if (it == "." || it == "./") "" else it.removePrefix("./").trim('/')
-        }
-        val cleanName = name.replace('\\', '/').trim().trim('/').let {
-            if (it == "." || it == "./") "" else it.removePrefix("./").trim('/')
-        }
-        
+
+        val cleanParent = cleanServerPath(path)
+        val cleanName = cleanServerPath(name)
+
         val directoryFullPath = when {
             cleanParent.isEmpty() -> cleanName
             cleanName.isEmpty() -> cleanParent
             else -> "$cleanParent/$cleanName"
         }
-        
+
         val directoriesList = map["directories"] as? List<*>
         val directories = directoriesList?.mapNotNull { item ->
             val dirMap = item as? Map<*, *> ?: return@mapNotNull null
             val subId = (dirMap["id"] as? Number)?.toInt()
             val subName = (dirMap["name"] as? String) ?: (dirMap["n"] as? String) ?: ""
             val subPath = (dirMap["path"] as? String) ?: (dirMap["p"] as? String) ?: ""
-            
+
             val cache = dirMap["cache"] as? Map<*, *>
             val mediaCount = (dirMap["mediaCount"] as? Number)?.toInt()
                 ?: (cache?.get("recursiveMediaCount") as? Number)?.toInt()
                 ?: (cache?.get("mediaCount") as? Number)?.toInt()
                 ?: 0
-                
-            val cleanSub = subPath.replace('\\', '/').trim().trim('/').let {
-                if (it == "." || it == "./") "" else it.removePrefix("./").trim('/')
-            }
+
+            val cleanSub = cleanServerPath(subPath)
+            val cleanSubName = cleanServerPath(subName)
 
             val subFullPath = when {
-                directoryFullPath.isNotEmpty() -> "$directoryFullPath/$subName"
-                cleanSub.isNotEmpty() -> "$cleanSub/$subName"
-                else -> subName
+                directoryFullPath.isNotEmpty() -> if (cleanSubName.isNotEmpty()) "$directoryFullPath/$cleanSubName" else directoryFullPath
+                cleanSub.isNotEmpty() -> if (cleanSubName.isNotEmpty()) "$cleanSub/$cleanSubName" else cleanSub
+                else -> cleanSubName
             }
-                
+
             ApiSubFolder(subId, subName, subFullPath, mediaCount, parseSubFolderCache(cache))
         } ?: emptyList()
-        
+
         val mediaList = map["media"] as? List<*>
         val media = mediaList?.mapNotNull { item ->
             val mediaMap = item as? Map<*, *> ?: return@mapNotNull null
             val medName = (mediaMap["name"] as? String) ?: (mediaMap["n"] as? String) ?: ""
             val medId = (mediaMap["id"] as? Number)?.toInt() ?: ("$directoryFullPath/$medName").hashCode()
             val medFileSize = (mediaMap["fileSize"] as? Number ?: mediaMap["file_size"] as? Number ?: mediaMap["s"] as? Number ?: mediaMap["fs"] as? Number)?.toLong()
-            
+
             val metaMap = (mediaMap["metadata"] as? Map<*, *>) ?: (mediaMap["m"] as? Map<*, *>)
             val metadata = if (metaMap != null) {
                 val parsed = parseMetadata(metaMap, cwMap)
@@ -600,10 +630,10 @@ class PiGalleryApi(private val context: android.content.Context) {
             } else {
                 null
             }
-            
+
             ApiMedia(medId, medName, metadata, directoryFullPath)
         } ?: emptyList()
-        
+
         return ApiDirectory(id, name, directoryFullPath, directories, media)
     }
 
@@ -614,7 +644,7 @@ class PiGalleryApi(private val context: android.content.Context) {
         val sanitizedUrl = serverUrl.trimEnd('/')
         val encodedQuery = URLEncoder.encode(searchQueryJson, "UTF-8").replace("+", "%20")
         val endpoint = "$sanitizedUrl$apiPrefix/search/$encodedQuery"
-        
+
         Log.d("PiGalleryApi", "Search endpoint: $endpoint")
         Log.d("PiGalleryApi", "Search query JSON: $searchQueryJson")
 
@@ -629,19 +659,28 @@ class PiGalleryApi(private val context: android.content.Context) {
         val request = builder.build()
 
         client.newCall(request).execute().use { response ->
+            if (response.code == 204) {
+                return ApiDirectory(-1, "Search Results", "", emptyList(), emptyList())
+            }
             if (!response.isSuccessful) {
+                if (response.code == 401) {
+                    throw IOException("Unauthorized. Session might have expired.")
+                }
                 throw IOException("Server returned error code: ${response.code}")
             }
-            val source = response.body?.source() ?: throw IOException("Empty response from search endpoint")
+            val bodyString = response.body?.string() ?: throw IOException("Empty response from search endpoint")
+            if (isHtmlResponse(bodyString)) {
+                throw IOException("Server returned HTML instead of JSON. Check your API prefix or session.")
+            }
 
             val mapType = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
             val mapAdapter = moshi.adapter<Map<String, Any?>>(mapType)
             val responseMap = try {
-                mapAdapter.fromJson(source)
+                mapAdapter.fromJson(bodyString)
             } catch (e: Exception) {
                 throw IOException("Failed to parse server response as JSON: ${e.message}")
             }
-            
+
             val errorObj = responseMap?.get("error")
             if (errorObj != null) {
                 throw IOException("Server returned error: $errorObj")
@@ -668,15 +707,15 @@ class PiGalleryApi(private val context: android.content.Context) {
         val result = map["result"] as? Map<String, Any?> ?: throw IOException("Invalid response structure")
         val mapObj = result["map"] as? Map<String, Any?>
         val mapDirectories = mapObj?.get("directories") as? List<*>
-        
+
         val searchResult = result["searchResult"] as? Map<String, Any?>
             ?: throw IOException("No searchResult found in response")
-            
+
         val mediaList = searchResult["media"] as? List<*>
         val media = mediaList?.mapNotNull { item ->
             val mediaMap = item as? Map<*, *> ?: return@mapNotNull null
             val medName = (mediaMap["name"] as? String) ?: (mediaMap["n"] as? String) ?: ""
-            
+
             // Find parent path from map directories index, directory object, or direct string
             val dirStr = (mediaMap["directory"] as? String)
                 ?: (mediaMap["dir"] as? String)
@@ -685,53 +724,77 @@ class PiGalleryApi(private val context: android.content.Context) {
                 ?: (mediaMap["p"] as? String)
 
             val dirObj = mediaMap["directory"] as? Map<*, *> ?: mediaMap["dir"] as? Map<*, *>
-            val dirNameFromObj = (dirObj?.get("name") as? String) ?: (dirObj?.get("n") as? String) ?: ""
-            val dirPathFromObj = (dirObj?.get("path") as? String) ?: (dirObj?.get("p") as? String) ?: ""
-            val pathFromObj = if (dirPathFromObj.isEmpty()) dirNameFromObj else if (dirNameFromObj.isEmpty()) dirPathFromObj else "$dirPathFromObj/$dirNameFromObj"
+            val dirNameFromObj = cleanServerPath((dirObj?.get("name") as? String) ?: (dirObj?.get("n") as? String))
+            val dirPathFromObj = cleanServerPath((dirObj?.get("path") as? String) ?: (dirObj?.get("p") as? String))
+            val pathFromObj = when {
+                dirPathFromObj.isEmpty() -> dirNameFromObj
+                dirNameFromObj.isEmpty() -> dirPathFromObj
+                else -> "$dirPathFromObj/$dirNameFromObj"
+            }
 
             val dIndex = (mediaMap["d"] as? Number)?.toInt()
 
             val parentPath = if (!dirStr.isNullOrBlank()) {
-                dirStr.replace("./", "").trim('/')
+                cleanServerPath(dirStr)
             } else if (pathFromObj.isNotBlank()) {
-                pathFromObj.replace("./", "").trim('/')
+                pathFromObj
             } else if (dIndex != null && mapDirectories != null && dIndex in mapDirectories.indices) {
-                val dirMap = mapDirectories[dIndex] as? Map<*, *>
-                val dirName = (dirMap?.get("name") as? String) ?: (dirMap?.get("n") as? String) ?: ""
-                val dirPath = (dirMap?.get("path") as? String) ?: (dirMap?.get("p") as? String) ?: ""
-                val joined = if (dirPath.isEmpty()) dirName else if (dirName.isEmpty()) dirPath else "$dirPath/$dirName"
-                joined.replace("./", "").trim('/')
+                when (val dirEntry = mapDirectories[dIndex]) {
+                    is String -> cleanServerPath(dirEntry)
+                    is Map<*, *> -> {
+                        val dirName = cleanServerPath((dirEntry["name"] as? String) ?: (dirEntry["n"] as? String))
+                        val dirPath = cleanServerPath((dirEntry["path"] as? String) ?: (dirEntry["p"] as? String))
+                        when {
+                            dirPath.isEmpty() -> dirName
+                            dirName.isEmpty() -> dirPath
+                            else -> "$dirPath/$dirName"
+                        }
+                    }
+                    else -> ""
+                }
             } else {
                 ""
             }
             val medId = (mediaMap["id"] as? Number)?.toInt() ?: ("$parentPath/$medName").hashCode()
-            
+            val medFileSize = (mediaMap["fileSize"] as? Number ?: mediaMap["file_size"] as? Number ?: mediaMap["s"] as? Number ?: mediaMap["fs"] as? Number)?.toLong()
+
             val metaMap = (mediaMap["metadata"] as? Map<*, *>) ?: (mediaMap["m"] as? Map<*, *>)
             val metadata = if (metaMap != null) {
-                parseMetadata(metaMap, mapObj)
+                val parsed = parseMetadata(metaMap, mapObj)
+                if (parsed.fileSize == null && medFileSize != null) parsed.copy(fileSize = medFileSize) else parsed
+            } else if (medFileSize != null) {
+                ApiMediaMetadata(fileSize = medFileSize)
             } else {
                 null
             }
-            
+
             ApiMedia(medId, medName, metadata, parentPath)
         } ?: emptyList()
-        
+
         val directoriesList = searchResult["directories"] as? List<*>
         val directories = directoriesList?.mapNotNull { item ->
             val dirMap = item as? Map<*, *> ?: return@mapNotNull null
             val subId = (dirMap["id"] as? Number)?.toInt()
             val subName = (dirMap["name"] as? String) ?: (dirMap["n"] as? String) ?: ""
             val subPath = (dirMap["path"] as? String) ?: (dirMap["p"] as? String) ?: ""
-            
+
             val cache = dirMap["cache"] as? Map<*, *>
             val mediaCount = (dirMap["mediaCount"] as? Number)?.toInt()
                 ?: (cache?.get("recursiveMediaCount") as? Number)?.toInt()
                 ?: (cache?.get("mediaCount") as? Number)?.toInt()
                 ?: 0
-                
-            ApiSubFolder(subId, subName, subPath, mediaCount, parseSubFolderCache(cache))
+
+            val cleanSubParent = cleanServerPath(subPath)
+            val cleanSubName = cleanServerPath(subName)
+            val subFullPath = when {
+                cleanSubParent.isEmpty() -> cleanSubName
+                cleanSubName.isEmpty() -> cleanSubParent
+                else -> "$cleanSubParent/$cleanSubName"
+            }
+
+            ApiSubFolder(subId, subName, subFullPath, mediaCount, parseSubFolderCache(cache))
         } ?: emptyList()
-        
+
         return ApiDirectory(-1, "Search Results", "", directories, media)
     }
 
@@ -819,64 +882,72 @@ class PiGalleryApi(private val context: android.content.Context) {
      * Fetches saved albums from the server.
      */
     fun getPersons(serverUrl: String, cookies: String, apiPrefix: String): List<ApiPerson> {
-    val sanitizedUrl = serverUrl.trimEnd('/')
-    val endpoint = "$sanitizedUrl$apiPrefix/person"
-    val builder = Request.Builder()
-        .url(endpoint)
-        .get()
-        
-    if (cookies.isNotEmpty()) {
-        builder.addHeader("Cookie", cookies)
-    }
-    
-    val request = builder.build()
-    client.newCall(request).execute().use { response ->
-        val bodyString = response.body?.string() ?: throw IOException("Empty response from person endpoint")
-        
-        if (!response.isSuccessful) {
-            throw IOException("Server returned error code: ${response.code}")
-        }
-        
-        val mapType = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
-        val mapAdapter = moshi.adapter<Map<String, Any?>>(mapType)
-        val responseMap = try {
-            mapAdapter.fromJson(bodyString)
-        } catch (e: Exception) {
-            val shortBody = if (bodyString.length > 300) bodyString.take(300) + "..." else bodyString
-            throw IOException("Failed to parse server response as JSON: ${e.message} | Body: $shortBody")
-        }
-           
-        // Try getting error as string, if it's an object, it'll just be ignored or we can check
-        val errorObj = responseMap?.get("error")
-        if (errorObj != null) {
-            throw IOException("Server returned error: $errorObj")
+        val sanitizedUrl = serverUrl.trimEnd('/')
+        val endpoint = "$sanitizedUrl$apiPrefix/person"
+        val builder = Request.Builder()
+            .url(endpoint)
+            .get()
+
+        if (cookies.isNotEmpty()) {
+            builder.addHeader("Cookie", cookies)
         }
 
-        val resultList = responseMap?.get("result") as? List<*> ?: return emptyList()
-        return resultList.mapNotNull { item ->
-            val personMap = item as? Map<*, *> ?: return@mapNotNull null
-            val id = (personMap["id"] as? Number)?.toInt()
-            val name = (personMap["name"] as? String) ?: ""
-            val missingThumbnail = personMap["missingThumbnail"] as? Boolean
-            val isFavourite = personMap["isFavourite"] as? Boolean
-            
-            val cacheMap = personMap["cache"] as? Map<*, *>
-            val count = (cacheMap?.get("count") as? Number)?.toInt()
-            
-            val cache = if (count != null) ApiPersonCache(count) else null
-            
-            ApiPerson(
-                id = id,
-                name = name,
-                missingThumbnail = missingThumbnail,
-                isFavourite = isFavourite,
-                cache = cache
-            )
+        val request = builder.build()
+        client.newCall(request).execute().use { response ->
+            if (response.code == 204) {
+                return emptyList()
+            }
+            if (!response.isSuccessful) {
+                if (response.code == 401) {
+                    throw IOException("Unauthorized. Session might have expired.")
+                }
+                throw IOException("Server returned error code: ${response.code}")
+            }
+
+            val bodyString = response.body?.string() ?: throw IOException("Empty response from person endpoint")
+            if (isHtmlResponse(bodyString)) {
+                throw IOException("Server returned HTML instead of JSON. Check your API prefix or session.")
+            }
+
+            val mapType = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
+            val mapAdapter = moshi.adapter<Map<String, Any?>>(mapType)
+            val responseMap = try {
+                mapAdapter.fromJson(bodyString)
+            } catch (e: Exception) {
+                val shortBody = if (bodyString.length > 300) bodyString.take(300) + "..." else bodyString
+                throw IOException("Failed to parse server response as JSON: ${e.message} | Body: $shortBody")
+            }
+
+            val errorObj = responseMap?.get("error")
+            if (errorObj != null) {
+                throw IOException("Server returned error: $errorObj")
+            }
+
+            val resultList = responseMap?.get("result") as? List<*> ?: return emptyList()
+            return resultList.mapNotNull { item ->
+                val personMap = item as? Map<*, *> ?: return@mapNotNull null
+                val id = (personMap["id"] as? Number)?.toInt()
+                val name = (personMap["name"] as? String) ?: ""
+                val missingThumbnail = personMap["missingThumbnail"] as? Boolean
+                val isFavourite = personMap["isFavourite"] as? Boolean
+
+                val cacheMap = personMap["cache"] as? Map<*, *>
+                val count = (cacheMap?.get("count") as? Number)?.toInt()
+
+                val cache = if (count != null) ApiPersonCache(count) else null
+
+                ApiPerson(
+                    id = id,
+                    name = name,
+                    missingThumbnail = missingThumbnail,
+                    isFavourite = isFavourite,
+                    cache = cache
+                )
+            }
         }
     }
-}
 
-fun getAlbums(serverUrl: String, cookies: String, apiPrefix: String): List<ApiAlbum> {
+    fun getAlbums(serverUrl: String, cookies: String, apiPrefix: String): List<ApiAlbum> {
         val sanitizedUrl = serverUrl.trimEnd('/')
         val endpoint = "$sanitizedUrl$apiPrefix/albums"
 
@@ -891,10 +962,19 @@ fun getAlbums(serverUrl: String, cookies: String, apiPrefix: String): List<ApiAl
         val request = builder.build()
 
         client.newCall(request).execute().use { response ->
-            val bodyString = response.body?.string() ?: throw IOException("Empty response from albums endpoint")
-            
+            if (response.code == 204) {
+                return emptyList()
+            }
             if (!response.isSuccessful) {
+                if (response.code == 401) {
+                    throw IOException("Unauthorized. Session might have expired.")
+                }
                 throw IOException("Server returned error code: ${response.code}")
+            }
+
+            val bodyString = response.body?.string() ?: throw IOException("Empty response from albums endpoint")
+            if (isHtmlResponse(bodyString)) {
+                throw IOException("Server returned HTML instead of JSON. Check your API prefix or session.")
             }
 
             val mapType = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
@@ -904,7 +984,7 @@ fun getAlbums(serverUrl: String, cookies: String, apiPrefix: String): List<ApiAl
             } catch (e: Exception) {
                 throw IOException("Failed to parse server response as JSON: ${e.message}")
             }
-            
+
             val errorObj = responseMap?.get("error")
             if (errorObj != null) {
                 throw IOException("Server returned error: $errorObj")
@@ -916,29 +996,32 @@ fun getAlbums(serverUrl: String, cookies: String, apiPrefix: String): List<ApiAl
                 val id = (albumMap["id"] as? Number)?.toInt() ?: return@mapNotNull null
                 val name = (albumMap["name"] as? String) ?: ""
                 val locked = (albumMap["locked"] as? Boolean) ?: false
-                
+
                 @Suppress("UNCHECKED_CAST")
                 val searchQuery = albumMap["searchQuery"] as? Map<String, Any?>
-                
+
                 val cacheMap = albumMap["cache"] as? Map<*, *>
                 val cache = if (cacheMap != null) {
                     val itemCount = (cacheMap["itemCount"] as? Number)?.toInt() ?: 0
                     val oldestMedia = (cacheMap["oldestMedia"] as? Number)?.toLong()
                     val youngestMedia = (cacheMap["youngestMedia"] as? Number)?.toLong()
-                    
+
                     val coverMap = cacheMap["cover"] as? Map<*, *>
-                    val coverName = coverMap?.get("name") as? String
-                    val coverDirMap = coverMap?.get("directory") as? Map<*, *>
-                    val coverDirName = coverDirMap?.get("name") as? String ?: ""
-                    val coverDirPath = coverDirMap?.get("path") as? String ?: ""
-                    val coverDirectory = if (coverDirPath.isEmpty()) coverDirName else if (coverDirName.isEmpty()) coverDirPath else "$coverDirPath/$coverDirName"
-                    val coverDirCleaned = coverDirectory.replace("./", "").trim('/')
-                    
+                    val coverName = (coverMap?.get("name") as? String) ?: (coverMap?.get("n") as? String)
+                    val coverDirMap = (coverMap?.get("directory") as? Map<*, *>) ?: (coverMap?.get("d") as? Map<*, *>)
+                    val coverDirName = cleanServerPath((coverDirMap?.get("name") as? String) ?: (coverDirMap?.get("n") as? String))
+                    val coverDirPath = cleanServerPath((coverDirMap?.get("path") as? String) ?: (coverDirMap?.get("p") as? String))
+                    val coverDirCleaned = when {
+                        coverDirPath.isEmpty() -> coverDirName
+                        coverDirName.isEmpty() -> coverDirPath
+                        else -> "$coverDirPath/$coverDirName"
+                    }
+
                     ApiAlbumCache(itemCount, oldestMedia, youngestMedia, coverName, coverDirCleaned)
                 } else {
                     null
                 }
-                
+
                 ApiAlbum(id, name, locked, searchQuery, cache)
             }
         }
@@ -952,22 +1035,28 @@ fun getAlbums(serverUrl: String, cookies: String, apiPrefix: String): List<ApiAl
     fun updatePersonFavourite(serverUrl: String, personName: String, isFavourite: Boolean, cookies: String, apiPrefix: String): Boolean {
         val sanitizedUrl = serverUrl.trimEnd('/')
         val encodedName = URLEncoder.encode(personName, "UTF-8").replace("+", "%20")
-        
-        val jsonBody = """
-            {
-              "isFavourite": $isFavourite
-            }
-        """.trimIndent()
+        val csrfToken = prefs.csrfToken
+
+        val mapType = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
+        val mapAdapter = moshi.adapter<Map<String, Any?>>(mapType)
+
+        val jsonBody = mapAdapter.toJson(mapOf("isFavourite" to isFavourite))
         val requestBody = jsonBody.toRequestBody("application/json; charset=utf-8".toMediaType())
+
+        fun Request.Builder.withAuthHeaders(): Request.Builder {
+            if (cookies.isNotEmpty()) addHeader("Cookie", cookies)
+            if (csrfToken.isNotEmpty()) addHeader("CSRF-Token", csrfToken)
+            return this
+        }
 
         // 1. Path variant: api/person/{name}
         val urlWithName = "$sanitizedUrl$apiPrefix/person/$encodedName"
-        
+
         // Try PATCH on api/person/{name}
         val patchReq1 = Request.Builder()
             .url(urlWithName)
             .patch(requestBody)
-            .apply { if (cookies.isNotEmpty()) addHeader("Cookie", cookies) }
+            .withAuthHeaders()
             .build()
         try {
             client.newCall(patchReq1).execute().use { response ->
@@ -984,7 +1073,7 @@ fun getAlbums(serverUrl: String, cookies: String, apiPrefix: String): List<ApiAl
         val postReq1 = Request.Builder()
             .url(urlWithName)
             .post(requestBody)
-            .apply { if (cookies.isNotEmpty()) addHeader("Cookie", cookies) }
+            .withAuthHeaders()
             .build()
         try {
             client.newCall(postReq1).execute().use { response ->
@@ -1001,7 +1090,7 @@ fun getAlbums(serverUrl: String, cookies: String, apiPrefix: String): List<ApiAl
         val putReq1 = Request.Builder()
             .url(urlWithName)
             .put(requestBody)
-            .apply { if (cookies.isNotEmpty()) addHeader("Cookie", cookies) }
+            .withAuthHeaders()
             .build()
         try {
             client.newCall(putReq1).execute().use { response ->
@@ -1016,19 +1105,14 @@ fun getAlbums(serverUrl: String, cookies: String, apiPrefix: String): List<ApiAl
 
         // 2. Path variant: api/person
         val urlRoot = "$sanitizedUrl$apiPrefix/person"
-        val rootJsonBody = """
-            {
-              "name": "$personName",
-              "isFavourite": $isFavourite
-            }
-        """.trimIndent()
+        val rootJsonBody = mapAdapter.toJson(mapOf("name" to personName, "isFavourite" to isFavourite))
         val rootRequestBody = rootJsonBody.toRequestBody("application/json; charset=utf-8".toMediaType())
 
         // Try PATCH on api/person
         val patchReq2 = Request.Builder()
             .url(urlRoot)
             .patch(rootRequestBody)
-            .apply { if (cookies.isNotEmpty()) addHeader("Cookie", cookies) }
+            .withAuthHeaders()
             .build()
         try {
             client.newCall(patchReq2).execute().use { response ->
@@ -1045,7 +1129,7 @@ fun getAlbums(serverUrl: String, cookies: String, apiPrefix: String): List<ApiAl
         val postReq2 = Request.Builder()
             .url(urlRoot)
             .post(rootRequestBody)
-            .apply { if (cookies.isNotEmpty()) addHeader("Cookie", cookies) }
+            .withAuthHeaders()
             .build()
         try {
             client.newCall(postReq2).execute().use { response ->
@@ -1062,7 +1146,7 @@ fun getAlbums(serverUrl: String, cookies: String, apiPrefix: String): List<ApiAl
         val putReq2 = Request.Builder()
             .url(urlRoot)
             .put(rootRequestBody)
-            .apply { if (cookies.isNotEmpty()) addHeader("Cookie", cookies) }
+            .withAuthHeaders()
             .build()
         try {
             client.newCall(putReq2).execute().use { response ->

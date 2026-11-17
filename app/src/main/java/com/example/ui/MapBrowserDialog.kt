@@ -379,6 +379,8 @@ private fun MapViewContainer(
                 .leaflet-bar a { background-color: #2c2c2c !important; color: #ffffff !important; border-bottom: 1px solid #3c3c3c !important; }
                 .leaflet-bar a:hover { background-color: #3c3c3c !important; }
                 .custom-pin-icon { background: none !important; border: none !important; }
+                .custom-thumb-icon { background: transparent !important; border: none !important; }
+                .custom-thumb-icon.highlighted { background: transparent !important; border: none !important; z-index: 1000 !important; }
 
                 /* Custom Premium Dark Theme Marker Cluster Styles */
                 .marker-cluster-custom {
@@ -506,12 +508,24 @@ private fun MapViewContainer(
 
                 var markers = [];
                 var markersById = {};
+
+                function createMarkerHtml(thumbUrl, isHighlighted) {
+                    var sz = isHighlighted ? 52 : 40;
+                    var borderW = isHighlighted ? 3 : 2;
+                    var borderC = isHighlighted ? '#FFC107' : '#ffffff';
+                    var shadow = isHighlighted ? '0 0 14px rgba(255, 193, 7, 0.9)' : '0 2px 6px rgba(0,0,0,0.6)';
+                    return '<div style="width:' + sz + 'px; height:' + sz + 'px; border-radius:50%; overflow:hidden; border:' + borderW + 'px solid ' + borderC + '; box-shadow:' + shadow + '; background-color:#2196F3; box-sizing:border-box; display:flex; align-items:center; justify-content:center; position:relative;">' +
+                        '<svg style="width:20px; height:20px; fill:#ffffff; position:absolute; z-index:0;" viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>' +
+                        '<img src="' + thumbUrl + '" style="width:100%; height:100%; object-fit:cover; display:block; border-radius:50%; position:relative; z-index:1;" onerror="this.style.display=\'none\';" />' +
+                        '</div>';
+                }
+
                 function addMarker(lat, lon, id, title, thumbUrl) {
                     var thumbIcon = L.divIcon({
-                        html: '<div style="width: 40px; height: 40px; border-radius: 50%; overflow: hidden; border: 2px solid white; box-shadow: 0 2px 5px rgba(0,0,0,0.5); background-color: #ccc;"><img src="' + thumbUrl + '" style="width: 100%; height: 100%; object-fit: cover; display: block;" /></div>',
-                        iconSize: [44, 44],
-                        iconAnchor: [22, 22],
-                        popupAnchor: [0, -22],
+                        html: createMarkerHtml(thumbUrl, false),
+                        iconSize: [40, 40],
+                        iconAnchor: [20, 20],
+                        popupAnchor: [0, -20],
                         className: 'custom-thumb-icon'
                     });
 
@@ -539,10 +553,10 @@ private fun MapViewContainer(
                         activeHighlightedMarker.setZIndexOffset(0);
                         if (activeHighlightedMarker.thumbUrl) {
                             var normalIcon = L.divIcon({
-                                html: '<div style="width: 40px; height: 40px; border-radius: 50%; overflow: hidden; border: 2px solid white; box-shadow: 0 2px 5px rgba(0,0,0,0.5); background-color: #ccc;"><img src="' + activeHighlightedMarker.thumbUrl + '" style="width: 100%; height: 100%; object-fit: cover; display: block;" /></div>',
-                                iconSize: [44, 44],
-                                iconAnchor: [22, 22],
-                                popupAnchor: [0, -22],
+                                html: createMarkerHtml(activeHighlightedMarker.thumbUrl, false),
+                                iconSize: [40, 40],
+                                iconAnchor: [20, 20],
+                                popupAnchor: [0, -20],
                                 className: 'custom-thumb-icon'
                             });
                             activeHighlightedMarker.setIcon(normalIcon);
@@ -555,10 +569,10 @@ private fun MapViewContainer(
                         marker.setZIndexOffset(1000);
                         if (marker.thumbUrl) {
                             var highlightedIcon = L.divIcon({
-                                html: '<div style="width: 52px; height: 52px; border-radius: 50%; overflow: hidden; border: 4px solid #FFC107; box-shadow: 0 0 15px #FFC107; background-color: #ccc;"><img src="' + marker.thumbUrl + '" style="width: 100%; height: 100%; object-fit: cover; display: block;" /></div>',
-                                iconSize: [60, 60],
-                                iconAnchor: [30, 30],
-                                popupAnchor: [0, -30],
+                                html: createMarkerHtml(marker.thumbUrl, true),
+                                iconSize: [52, 52],
+                                iconAnchor: [26, 26],
+                                popupAnchor: [0, -26],
                                 className: 'custom-thumb-icon highlighted'
                             });
                             marker.setIcon(highlightedIcon);
@@ -903,7 +917,12 @@ private fun MapViewContainer(
                                 view: WebView?,
                                 detail: android.webkit.RenderProcessGoneDetail?
                             ): Boolean {
-                                android.util.Log.e("MapBrowserWebView", "WebView render process gone (didCrash: ${detail?.didCrash()}). Handled safely.")
+                                val crashed = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                                    detail?.didCrash()
+                                } else {
+                                    null
+                                }
+                                android.util.Log.e("MapBrowserWebView", "WebView render process gone (didCrash: $crashed). Handled safely.")
                                 view?.let { webView ->
                                     val parent = webView.parent as? android.view.ViewGroup
                                     parent?.removeView(webView)
@@ -917,19 +936,22 @@ private fun MapViewContainer(
                                 request: android.webkit.WebResourceRequest
                             ): android.webkit.WebResourceResponse? {
                                 val url = request.url.toString()
-                                val cookies = viewModel.prefs.cookies
-                                if (cookies.isNotBlank() && url.contains("/gallery/content/")) {
+                                if (url.contains("/gallery/content/")) {
                                     try {
-                                        val okRequest = okhttp3.Request.Builder()
-                                            .url(url)
-                                            .header("Cookie", cookies)
-                                            .build()
-                                        val response = viewModel.api.client.newCall(okRequest).execute()
+                                        val cookies = viewModel.prefs.cookies
+                                        val builder = okhttp3.Request.Builder().url(url)
+                                        if (cookies.isNotBlank()) {
+                                            builder.header("Cookie", cookies)
+                                        }
+                                        val response = viewModel.api.client.newCall(builder.build()).execute()
                                         if (response.isSuccessful) {
-                                            val contentType = response.header("Content-Type", "image/jpeg") ?: "image/jpeg"
-                                            val mimeType = contentType.substringBefore(';')
-                                            val encoding = if (contentType.contains("charset=")) contentType.substringAfter("charset=") else "UTF-8"
-                                            return android.webkit.WebResourceResponse(mimeType, encoding, response.body?.byteStream())
+                                            val contentType = response.header("Content-Type") ?: "image/jpeg"
+                                            val mimeType = contentType.substringBefore(';').trim()
+                                            val encoding = if (contentType.contains("charset=")) contentType.substringAfter("charset=").substringBefore(';').trim() else "UTF-8"
+                                            val bodyBytes = response.body?.bytes()
+                                            if (bodyBytes != null) {
+                                                return android.webkit.WebResourceResponse(mimeType, encoding, java.io.ByteArrayInputStream(bodyBytes))
+                                            }
                                         }
                                     } catch (e: Exception) {
                                         e.printStackTrace()

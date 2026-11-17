@@ -341,11 +341,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             else -> "$cleanDirPath/$cleanDirName"
         }
         val fullPath = if (dirPath.isEmpty()) coverName else "$dirPath/$coverName"
-        val sanitizedBase = prefs.serverUrl.trimEnd('/')
+        val sanitizedBase = getActiveServerUrl()
         val apiPrefix = prefs.apiPrefix
         val relativePath = encodePath(fullPath)
-        val suffix = prefs.thumbnailPathSuffix
-        return "$sanitizedBase$apiPrefix/gallery/content/${relativePath}/$suffix"
+        val suffix = prefs.thumbnailPathSuffix.trim('/')
+        return if (suffix.isNotEmpty()) {
+            "$sanitizedBase$apiPrefix/gallery/content/$relativePath/$suffix"
+        } else {
+            "$sanitizedBase$apiPrefix/gallery/content/$relativePath"
+        }
     }
 
     private var suggestionsJob: kotlinx.coroutines.Job? = null
@@ -1449,7 +1453,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         _personContentState.value = GalleryUiState.Loading
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val searchQuery = if (prefs.peopleFallbackToKeywords) {
+                val searchQuery: Map<String, Any?> = if (prefs.peopleFallbackToKeywords) {
                     mapOf(
                         "type" to 2, // SearchQueryTypes.OR
                         "list" to listOf(
@@ -1460,10 +1464,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 } else {
                     mapOf("type" to 105, "value" to person.name, "matchType" to 1)
                 }
-                val moshi = com.squareup.moshi.Moshi.Builder().build()
-                val type = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
-                val adapter = moshi.adapter<Map<String, Any>>(type)
-                val searchQueryJson = adapter.toJson(searchQuery)
+                val searchQueryJson = api.serializeQuery(searchQuery)
                 val dummyDir = api.search(server, searchQueryJson, cookies, apiPrefix)
                 val filteredMedia = dummyDir.media.orEmpty().filter { !isMediaFromProtectedFolder(it) }
                 val sortedDirectory = sortDirectory(dummyDir.copy(media = filteredMedia))
@@ -1519,7 +1520,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val server = prefs.serverUrl ?: return@launch
                 val cookies = prefs.cookies
                 val apiPrefix = prefs.apiPrefix
-                val searchQuery = if (prefs.peopleFallbackToKeywords) {
+                val searchQuery: Map<String, Any?> = if (prefs.peopleFallbackToKeywords) {
                     mapOf(
                         "type" to 2,
                         "list" to listOf(
@@ -1530,10 +1531,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 } else {
                     mapOf("type" to 105, "value" to person.name, "matchType" to 1)
                 }
-                val moshi = com.squareup.moshi.Moshi.Builder().build()
-                val type = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
-                val adapter = moshi.adapter<Map<String, Any>>(type)
-                val searchQueryJson = adapter.toJson(searchQuery)
+                val searchQueryJson = api.serializeQuery(searchQuery)
                 val dummyDir = api.search(server, searchQueryJson, cookies, apiPrefix)
                 val filteredMedia = dummyDir.media.orEmpty().filter { !isMediaFromProtectedFolder(it) }
                 val sortedDirectory = sortDirectory(dummyDir.copy(media = filteredMedia))
@@ -2099,18 +2097,22 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val sanitizedBase = getActiveServerUrl()
         val apiPrefix = prefs.apiPrefix
         val relativePath = encodePath(getMediaFullPath(media))
-        val suffix = prefs.thumbnailPathSuffix
-        return "$sanitizedBase$apiPrefix/gallery/content/${relativePath}/$suffix"
+        val suffix = prefs.thumbnailPathSuffix.trim('/')
+        return if (suffix.isNotEmpty()) {
+            "$sanitizedBase$apiPrefix/gallery/content/$relativePath/$suffix"
+        } else {
+            "$sanitizedBase$apiPrefix/gallery/content/$relativePath"
+        }
     }
 
     fun getPreloadMediaUrl(media: ApiMedia): String? {
         if (media.isVideo) return null
-        val suffix = prefs.preloadPathSuffix
+        val suffix = prefs.preloadPathSuffix.trim('/')
         if (suffix.isBlank()) return null
         val sanitizedBase = getActiveServerUrl()
         val apiPrefix = prefs.apiPrefix
         val relativePath = encodePath(getMediaFullPath(media))
-        return "$sanitizedBase$apiPrefix/gallery/content/${relativePath}/$suffix"
+        return "$sanitizedBase$apiPrefix/gallery/content/$relativePath/$suffix"
     }
 
     fun getOriginalMediaUrl(media: ApiMedia): String {
@@ -2118,24 +2120,35 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val apiPrefix = prefs.apiPrefix
         val relativePath = encodePath(getMediaFullPath(media))
         return if (media.isVideo) {
-            val suffix = prefs.videoPathSuffix
+            val suffix = prefs.videoPathSuffix.trim('/')
             if (suffix.isNotEmpty()) {
-                "$sanitizedBase$apiPrefix/gallery/content/${relativePath}/$suffix"
+                "$sanitizedBase$apiPrefix/gallery/content/$relativePath/$suffix"
             } else {
-                "$sanitizedBase$apiPrefix/gallery/content/${relativePath}"
+                "$sanitizedBase$apiPrefix/gallery/content/$relativePath"
             }
         } else {
-            "$sanitizedBase$apiPrefix/gallery/content/${relativePath}"
+            "$sanitizedBase$apiPrefix/gallery/content/$relativePath"
         }
     }
 
     fun getAlbumCoverUrl(coverName: String, coverDirectory: String): String {
-        val sanitizedBase = prefs.serverUrl.trimEnd('/')
+        val sanitizedBase = getActiveServerUrl()
         val apiPrefix = prefs.apiPrefix
         val fullPath = if (coverDirectory.isEmpty()) coverName else "$coverDirectory/$coverName"
         val relativePath = encodePath(fullPath)
-        val suffix = prefs.thumbnailPathSuffix
-        return "$sanitizedBase$apiPrefix/gallery/content/${relativePath}/$suffix"
+        val suffix = prefs.thumbnailPathSuffix.trim('/')
+        return if (suffix.isNotEmpty()) {
+            "$sanitizedBase$apiPrefix/gallery/content/$relativePath/$suffix"
+        } else {
+            "$sanitizedBase$apiPrefix/gallery/content/$relativePath"
+        }
+    }
+
+    fun getPersonThumbnailUrl(person: com.example.data.ApiPerson): String {
+        val sanitizedBase = getActiveServerUrl()
+        val apiPrefix = prefs.apiPrefix
+        val encodedName = encodePath(person.name)
+        return "$sanitizedBase$apiPrefix/person/$encodedName/thumbnail"
     }
 
     fun getMediaFullPath(media: ApiMedia): String {

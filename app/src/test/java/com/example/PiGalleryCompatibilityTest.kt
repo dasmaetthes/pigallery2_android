@@ -1,0 +1,197 @@
+package com.example
+
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
+import com.example.data.PiGalleryApi
+import com.example.data.PreferencesManager
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
+class PiGalleryCompatibilityTest {
+
+    private lateinit var context: Context
+    private lateinit var prefs: PreferencesManager
+    private lateinit var api: PiGalleryApi
+
+    @Before
+    fun setUp() {
+        context = ApplicationProvider.getApplicationContext()
+        prefs = PreferencesManager(context)
+        prefs.clear()
+        api = PiGalleryApi(context)
+    }
+
+    @Test
+    fun `serializeQuery cleans whole Doubles inside nested list structures`() {
+        val rawAlbumQuery = mapOf<String, Any?>(
+            "type" to 2.0,
+            "list" to listOf(
+                mapOf(
+                    "type" to 105.0,
+                    "value" to "Alice",
+                    "matchType" to 1.0
+                ),
+                mapOf(
+                    "type" to 10.0,
+                    "min" to 1700000000000.0
+                )
+            )
+        )
+
+        val json = api.serializeQuery(rawAlbumQuery)
+        assertFalse("Should not serialize integer values with .0: $json", json.contains(".0"))
+        assertTrue(json.contains("\"type\":2"))
+        assertTrue(json.contains("\"type\":105"))
+        assertTrue(json.contains("\"matchType\":1"))
+        assertTrue(json.contains("\"min\":1700000000000"))
+    }
+
+    @Test
+    fun `login prefers pgapi, handles special chars in password, and extracts session cookies and csrfToken`() {
+        val seenPaths = mutableListOf<String>()
+        var seenBody = ""
+
+        api.client = api.client.newBuilder()
+            .addInterceptor { chain ->
+                val req = chain.request()
+                seenPaths.add(req.url.encodedPath)
+                val buffer = okio.Buffer()
+                req.body?.writeTo(buffer)
+                seenBody = buffer.readUtf8()
+
+                val json = """
+                    {
+                      "error": null,
+                      "result": {
+                        "username": "admin",
+                        "role": 3,
+                        "csrfToken": "csrf-abc-123"
+                      }
+                    }
+                """.trimIndent()
+
+                Response.Builder()
+                    .request(req)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .addHeader("Set-Cookie", "pigallery2-session=xyz%3D1; Path=/; HttpOnly")
+                    .addHeader("Set-Cookie", "pigallery2-session.sig=sig123; Path=/; HttpOnly")
+                    .body(json.toResponseBody("application/json".toMediaType()))
+                    .build()
+            }
+            .build()
+
+        val (cookies, prefix) = api.login("https://example.org/", "admin", "p@ss\"with\\quotes")
+
+        assertEquals("/pgapi", prefix)
+        assertEquals(listOf("/pgapi/user/login"), seenPaths)
+        assertTrue(cookies.contains("pigallery2-session=xyz%3D1"))
+        assertTrue(cookies.contains("pigallery2-session.sig=sig123"))
+        assertEquals("csrf-abc-123", prefs.csrfToken)
+        assertTrue(seenBody.contains("p@ss\\\"with\\\\quotes"))
+    }
+
+    @Test
+    fun `login falls back from HTML pgapi response to api and supports generic session cookie`() {
+        api.client = api.client.newBuilder()
+            .addInterceptor { chain ->
+                val req = chain.request()
+                if (req.url.encodedPath == "/pgapi/user/login") {
+                    Response.Builder()
+                        .request(req)
+                        .protocol(Protocol.HTTP_1_1)
+                        .code(200)
+                        .message("OK")
+                        .body("<!doctype html><html></html>".toResponseBody("text/html".toMediaType()))
+                        .build()
+                } else {
+                    val json = """{"error":null,"result":{"username":"guest","role":1}}"""
+                    Response.Builder()
+                        .request(req)
+                        .protocol(Protocol.HTTP_1_1)
+                        .code(200)
+                        .message("OK")
+                        .addHeader("Set-Cookie", "connect.sid=s%3A999; Path=/")
+                        .body(json.toResponseBody("application/json".toMediaType()))
+                        .build()
+                }
+            }
+            .build()
+
+        val (cookies, prefix) = api.login("https://example.org", "guest", "secret")
+        assertEquals("/api", prefix)
+        assertEquals("connect.sid=s%3A999", cookies)
+    }
+
+    @Test
+    fun `search parses packed ContentWrapper metadata, string map directories, and subfolder full path`() {
+        api.client = api.client.newBuilder()
+            .addInterceptor { chain ->
+                val req = chain.request()
+                val json = """
+                    {
+                      "error": null,
+                      "result": {
+                        "searchResult": {
+                          "directories": [
+                            { "id": 7, "name": "Summer", "path": "./2024", "mediaCount": 12 }
+                          ],
+                          "media": [
+                            {
+                              "id": 42,
+                              "n": "IMG_001.jpg",
+                              "d": 0,
+                              "s": 2048,
+                              "m": {
+                                "d": [4000, 3000],
+                                "t": 1700000000000,
+                                "o": 120,
+                                "k": [0]
+                              }
+                            }
+                          ]
+                        },
+                        "map": {
+                          "directories": ["./2024/Summer"],
+                          "keywords": ["Beach"]
+                        }
+                      }
+                    }
+                """.trimIndent()
+                Response.Builder()
+                    .request(req)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body(json.toResponseBody("application/json".toMediaType()))
+                    .build()
+            }
+            .build()
+
+        val dir = api.search("https://example.org", "{\"type\":100,\"value\":\"Beach\"}", "c=1", "/pgapi")
+        assertEquals(1, dir.directories?.size)
+        assertEquals("2024/Summer", dir.directories?.first()?.path)
+
+        assertEquals(1, dir.media?.size)
+        val media = dir.media!!.first()
+        assertEquals("IMG_001.jpg", media.name)
+        assertEquals("2024/Summer", media.parentPath)
+        assertEquals(4000, media.metadata?.size?.width)
+        assertEquals("+02:00", media.metadata?.creationDateOffset)
+        assertEquals(listOf("Beach"), media.metadata?.keywords)
+        assertEquals(2048L, media.metadata?.fileSize)
+    }
+}
