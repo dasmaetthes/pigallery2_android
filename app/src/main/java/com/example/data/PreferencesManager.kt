@@ -14,6 +14,10 @@ class PreferencesManager(context: Context) {
         private const val KEY_PASSWORD = "password"
         private const val KEY_COOKIES = "cookies"
         private const val KEY_CSRF_TOKEN = "csrf_token"
+        private const val KEY_USER_ROLE = "user_role"
+        private const val KEY_ALBUM_WRITE_MIN_ROLE = "album_write_min_role"
+        private const val KEY_ALBUM_FEATURE_ENABLED = "album_feature_enabled"
+        private const val KEY_USER_CAN_CREATE_ALBUMS = "user_can_create_albums"
         private const val KEY_IS_LOGGED_IN = "is_logged_in"
         private const val KEY_API_PREFIX = "api_prefix"
         private const val KEY_REDISCOVER_DAYS = "rediscover_days"
@@ -99,6 +103,26 @@ class PreferencesManager(context: Context) {
     var csrfToken: String
         get() = prefs.getString(KEY_CSRF_TOKEN, "") ?: ""
         set(value) = prefs.edit().putString(KEY_CSRF_TOKEN, value).apply()
+
+    var userRole: Int
+        get() = prefs.getInt(KEY_USER_ROLE, -1)
+        set(value) = prefs.edit().putInt(KEY_USER_ROLE, value).apply()
+
+    var albumWriteMinRole: Int
+        get() = prefs.getInt(KEY_ALBUM_WRITE_MIN_ROLE, UserRoles.ADMIN)
+        set(value) = prefs.edit().putInt(KEY_ALBUM_WRITE_MIN_ROLE, value).apply()
+
+    var albumFeatureEnabled: Boolean
+        get() = prefs.getBoolean(KEY_ALBUM_FEATURE_ENABLED, true)
+        set(value) = prefs.edit().putBoolean(KEY_ALBUM_FEATURE_ENABLED, value).apply()
+
+    /**
+     * Tri-state per-user album creation override from server user payload:
+     * -1 = not specified (use albumWriteMinRole), 1 = explicitly allowed, 0 = explicitly denied.
+     */
+    var userCanCreateAlbumsOverride: Int
+        get() = prefs.getInt(KEY_USER_CAN_CREATE_ALBUMS, -1)
+        set(value) = prefs.edit().putInt(KEY_USER_CAN_CREATE_ALBUMS, value).apply()
 
     var isLoggedIn: Boolean
         get() = prefs.getBoolean(KEY_IS_LOGGED_IN, false)
@@ -337,6 +361,19 @@ class PreferencesManager(context: Context) {
 
             false
         }
+    }
+
+    fun clearSession() {
+        prefs.edit()
+            .remove(KEY_IS_LOGGED_IN)
+            .remove(KEY_COOKIES)
+            .remove(KEY_CSRF_TOKEN)
+            .remove(KEY_PASSWORD)
+            .remove(KEY_USER_ROLE)
+            .remove(KEY_ALBUM_WRITE_MIN_ROLE)
+            .remove(KEY_ALBUM_FEATURE_ENABLED)
+            .remove(KEY_USER_CAN_CREATE_ALBUMS)
+            .apply()
     }
 
     fun clear() {

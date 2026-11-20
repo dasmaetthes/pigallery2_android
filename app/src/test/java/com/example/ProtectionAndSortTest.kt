@@ -95,4 +95,85 @@ class ProtectionAndSortTest {
         prefs.removeFolderSort("Vacation")
         assertFalse(prefs.hasFolderSort("Vacation"))
     }
+
+    @Test
+    fun `test clearSession preserves settings and connection info while clearing auth session`() {
+        prefs.serverUrl = "https://gallery.example.com"
+        prefs.localServerUrl = "http://192.168.1.50:3000"
+        prefs.allowInsecureSsl = true
+        prefs.username = "alice"
+        prefs.password = "secret"
+        prefs.cookies = "pigallery2-session=abc"
+        prefs.csrfToken = "csrf-123"
+        prefs.isLoggedIn = true
+        prefs.userRole = 3
+        prefs.albumWriteMinRole = 3
+        prefs.albumFeatureEnabled = true
+        prefs.userCanCreateAlbumsOverride = 1
+
+        prefs.themeColor = "Blue"
+        prefs.themeMode = "Dark"
+        prefs.itemsPerRow = 4
+        prefs.itemsPerRowPortrait = 4
+        prefs.itemsPerRowLandscape = 7
+        prefs.cornerRadius = 12
+        prefs.spacing = 8
+        prefs.aspectRatio = 1.5f
+        prefs.showDirectoryItemCount = false
+        prefs.galleryViewMode = "DATE"
+        prefs.defaultRootPath = "Photos/2024"
+        prefs.thumbnailPathSuffix = "480"
+        prefs.preloadPathSuffix = "1080"
+        prefs.videoPathSuffix = "720"
+        prefs.slideshowDuration = 5
+        prefs.rediscoverDays = 3
+        prefs.dismissGestureEnabled = false
+        prefs.showMetadataGestureEnabled = false
+        prefs.biometricLockEnabled = true
+        prefs.hideProtectedItems = true
+        prefs.autoCheckUpdates = false
+        prefs.maxBrightnessEnabled = true
+        prefs.toggleProtectedFolder("Private")
+        prefs.setFolderSortBy("global", "date")
+
+        prefs.clearSession()
+
+        // Session/auth data is cleared
+        assertFalse(prefs.isLoggedIn)
+        assertEquals("", prefs.cookies)
+        assertEquals("", prefs.csrfToken)
+        assertEquals("", prefs.password)
+        assertEquals(-1, prefs.userRole)
+        assertEquals(-1, prefs.userCanCreateAlbumsOverride)
+
+        // Connection details and all user settings are preserved
+        assertEquals("https://gallery.example.com", prefs.serverUrl)
+        assertEquals("http://192.168.1.50:3000", prefs.localServerUrl)
+        assertTrue(prefs.allowInsecureSsl)
+        assertEquals("alice", prefs.username)
+        assertEquals("Blue", prefs.themeColor)
+        assertEquals("Dark", prefs.themeMode)
+        assertEquals(4, prefs.itemsPerRow)
+        assertEquals(4, prefs.itemsPerRowPortrait)
+        assertEquals(7, prefs.itemsPerRowLandscape)
+        assertEquals(12, prefs.cornerRadius)
+        assertEquals(8, prefs.spacing)
+        assertEquals(1.5f, prefs.aspectRatio, 0.001f)
+        assertFalse(prefs.showDirectoryItemCount)
+        assertEquals("DATE", prefs.galleryViewMode)
+        assertEquals("Photos/2024", prefs.defaultRootPath)
+        assertEquals("480", prefs.thumbnailPathSuffix)
+        assertEquals("1080", prefs.preloadPathSuffix)
+        assertEquals("720", prefs.videoPathSuffix)
+        assertEquals(5, prefs.slideshowDuration)
+        assertEquals(3, prefs.rediscoverDays)
+        assertFalse(prefs.dismissGestureEnabled)
+        assertFalse(prefs.showMetadataGestureEnabled)
+        assertTrue(prefs.biometricLockEnabled)
+        assertTrue(prefs.hideProtectedItems)
+        assertFalse(prefs.autoCheckUpdates)
+        assertTrue(prefs.maxBrightnessEnabled)
+        assertTrue(prefs.isFolderProtected("Private"))
+        assertEquals("date", prefs.getFolderSortBy("global", "name"))
+    }
 }

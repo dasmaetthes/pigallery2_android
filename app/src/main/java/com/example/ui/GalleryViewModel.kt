@@ -67,6 +67,20 @@ sealed interface RediscoverUiState {
     data class Error(val message: String) : RediscoverUiState
 }
 
+sealed interface SaveAlbumUiState {
+    object Idle : SaveAlbumUiState
+    object Saving : SaveAlbumUiState
+    data class Success(val albumName: String) : SaveAlbumUiState
+    data class Error(val message: String) : SaveAlbumUiState
+}
+
+sealed interface DeleteAlbumUiState {
+    object Idle : DeleteAlbumUiState
+    object Deleting : DeleteAlbumUiState
+    data class Success(val albumName: String) : DeleteAlbumUiState
+    data class Error(val message: String) : DeleteAlbumUiState
+}
+
 enum class ActiveTab {
     GALLERY,
     ALBUMS,
@@ -171,6 +185,29 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val savedUsername = MutableStateFlow(prefs.username)
     val savedPassword = MutableStateFlow(prefs.password)
     val isLoggedIn = MutableStateFlow(prefs.isLoggedIn)
+
+    // User role & Saved Search Album permissions
+    private var lastPermissionsSyncMs: Long = 0L
+    private val _userRole = MutableStateFlow(prefs.userRole)
+    val userRole: StateFlow<Int> = _userRole.asStateFlow()
+
+    private val _canManageAlbums = MutableStateFlow(computeCanManageAlbums())
+    val canManageAlbums: StateFlow<Boolean> = _canManageAlbums.asStateFlow()
+
+    private val _saveAlbumState = MutableStateFlow<SaveAlbumUiState>(SaveAlbumUiState.Idle)
+    val saveAlbumState: StateFlow<SaveAlbumUiState> = _saveAlbumState.asStateFlow()
+
+    private val _deleteAlbumState = MutableStateFlow<DeleteAlbumUiState>(DeleteAlbumUiState.Idle)
+    val deleteAlbumState: StateFlow<DeleteAlbumUiState> = _deleteAlbumState.asStateFlow()
+
+    private fun computeCanManageAlbums(): Boolean {
+        return com.example.data.UserRoles.canManageAlbums(
+            role = prefs.userRole,
+            albumWriteMinRole = prefs.albumWriteMinRole,
+            albumFeatureEnabled = prefs.albumFeatureEnabled,
+            userCanCreateAlbumsOverride = prefs.userCanCreateAlbumsOverride
+        )
+    }
 
     // Reactive Visual Settings StateFlows
     val showDirectoryItemCount = MutableStateFlow(prefs.showDirectoryItemCount)
@@ -762,11 +799,36 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
         if (prefs.isLoggedIn && prefs.serverUrl.isNotEmpty()) {
             try {
+                refreshUserPermissions(force = true)
                 loadCurrentDirectory()
                 loadAlbums()
                 loadRediscover()
             } catch (e: Exception) {
                 // Safe fallback
+            }
+        }
+    }
+
+    fun refreshUserPermissions(force: Boolean = false) {
+        _userRole.value = prefs.userRole
+        _canManageAlbums.value = computeCanManageAlbums()
+
+        val now = System.currentTimeMillis()
+        if (!force && (now - lastPermissionsSyncMs) < 30_000L) return
+
+        val server = prefs.serverUrl
+        val cookies = prefs.cookies
+        val apiPrefix = prefs.apiPrefix
+        if (server.isEmpty()) return
+
+        lastPermissionsSyncMs = now
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                api.fetchCurrentUserSession(server, cookies, apiPrefix)
+                _userRole.value = prefs.userRole
+                _canManageAlbums.value = computeCanManageAlbums()
+            } catch (_: Exception) {
+                // Keep previously known permissions if session/config check fails transiently
             }
         }
     }
@@ -779,8 +841,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         // Refresh contents if needed when switching
         if (prefs.isLoggedIn && prefs.serverUrl.isNotEmpty()) {
             when (tab) {
-                ActiveTab.GALLERY -> loadCurrentDirectory()
+                ActiveTab.GALLERY -> {
+                    refreshUserPermissions(force = false)
+                    loadCurrentDirectory()
+                }
                 ActiveTab.ALBUMS -> {
+                    refreshUserPermissions(force = false)
                     _selectedAlbum.value = null
                     _albumContentState.value = null
                     loadAlbums()
@@ -820,11 +886,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 prefs.apiPrefix = apiPrefix
                 prefs.isLoggedIn = true
 
-                // Sync viewmodel fields
+                // Sync viewmodel fields and fetch server ClientConfig (e.g. PR #1400 user album rights)
                 savedServerUrl.value = formattedUrl
                 savedUsername.value = user
                 savedPassword.value = pass
                 isLoggedIn.value = true
+                refreshUserPermissions(force = true)
 
                 _loginState.value = LoginUiState.Success("Connected successfully!")
                 _pathHistory.value = buildInitialPathStack(prefs.defaultRootPath) // Reset path history
@@ -1265,7 +1332,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     } else {
                         _galleryState.value = GalleryUiState.Loading
                     }
-                } else if (_galleryState.value !is GalleryUiState.Success) {
+                } else if (searchQuery.value.isNotEmpty() || _galleryState.value !is GalleryUiState.Success) {
                     _galleryState.value = GalleryUiState.Loading
                 }
 
@@ -1561,6 +1628,105 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 _albumsState.value = AlbumsUiState.Success(sortAlbums(albums))
             } catch (e: Exception) {
                 _albumsState.value = AlbumsUiState.Error(e.localizedMessage ?: "Failed to fetch albums")
+            }
+        }
+    }
+
+    fun resetSaveAlbumState() {
+        _saveAlbumState.value = SaveAlbumUiState.Idle
+    }
+
+    fun saveSearchAsAlbum(name: String, rawQuery: String = searchQuery.value) {
+        if (!_canManageAlbums.value) {
+            _saveAlbumState.value = SaveAlbumUiState.Error("You are not authorized to save searches as albums.")
+            return
+        }
+        val trimmedName = name.trim()
+        if (trimmedName.isEmpty()) {
+            _saveAlbumState.value = SaveAlbumUiState.Error("Album name cannot be empty.")
+            return
+        }
+        val parsedQuery = parseSearchStringToQuery(rawQuery)
+        if (parsedQuery.isEmpty()) {
+            _saveAlbumState.value = SaveAlbumUiState.Error("Search query cannot be empty.")
+            return
+        }
+        val server = prefs.serverUrl
+        val cookies = prefs.cookies
+        val apiPrefix = prefs.apiPrefix
+        if (server.isEmpty()) {
+            _saveAlbumState.value = SaveAlbumUiState.Error("No server configured.")
+            return
+        }
+
+        _saveAlbumState.value = SaveAlbumUiState.Saving
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                api.createSavedSearchAlbum(
+                    serverUrl = server,
+                    name = trimmedName,
+                    searchQuery = parsedQuery,
+                    cookies = cookies,
+                    apiPrefix = apiPrefix
+                )
+                _saveAlbumState.value = SaveAlbumUiState.Success(trimmedName)
+                loadAlbums()
+            } catch (e: Exception) {
+                _saveAlbumState.value = SaveAlbumUiState.Error(
+                    e.localizedMessage ?: "Failed to save search as album"
+                )
+                refreshUserPermissions(force = true)
+            }
+        }
+    }
+
+    fun resetDeleteAlbumState() {
+        _deleteAlbumState.value = DeleteAlbumUiState.Idle
+    }
+
+    fun deleteAlbum(album: ApiAlbum) {
+        if (!_canManageAlbums.value) {
+            _deleteAlbumState.value = DeleteAlbumUiState.Error("You are not authorized to delete albums.")
+            return
+        }
+        if (album.locked) {
+            _deleteAlbumState.value = DeleteAlbumUiState.Error("Locked albums cannot be deleted.")
+            return
+        }
+        val server = prefs.serverUrl
+        val cookies = prefs.cookies
+        val apiPrefix = prefs.apiPrefix
+        if (server.isEmpty()) {
+            _deleteAlbumState.value = DeleteAlbumUiState.Error("No server configured.")
+            return
+        }
+
+        _deleteAlbumState.value = DeleteAlbumUiState.Deleting
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                api.deleteAlbum(
+                    serverUrl = server,
+                    albumId = album.id,
+                    cookies = cookies,
+                    apiPrefix = apiPrefix
+                )
+                if (_selectedAlbum.value?.id == album.id) {
+                    _selectedAlbum.value = null
+                    _albumContentState.value = null
+                }
+                val currentAlbumsState = _albumsState.value
+                if (currentAlbumsState is AlbumsUiState.Success) {
+                    _albumsState.value = AlbumsUiState.Success(
+                        currentAlbumsState.albums.filterNot { it.id == album.id }
+                    )
+                }
+                _deleteAlbumState.value = DeleteAlbumUiState.Success(album.name)
+                loadAlbums()
+            } catch (e: Exception) {
+                _deleteAlbumState.value = DeleteAlbumUiState.Error(
+                    e.localizedMessage ?: "Failed to delete album"
+                )
+                refreshUserPermissions(force = true)
             }
         }
     }
@@ -2176,16 +2342,29 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun logout() {
         directoryCache.clear()
         cachedFlattenedMedia.clear()
-        prefs.clear()
+        cachedYearMedia.clear()
+        prefs.clearSession()
         isLoggedIn.value = false
-        savedServerUrl.value = ""
-        savedUsername.value = ""
+        savedServerUrl.value = prefs.serverUrl
+        savedUsername.value = prefs.username
         savedPassword.value = ""
+        lastPermissionsSyncMs = 0L
+        _userRole.value = -1
+        _canManageAlbums.value = false
+        _saveAlbumState.value = SaveAlbumUiState.Idle
+        _deleteAlbumState.value = DeleteAlbumUiState.Idle
         _pathHistory.value = buildInitialPathStack(prefs.defaultRootPath)
         _loginState.value = LoginUiState.Idle
         _activeTab.value = ActiveTab.GALLERY
         _selectedAlbum.value = null
         _albumContentState.value = null
+        _selectedPerson.value = null
+        _personContentState.value = null
+        _selectedMedia.value = null
+        isSearchActive.value = false
+        searchQuery.value = ""
+        showSearchSuggestions.value = false
+        isFlattened.value = false
         exitSelectMode()
     }
 
@@ -2299,7 +2478,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     val htmlUrl = json.optString("html_url", "https://github.com/dasmaetthes/pigallery2_android/releases")
                     val releaseNotes = json.optString("body", "No release notes provided.")
 
-                    val currentVersion = try { com.example.BuildConfig.VERSION_NAME } catch (e: Exception) { "2.6" } ?: "2.6"
+                    val currentVersion = try { com.example.BuildConfig.VERSION_NAME } catch (e: Exception) { "2.7" } ?: "2.7"
                     val cleanRemote = tagName.removePrefix("v").trim()
                     val cleanCurrent = currentVersion.removePrefix("v").trim()
 
