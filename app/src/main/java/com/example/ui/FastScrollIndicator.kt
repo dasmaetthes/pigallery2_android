@@ -17,11 +17,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.R
 import com.example.data.ApiMedia
 import com.example.data.ApiSubFolder
 import kotlinx.coroutines.launch
@@ -31,12 +34,15 @@ import kotlin.math.roundToInt
 fun FastScrollIndicator(
     state: LazyGridState,
     groupedMedia: Map<String, List<ApiMedia>>,
+    modifier: Modifier = Modifier,
     subfolders: List<ApiSubFolder> = emptyList(),
     subfoldersCount: Int = subfolders.size,
     hasHeaders: Boolean = true,
-    mediaList: List<ApiMedia> = emptyList(),
-    modifier: Modifier = Modifier
+    mediaList: List<ApiMedia> = emptyList()
 ) {
+    val context = LocalContext.current
+    val unknownLabel = stringResource(R.string.unknown)
+    val foldersLabel = stringResource(R.string.folders_label)
     val coroutineScope = rememberCoroutineScope()
     val density = LocalDensity.current
 
@@ -56,17 +62,25 @@ fun FastScrollIndicator(
     if (totalGridItemsCount <= 0) return
 
     val totalItems = totalGridItemsCount.coerceAtLeast(1)
-    val visibleItems = state.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
-    val firstVisibleIndex = state.firstVisibleItemIndex
-
-    // Compute normal scroll fraction (0.0 .. 1.0)
-    val computedScrollFraction = if (totalItems <= visibleItems) 0f else {
-        (firstVisibleIndex.toFloat() / (totalItems - visibleItems).coerceAtLeast(1).toFloat()).coerceIn(0f, 1f)
+    val hasScrollableOverflow by remember(totalItems) {
+        derivedStateOf {
+            val visibleItems = state.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
+            totalItems > visibleItems
+        }
+    }
+    val computedScrollFraction by remember(totalItems) {
+        derivedStateOf {
+            val visibleItems = state.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
+            val firstVisibleIndex = state.firstVisibleItemIndex
+            if (totalItems <= visibleItems) 0f else {
+                (firstVisibleIndex.toFloat() / (totalItems - visibleItems).coerceAtLeast(1).toFloat()).coerceIn(0f, 1f)
+            }
+        }
     }
 
     var isDragging by remember { mutableStateOf(false) }
     var dragFraction by remember { mutableStateOf<Float?>(null) }
-    var trackHeightPx by remember { mutableStateOf(1f) }
+    var trackHeightPx by remember { mutableFloatStateOf(1f) }
 
     val activeFraction = if (isDragging) (dragFraction ?: computedScrollFraction) else computedScrollFraction
 
@@ -75,11 +89,11 @@ fun FastScrollIndicator(
         (activeFraction * (totalItems - 1)).roundToInt().coerceIn(0, totalItems - 1)
     }
 
-    val currentDateLabel = remember(activeIndex, groupedMedia, subfolders, subfoldersCount, hasHeaders, mediaList) {
+    val currentDateLabel = remember(activeIndex, groupedMedia, subfolders, subfoldersCount, hasHeaders, mediaList, unknownLabel, foldersLabel) {
         if (groupedMedia.isEmpty() && subfoldersCount == 0 && mediaList.isEmpty()) ""
         else if (activeIndex < subfoldersCount) {
             val folder = subfolders.getOrNull(activeIndex)
-            if (folder != null) "Folder: ${folder.name}" else "Folders"
+            if (folder != null) context.getString(R.string.folder_colon_name, folder.name) else foldersLabel
         } else {
             if (hasHeaders) {
                 var indexTracker = subfoldersCount
@@ -94,7 +108,8 @@ fun FastScrollIndicator(
                             label = DateUtils.formatMediaDate(
                                 media.metadata?.creationDate,
                                 media.metadata?.creationDateOffset,
-                                "d. MMMM yyyy"
+                                "d. MMMM yyyy",
+                                unknownLabel
                             )
                         } else {
                             label = header
@@ -142,7 +157,7 @@ fun FastScrollIndicator(
     }
 
     AnimatedVisibility(
-        visible = isVisible && totalItems > visibleItems,
+        visible = isVisible && hasScrollableOverflow,
         enter = fadeIn() + slideInHorizontally(initialOffsetX = { it }),
         exit = fadeOut() + slideOutHorizontally(targetOffsetX = { it }),
         modifier = modifier
@@ -218,7 +233,7 @@ fun FastScrollIndicator(
                     Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                         Icon(
                             imageVector = Icons.Default.UnfoldMore,
-                            contentDescription = "Fast scroll thumb",
+                            contentDescription = stringResource(R.string.fast_scroll_thumb),
                             modifier = Modifier.size(18.dp)
                         )
                     }

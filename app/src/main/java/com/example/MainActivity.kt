@@ -1,10 +1,6 @@
 package com.example
 
 import android.os.Bundle
-import coil.Coil
-import coil.ImageLoader
-import coil.disk.DiskCache
-import coil.memory.MemoryCache
 import androidx.fragment.app.FragmentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -26,11 +22,7 @@ import com.example.ui.GalleryViewModel
 import com.example.ui.LoginScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.data.PreferencesManager
-import java.security.cert.X509Certificate
-import javax.net.ssl.SSLContext
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
-import okhttp3.OkHttpClient
+import com.example.util.AppImageLoaderFactory
 
 import android.app.Activity
 import android.content.Context
@@ -48,59 +40,7 @@ class MainActivity : FragmentActivity() {
         
         try {
             val prefs = PreferencesManager(this)
-            val imageLoader = ImageLoader.Builder(this)
-                .memoryCache {
-                    MemoryCache.Builder(this)
-                        .maxSizePercent(0.20) // Conservative 20% of heap to prevent OOM during heavy scrolling
-                        .strongReferencesEnabled(true)
-                        .weakReferencesEnabled(true)
-                        .build()
-                }
-                .diskCache {
-                    try {
-                        DiskCache.Builder()
-                            .directory(this.cacheDir.resolve("image_cache"))
-                            .maxSizeBytes(1024L * 1024L * 1024L) // 1GB disk cache
-                            .build()
-                    } catch (e: Exception) {
-                        null
-                    }
-                }
-                .allowHardware(android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) // Store bitmaps in graphic memory instead of Java heap
-                .respectCacheHeaders(false) // Cache images aggressively even if the server returns no-cache/no-store headers
-                .okHttpClient {
-                    val dispatcher = okhttp3.Dispatcher().apply {
-                        maxRequests = 24 // Balanced concurrency to avoid saturating Okio segment buffers
-                        maxRequestsPerHost = 8
-                    }
-                    val builder = OkHttpClient.Builder()
-                        .dispatcher(dispatcher)
-                        .connectionPool(okhttp3.ConnectionPool(10, 2, java.util.concurrent.TimeUnit.MINUTES))
-                        .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-                        .readTimeout(25, java.util.concurrent.TimeUnit.SECONDS)
-                    
-                    if (prefs.allowInsecureSsl) {
-                        try {
-                            val trustAllCerts = arrayOf<TrustManager>(
-                                object : X509TrustManager {
-                                    override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-                                    override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
-                                    override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-                                }
-                            )
-                            val sslContext = SSLContext.getInstance("TLS")
-                            sslContext.init(null, trustAllCerts, java.security.SecureRandom())
-                            builder.sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
-                            builder.hostnameVerifier { _, _ -> true }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
-                    }
-                    
-                    builder.build()
-                }
-                .build()
-            Coil.setImageLoader(imageLoader)
+            com.example.util.AppImageLoaderFactory.install(this, prefs.allowInsecureSsl, force = true)
         } catch (e: Exception) {
             e.printStackTrace()
         }

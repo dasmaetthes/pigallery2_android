@@ -6,8 +6,13 @@ import java.util.Locale
 import java.util.TimeZone
 
 object DateUtils {
-    fun formatMediaDate(timestamp: Long?, offset: String?, formatString: String = "dd.MM.yyyy HH:mm:ss"): String {
-        if (timestamp == null || timestamp <= 0L) return "Unbekannt"
+    fun formatMediaDate(
+        timestamp: Long?,
+        offset: String?,
+        formatString: String = "dd.MM.yyyy HH:mm:ss",
+        unknownLabel: String = "Unknown"
+    ): String {
+        if (timestamp == null || timestamp <= 0L) return unknownLabel
         val ms = if (timestamp < 10000000000L) timestamp * 1000L else timestamp
         return try {
             val sdf = SimpleDateFormat(formatString, Locale.getDefault())
@@ -21,7 +26,7 @@ object DateUtils {
             
             sdf.format(Date(ms))
         } catch (e: Exception) {
-            "Unbekannt"
+            unknownLabel
         }
     }
 

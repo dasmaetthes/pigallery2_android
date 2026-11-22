@@ -53,8 +53,65 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.R
 import com.example.data.ApiMedia
+import com.example.data.PiGalleryApi
+import com.example.findActivity
 import androidx.activity.compose.BackHandler
+import androidx.annotation.StringRes
+import androidx.compose.ui.res.stringResource
+import androidx.core.graphics.toColorInt
+import androidx.core.net.toUri
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+private val MAP_CORS_HEADERS = mapOf(
+    "Access-Control-Allow-Origin" to "*",
+    "Cache-Control" to "public, max-age=86400"
+)
+
+private val MAP_ASSET_HEADERS = mapOf(
+    "Access-Control-Allow-Origin" to "*",
+    "Cache-Control" to "public, max-age=31536000"
+)
+
+private val ALLOWED_MAP_ASSETS = setOf(
+    "leaflet.css",
+    "MarkerCluster.css",
+    "leaflet.js",
+    "leaflet.markercluster.js",
+    "leaflet.polylineDecorator.js"
+)
+
+private fun inferMapAssetMimeType(fileName: String): String {
+    return when {
+        fileName.endsWith(".css", ignoreCase = true) -> "text/css"
+        fileName.endsWith(".js", ignoreCase = true) -> "application/javascript"
+        fileName.endsWith(".png", ignoreCase = true) -> "image/png"
+        else -> "application/octet-stream"
+    }
+}
+
+private fun inferImageMimeType(bytes: ByteArray, length: Int, rawHeader: String?): String {
+    val cleaned = rawHeader?.substringBefore(';')?.trim()?.lowercase()
+    if (!cleaned.isNullOrBlank() && cleaned.startsWith("image/")) {
+        return cleaned
+    }
+    if (length >= 4) {
+        if (bytes[0] == 0x89.toByte() && bytes[1] == 0x50.toByte() && bytes[2] == 0x4E.toByte() && bytes[3] == 0x47.toByte()) {
+            return "image/png"
+        }
+        if (bytes[0] == 0x47.toByte() && bytes[1] == 0x49.toByte() && bytes[2] == 0x46.toByte()) {
+            return "image/gif"
+        }
+        if (length >= 12 && bytes[0] == 0x52.toByte() && bytes[1] == 0x49.toByte() && bytes[2] == 0x46.toByte() && bytes[3] == 0x46.toByte() &&
+            bytes[8] == 0x57.toByte() && bytes[9] == 0x45.toByte() && bytes[10] == 0x42.toByte() && bytes[11] == 0x50.toByte()
+        ) {
+            return "image/webp"
+        }
+    }
+    return "image/jpeg"
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -83,7 +140,7 @@ fun MapBrowserDialog(
 
     var isPlaying by remember { mutableStateOf(false) }
     var isHeaderVisible by remember { mutableStateOf(true) }
-    var headerResetTrigger by remember { mutableStateOf(1) }
+    var headerResetTrigger by remember { mutableIntStateOf(1) }
 
     LaunchedEffect(headerResetTrigger, isPlaying, showProviderMenu) {
         if (isPlaying) {
@@ -97,7 +154,24 @@ fun MapBrowserDialog(
         }
     }
 
-    BackHandler { onDismiss() }
+    var keepHeaderForMenu by remember { mutableStateOf(false) }
+    val menuCoroutineScope = rememberCoroutineScope()
+    LaunchedEffect(showProviderMenu) {
+        if (showProviderMenu) {
+            keepHeaderForMenu = true
+        } else {
+            delay(200)
+            keepHeaderForMenu = false
+        }
+    }
+
+    BackHandler {
+        if (showProviderMenu) {
+            showProviderMenu = false
+        } else {
+            onDismiss()
+        }
+    }
 
     Surface(
         modifier = Modifier
@@ -128,7 +202,7 @@ fun MapBrowserDialog(
                         
                         // Floating UI
                         androidx.compose.animation.AnimatedVisibility(
-                            visible = isHeaderVisible,
+                            visible = isHeaderVisible || keepHeaderForMenu,
                             enter = androidx.compose.animation.fadeIn(),
                             exit = androidx.compose.animation.fadeOut(),
                             modifier = Modifier.align(Alignment.TopEnd)
@@ -140,12 +214,12 @@ fun MapBrowserDialog(
                                         headerResetTrigger++
                                     },
                                     modifier = Modifier
-                                        .size(40.dp)
+                                        .size(48.dp)
                                         .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f), androidx.compose.foundation.shape.CircleShape)
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.MoreVert,
-                                        contentDescription = "Map Menu",
+                                        contentDescription = stringResource(R.string.map_menu),
                                         tint = MaterialTheme.colorScheme.onSurface
                                     )
                                 }
@@ -155,7 +229,7 @@ fun MapBrowserDialog(
                                     modifier = Modifier.width(220.dp)
                                 ) {
                                     DropdownMenuItem(
-                                        text = { Text("Travel Track") },
+                                        text = { Text(stringResource(R.string.travel_track)) },
                                         onClick = {
                                             showTravelTrack = !showTravelTrack
                                             headerResetTrigger++
@@ -190,7 +264,7 @@ fun MapBrowserDialog(
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text(
-                                            text = "Map Style",
+                                            text = stringResource(R.string.map_style),
                                             style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                                             color = MaterialTheme.colorScheme.primary,
                                             textAlign = TextAlign.Center
@@ -198,11 +272,17 @@ fun MapBrowserDialog(
                                     }
                                     MapProvider.values().forEach { provider ->
                                         val isSelected = selectedProvider == provider
+                                        val providerLabel = stringResource(provider.labelResId)
                                         DropdownMenuItem(
                                             onClick = {
-                                                selectedProvider = provider
-                                                showProviderMenu = false
-                                                headerResetTrigger++
+                                                if (showProviderMenu) {
+                                                    showProviderMenu = false
+                                                    headerResetTrigger++
+                                                    menuCoroutineScope.launch {
+                                                        delay(180)
+                                                        selectedProvider = provider
+                                                    }
+                                                }
                                             },
                                             modifier = Modifier.then(
                                                 if (isSelected) {
@@ -231,7 +311,7 @@ fun MapBrowserDialog(
                                                     ) {
                                                         AsyncImage(
                                                             model = provider.previewUrl,
-                                                            contentDescription = "${provider.label} preview",
+                                                            contentDescription = stringResource(R.string.map_preview_cd, providerLabel),
                                                             modifier = Modifier.fillMaxSize(),
                                                             contentScale = androidx.compose.ui.layout.ContentScale.Crop
                                                         )
@@ -240,7 +320,7 @@ fun MapBrowserDialog(
                                                     Spacer(modifier = Modifier.height(6.dp))
                                                     
                                                     Text(
-                                                        text = provider.label,
+                                                        text = providerLabel,
                                                         style = if (isSelected) {
                                                             MaterialTheme.typography.labelLarge.copy(
                                                                 fontWeight = FontWeight.Bold,
@@ -276,20 +356,20 @@ private fun EmptyStateView() {
     ) {
         Icon(
             imageVector = Icons.Default.LocationOff,
-            contentDescription = "No Location Data",
+            contentDescription = stringResource(R.string.no_location_data),
             modifier = Modifier.size(72.dp),
             tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
         )
         Spacer(modifier = Modifier.height(16.dp))
         Text(
-            text = "No Geotagged Media Found",
+            text = stringResource(R.string.no_geotagged_media),
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "None of the files in this collection contain EXIF location coordinates.",
+            text = stringResource(R.string.no_geotagged_media_subtitle),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -315,12 +395,29 @@ private fun MapViewContainer(
     initialMediaId: String? = null
 ) {
     val context = LocalContext.current
+    val unknownLabel = stringResource(R.string.unknown)
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    var isMapLoading by remember { mutableStateOf(true) }
+    var isMapReady by remember { mutableStateOf(false) }
+    var mapError by remember { mutableStateOf<String?>(null) }
+    var reloadTrigger by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(isMapLoading, reloadTrigger) {
+        if (isMapLoading) {
+            delay(15_000L)
+            if (isMapLoading) {
+                isMapLoading = false
+                if (mapError == null) {
+                    mapError = context.getString(R.string.map_load_error)
+                }
+            }
+        }
+    }
 
     // Live-switch tile layers dynamically without reloading the entire WebView state
     LaunchedEffect(selectedProvider) {
         webViewRef?.evaluateJavascript(
-            "changeTileLayer('${selectedProvider.url}', '${selectedProvider.attribution.replace("'", "\\'")}')",
+            "if (typeof changeTileLayer !== 'undefined') changeTileLayer('${selectedProvider.url}', '${selectedProvider.attribution.replace("'", "\\'")}')",
             null
         )
     }
@@ -332,45 +429,81 @@ private fun MapViewContainer(
         )
     }
 
-    val lastLoadedHash = remember { IntArray(1) { 0 } }
-    
-    // Prepare HTML content for Leaflet Map
-    val htmlContent = remember(geotaggedMedia, initialMediaId) {
-        val markersBuilder = StringBuilder()
+    val lastLoadedHash = remember { IntArray(1) }
+    val lastReloadTrigger = remember { IntArray(1) }
+
+    val activeServerUrl = viewModel.getActiveServerUrl()
+    val thumbSuffix = viewModel.prefs.thumbnailPathSuffix
+    val thumbCacheKeyLookup by produceState<Map<String, String>>(
+        initialValue = emptyMap(),
+        key1 = geotaggedMedia,
+        key2 = activeServerUrl,
+        key3 = thumbSuffix
+    ) {
+        value = withContext(Dispatchers.Default) {
+            val map = HashMap<String, String>(geotaggedMedia.size * 2)
+            for (media in geotaggedMedia) {
+                val fullThumbUrl = PiGalleryApi.ensureHttpUrl(viewModel.getThumbnailUrl(media))
+                val cacheKey = "thumb_${media.id}_${media.name}"
+                if (fullThumbUrl.isNotBlank()) {
+                    map[fullThumbUrl] = cacheKey
+                    fullThumbUrl.toUri().encodedPath?.let { path ->
+                        map[path] = cacheKey
+                    }
+                }
+            }
+            map
+        }
+    }
+
+    val currentThumbLookup by rememberUpdatedState(thumbCacheKeyLookup)
+
+    val markersJson by produceState<String?>(
+        initialValue = null,
+        key1 = geotaggedMedia,
+        key2 = activeServerUrl,
+        key3 = thumbSuffix
+    ) {
+        value = withContext(Dispatchers.Default) {
+            val arr = org.json.JSONArray()
+            for (media in geotaggedMedia) {
+                val gps = media.metadata?.gps ?: continue
+                val id = media.id?.toString() ?: ""
+                val fullThumbUrl = PiGalleryApi.ensureHttpUrl(viewModel.getThumbnailUrl(media))
+                val entry = org.json.JSONArray().apply {
+                    put(gps.latitude)
+                    put(gps.longitude)
+                    put(id)
+                    put(fullThumbUrl)
+                }
+                arr.put(entry)
+            }
+            arr.toString()
+        }
+    }
+
+    val initialCenter = remember(geotaggedMedia, initialMediaId) {
         val matchingMedia = if (initialMediaId != null) {
             geotaggedMedia.find { it.id?.toString() == initialMediaId }
         } else {
             null
         }
         val startGps = matchingMedia?.metadata?.gps ?: geotaggedMedia.firstOrNull()?.metadata?.gps
-        val initialCenter = if (startGps != null) "[${startGps.latitude}, ${startGps.longitude}]" else "[0, 0]"
-        
-        for (media in geotaggedMedia) {
-            val gps = media.metadata?.gps ?: continue
-            val id = media.id?.toString() ?: ""
-            val dateTitle = if (media.metadata?.creationDate != null) {
-                DateUtils.formatMediaDate(media.metadata?.creationDate, media.metadata?.creationDateOffset)
-            } else {
-                ""
-            }
-            val safeName = media.name.replace("'", "\\'").replace("\"", "\\\"").replace("\n", " ").replace("\r", "")
-            val title = if (dateTitle.isNotBlank() && safeName.isNotBlank()) "$safeName<br/>$dateTitle" else dateTitle.ifBlank { safeName }
-            val rawThumbUrl = viewModel.getThumbnailUrl(media)
-            val fullThumbUrl = rawThumbUrl.let { if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it }
-            val thumbUrl = fullThumbUrl.replace("'", "\\'").replace("\"", "\\\"")
-            markersBuilder.append("addMarker(${gps.latitude}, ${gps.longitude}, '${id}', \"${title}\", '${thumbUrl}');\n")
-        }
+        if (startGps != null) "[${startGps.latitude}, ${startGps.longitude}]" else "[0, 0]"
+    }
 
+    // Prepare lightweight static HTML container for Leaflet Map (markers injected via bulk JSON)
+    val htmlContent = remember(initialCenter) {
         """
         <!DOCTYPE html>
         <html>
         <head>
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
-            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.css" />
-            <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
-            <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.js"></script>
-            <script src="https://unpkg.com/leaflet-polylinedecorator@1.6.0/dist/leaflet.polylineDecorator.js"></script>
+            <link rel="stylesheet" href="__map_assets__/leaflet.css" />
+            <link rel="stylesheet" href="__map_assets__/MarkerCluster.css" />
+            <script src="__map_assets__/leaflet.js"></script>
+            <script src="__map_assets__/leaflet.markercluster.js"></script>
+            <script src="__map_assets__/leaflet.polylineDecorator.js"></script>
             <style>
                 body { padding: 0; margin: 0; background: #121212; color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
                 html, body, #map { height: 100%; width: 100%; }
@@ -384,8 +517,9 @@ private fun MapViewContainer(
 
                 /* Custom Premium Dark Theme Marker Cluster Styles */
                 .marker-cluster-custom {
-                    background: rgba(33, 150, 243, 0.2);
+                    background: rgba(33, 150, 243, 0.22);
                     border-radius: 50%;
+                    overflow: visible !important;
                     display: flex;
                     align-items: center;
                     justify-content: center;
@@ -397,8 +531,8 @@ private fun MapViewContainer(
                     transform: scale(1.08);
                 }
                 .marker-cluster-custom-inner {
-                    width: 32px;
-                    height: 32px;
+                    width: 36px;
+                    height: 36px;
                     background: #2196F3;
                     border: 2px solid #ffffff;
                     border-radius: 50%;
@@ -413,7 +547,7 @@ private fun MapViewContainer(
                 
                 /* Medium size cluster (10-99 items) */
                 .marker-cluster-medium-custom {
-                    background: rgba(0, 188, 212, 0.2);
+                    background: rgba(0, 188, 212, 0.22);
                 }
                 .marker-cluster-medium-custom .marker-cluster-custom-inner {
                     background: #00BCD4;
@@ -422,7 +556,7 @@ private fun MapViewContainer(
                 
                 /* Large size cluster (100+ items) */
                 .marker-cluster-large-custom {
-                    background: rgba(156, 39, 176, 0.2);
+                    background: rgba(156, 39, 176, 0.22);
                 }
                 .marker-cluster-large-custom .marker-cluster-custom-inner {
                     background: #9C27B0;
@@ -483,7 +617,7 @@ private fun MapViewContainer(
                     }
                 });
 
-                // Initialize Marker Cluster Group with custom layout and responsive sizing
+                // Initialize Marker Cluster Group with custom layout, responsive sizing, and cluster thumbnails
                 var markersGroup = L.markerClusterGroup({
                     showCoverageOnHover: false,
                     zoomToBoundsOnClick: true,
@@ -491,17 +625,46 @@ private fun MapViewContainer(
                     maxClusterRadius: 50,
                     iconCreateFunction: function(cluster) {
                         var count = cluster.getChildCount();
+                        var children = cluster.getAllChildMarkers();
+                        var thumbUrl = null;
+                        if (children && children.length > 0) {
+                            for (var i = 0; i < children.length; i++) {
+                                if (children[i] && children[i].thumbUrl) {
+                                    thumbUrl = children[i].thumbUrl;
+                                    break;
+                                }
+                            }
+                        }
+
                         var mainClass = 'marker-cluster-custom';
+                        var clusterColor = '#2196F3';
                         if (count >= 100) {
                             mainClass += ' marker-cluster-large-custom';
+                            clusterColor = '#9C27B0';
                         } else if (count >= 10) {
                             mainClass += ' marker-cluster-medium-custom';
+                            clusterColor = '#00BCD4';
                         }
+
+                        var innerHtml = '';
+                        if (thumbUrl) {
+                            var safeThumb = escapeHtmlAttr(thumbUrl);
+                            innerHtml = '<div style="position:relative; width:52px; height:52px; display:flex; align-items:center; justify-content:center; overflow:visible;">' +
+                                '<div style="width:42px; height:42px; border-radius:50%; overflow:hidden; border:2px solid #ffffff; box-shadow:0 2px 8px rgba(0,0,0,0.6); background:' + clusterColor + '; position:relative; display:flex; align-items:center; justify-content:center; box-sizing:border-box;">' +
+                                '<span style="position:relative; z-index:0; color:#ffffff; font-weight:700; font-size:13px; line-height:1;">' + count + '</span>' +
+                                '<img src="' + safeThumb + '" style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; display:block; z-index:1;" onerror="this.style.display=\'none\'; var b=this.parentElement&&this.parentElement.nextElementSibling; if(b) b.style.display=\'none\';" />' +
+                                '</div>' +
+                                '<div style="position:absolute; top:0; right:0; z-index:2; min-width:20px; height:20px; padding:0 5px; border-radius:10px; background:' + clusterColor + '; color:#ffffff; font-weight:700; font-size:11px; line-height:1; display:inline-flex; align-items:center; justify-content:center; border:2px solid #ffffff; box-shadow:0 2px 6px rgba(0,0,0,0.65); box-sizing:border-box;">' + count + '</div>' +
+                                '</div>';
+                        } else {
+                            innerHtml = '<div class="marker-cluster-custom-inner"><span>' + count + '</span></div>';
+                        }
+
                         return L.divIcon({
-                            html: '<div class="marker-cluster-custom-inner"><span>' + count + '</span></div>',
+                            html: innerHtml,
                             className: mainClass,
-                            iconSize: L.point(44, 44),
-                            iconAnchor: L.point(22, 22)
+                            iconSize: L.point(52, 52),
+                            iconAnchor: L.point(26, 26)
                         });
                     }
                 });
@@ -509,39 +672,65 @@ private fun MapViewContainer(
                 var markers = [];
                 var markersById = {};
 
+                function escapeHtmlAttr(str) {
+                    return String(str)
+                        .replace(/&/g, '&amp;')
+                        .replace(/"/g, '&quot;')
+                        .replace(/'/g, '&#39;')
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;');
+                }
+
                 function createMarkerHtml(thumbUrl, isHighlighted) {
                     var sz = isHighlighted ? 52 : 40;
                     var borderW = isHighlighted ? 3 : 2;
                     var borderC = isHighlighted ? '#FFC107' : '#ffffff';
                     var shadow = isHighlighted ? '0 0 14px rgba(255, 193, 7, 0.9)' : '0 2px 6px rgba(0,0,0,0.6)';
+                    var safeUrl = escapeHtmlAttr(thumbUrl);
                     return '<div style="width:' + sz + 'px; height:' + sz + 'px; border-radius:50%; overflow:hidden; border:' + borderW + 'px solid ' + borderC + '; box-shadow:' + shadow + '; background-color:#2196F3; box-sizing:border-box; display:flex; align-items:center; justify-content:center; position:relative;">' +
                         '<svg style="width:20px; height:20px; fill:#ffffff; position:absolute; z-index:0;" viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>' +
-                        '<img src="' + thumbUrl + '" style="width:100%; height:100%; object-fit:cover; display:block; border-radius:50%; position:relative; z-index:1;" onerror="this.style.display=\'none\';" />' +
+                        '<img src="' + safeUrl + '" style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; display:block; border-radius:50%; z-index:1;" onerror="this.style.display=\'none\';" />' +
                         '</div>';
                 }
 
-                function addMarker(lat, lon, id, title, thumbUrl) {
-                    var thumbIcon = L.divIcon({
-                        html: createMarkerHtml(thumbUrl, false),
-                        iconSize: [40, 40],
-                        iconAnchor: [20, 20],
-                        popupAnchor: [0, -20],
-                        className: 'custom-thumb-icon'
-                    });
+                function setMarkersData(dataArray) {
+                    if (!Array.isArray(dataArray)) return;
+                    markersGroup.clearLayers();
+                    markers = [];
+                    markersById = {};
+                    activeHighlightedMarker = null;
 
-                    var marker = L.marker([lat, lon], {icon: thumbIcon});
-                    marker.thumbUrl = thumbUrl;
-                    marker.on('click', function() {
-                        onMarkerClick(id);
-                    });
-                    
-                    markersGroup.addLayer(marker);
-                    markers.push(marker);
-                    markersById[id] = marker;
-                }
+                    var batch = [];
+                    for (var i = 0; i < dataArray.length; i++) {
+                        var item = dataArray[i];
+                        var lat = item[0];
+                        var lon = item[1];
+                        var id = String(item[2] || '');
+                        var thumbUrl = String(item[3] || '');
+                        var thumbIcon = L.divIcon({
+                            html: createMarkerHtml(thumbUrl, false),
+                            iconSize: [40, 40],
+                            iconAnchor: [20, 20],
+                            popupAnchor: [0, -20],
+                            className: 'custom-thumb-icon'
+                        });
 
-                function cacheTrackTiles(startLatLng, endLatLng, targetZoom) {
-                    // Empty to prevent network exhaustion and freezes
+                        var marker = L.marker([lat, lon], {icon: thumbIcon});
+                        marker.thumbUrl = thumbUrl;
+                        (function(markerId) {
+                            marker.on('click', function() {
+                                onMarkerClick(markerId);
+                            });
+                        })(id);
+
+                        markers.push(marker);
+                        markersById[id] = marker;
+                        batch.push(marker);
+                    }
+                    if (batch.length > 0) {
+                        markersGroup.addLayers(batch);
+                    }
+                    fitBounds();
                 }
 
                 var activeHighlightedMarker = null;
@@ -581,10 +770,7 @@ private fun MapViewContainer(
                         var latLng = marker.getLatLng();
                         var currentCenter = map.getCenter();
                         var dist = map.distance(currentCenter, latLng);
-                        var targetZoom = Math.max(map.getZoom(), 17);
-                        
-                        cacheTrackTiles(currentCenter, latLng, targetZoom);
-                        
+
                         var proceedCalled = false;
                         function proceed() {
                             if (proceedCalled) return;
@@ -654,40 +840,34 @@ private fun MapViewContainer(
                 var travelTrackLayer = null;
                 var travelTrackDecorator = null;
                 function toggleTravelTrack(show) {
-                    if (show) {
-                        if (!travelTrackLayer && markers.length > 1) {
-                            var latlngs = markers.map(function(m) { return m.getLatLng(); });
-                            travelTrackLayer = L.polyline(latlngs, {
-                                color: '#2196F3',
-                                weight: 3,
-                                opacity: 0.8,
-                                noClip: true,
-                                smoothFactor: 1
-                            }).addTo(map);
-                            
-                            // Add directional arrows
-                            travelTrackDecorator = L.polylineDecorator(travelTrackLayer, {
-                                patterns: [
-                                    {offset: 25, repeat: 100, symbol: L.Symbol.arrowHead({pixelSize: 15, pathOptions: {fillOpacity: 1, weight: 0, color: '#2196F3'}})}
-                                ]
-                            }).addTo(map);
-                        }
-                    } else {
-                        if (travelTrackLayer) {
-                            map.removeLayer(travelTrackLayer);
-                            travelTrackLayer = null;
-                        }
-                        if (travelTrackDecorator) {
-                            map.removeLayer(travelTrackDecorator);
-                            travelTrackDecorator = null;
-                        }
+                    if (travelTrackLayer) {
+                        map.removeLayer(travelTrackLayer);
+                        travelTrackLayer = null;
+                    }
+                    if (travelTrackDecorator) {
+                        map.removeLayer(travelTrackDecorator);
+                        travelTrackDecorator = null;
+                    }
+                    if (show && markers.length > 1) {
+                        var latlngs = markers.map(function(m) { return m.getLatLng(); });
+                        travelTrackLayer = L.polyline(latlngs, {
+                            color: '#2196F3',
+                            weight: 3,
+                            opacity: 0.8,
+                            noClip: true,
+                            smoothFactor: 1
+                        }).addTo(map);
+                        
+                        // Add directional arrows
+                        travelTrackDecorator = L.polylineDecorator(travelTrackLayer, {
+                            patterns: [
+                                {offset: 25, repeat: 100, symbol: L.Symbol.arrowHead({pixelSize: 15, pathOptions: {fillOpacity: 1, weight: 0, color: '#2196F3'}})}
+                            ]
+                        }).addTo(map);
                     }
                 }
 
-                // Injected markers execution
-                ${markersBuilder.toString()}
                 map.addLayer(markersGroup);
-                fitBounds();
 
                 // Recalculate container size and fit bounds on resize, window load and layout shifts
                 window.addEventListener('resize', function() {
@@ -728,16 +908,7 @@ private fun MapViewContainer(
 
     // Keep screen on during active track playback
     val view = androidx.compose.ui.platform.LocalView.current
-    val window = remember(view) {
-        var contextActivity = context
-        while (contextActivity is android.content.ContextWrapper) {
-            if (contextActivity is android.app.Activity) {
-                break
-            }
-            contextActivity = contextActivity.baseContext
-        }
-        (contextActivity as? android.app.Activity)?.window
-    }
+    val window = remember(view) { context.findActivity()?.window }
 
     DisposableEffect(isPlaying, window) {
         if (isPlaying) {
@@ -755,6 +926,19 @@ private fun MapViewContainer(
             }
         }
         onDispose { }
+    }
+
+    LaunchedEffect(isMapReady, markersJson, webViewRef) {
+        val json = markersJson
+        val wv = webViewRef
+        if (isMapReady && json != null && wv != null) {
+            wv.evaluateJavascript("if (typeof setMarkersData !== 'undefined') { setMarkersData($json); }", null)
+            wv.evaluateJavascript("if (typeof toggleTravelTrack !== 'undefined') { toggleTravelTrack(${showTravelTrack}); }", null)
+            currentActiveMediaId?.let { mediaId ->
+                val quotedId = org.json.JSONObject.quote(mediaId)
+                wv.evaluateJavascript("if (typeof highlightMarker !== 'undefined') { highlightMarker($quotedId, 1); }", null)
+            }
+        }
     }
 
     LaunchedEffect(activeMediaId) {
@@ -856,6 +1040,7 @@ private fun MapViewContainer(
                     }
                     ensureCacheDirs(ctx)
                     WebView(ctx).apply {
+                        webViewRef = this
                         isFocusable = true
                         isFocusableInTouchMode = true
                         setOnKeyListener { _, keyCode, event ->
@@ -901,8 +1086,7 @@ private fun MapViewContainer(
                                 false
                             }
                         }
-                        setBackgroundColor(android.graphics.Color.parseColor("#121212"))
-                        setLayerType(android.view.View.LAYER_TYPE_SOFTWARE, null)
+                        setBackgroundColor("#121212".toColorInt())
                         layoutParams = android.view.ViewGroup.LayoutParams(
                             android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                             android.view.ViewGroup.LayoutParams.MATCH_PARENT
@@ -931,30 +1115,137 @@ private fun MapViewContainer(
                                 return true // Return true so main app process does not crash
                             }
 
+                            @Suppress("WebViewClientOnReceivedSslError")
+                            override fun onReceivedSslError(
+                                view: WebView?,
+                                handler: android.webkit.SslErrorHandler?,
+                                error: android.net.http.SslError?
+                            ) {
+                                if (viewModel.prefs.allowInsecureSsl) {
+                                    handler?.proceed()
+                                } else {
+                                    handler?.cancel()
+                                }
+                            }
+
+                            @OptIn(coil.annotation.ExperimentalCoilApi::class)
                             override fun shouldInterceptRequest(
                                 view: WebView,
                                 request: android.webkit.WebResourceRequest
                             ): android.webkit.WebResourceResponse? {
                                 val url = request.url.toString()
-                                if (url.contains("/gallery/content/")) {
+                                val requestPath = request.url.encodedPath
+
+                                // 1. Serve bundled local Leaflet & cluster assets directly from APK assets
+                                if (url.contains("__map_assets__/")) {
+                                    val assetName = url.substringAfter("__map_assets__/").substringBefore('?').trimStart('/')
+                                    if (assetName in ALLOWED_MAP_ASSETS) {
+                                        return try {
+                                            val stream = context.assets.open("map/$assetName")
+                                            android.webkit.WebResourceResponse(
+                                                inferMapAssetMimeType(assetName),
+                                                "UTF-8",
+                                                200,
+                                                "OK",
+                                                MAP_ASSET_HEADERS,
+                                                stream
+                                            )
+                                        } catch (e: Exception) {
+                                            android.util.Log.e("MapBrowserWebView", "Missing local map asset: $assetName", e)
+                                            null
+                                        }
+                                    }
+                                    return android.webkit.WebResourceResponse(
+                                        inferMapAssetMimeType(assetName),
+                                        null,
+                                        200,
+                                        "OK",
+                                        MAP_ASSET_HEADERS,
+                                        java.io.ByteArrayInputStream(ByteArray(0))
+                                    )
+                                }
+
+                                val lookup = currentThumbLookup
+                                val cacheKey = lookup[url] ?: requestPath?.let { lookup[it] }
+                                if (cacheKey != null || url.contains("/gallery/content/")) {
+                                    val diskCache = coil.Coil.imageLoader(context).diskCache
+
+                                    // 2. Try serving instantaneously from Coil's disk cache if already loaded
+                                    try {
+                                        val snapshot = (cacheKey?.let { diskCache?.openSnapshot(it) }) ?: diskCache?.openSnapshot(url)
+                                        snapshot?.use { snap ->
+                                            val cachedBytes = snap.data.toFile().readBytes()
+                                            if (cachedBytes.isNotEmpty()) {
+                                                val mime = inferImageMimeType(cachedBytes, cachedBytes.size, null)
+                                                return android.webkit.WebResourceResponse(
+                                                    mime,
+                                                    null,
+                                                    200,
+                                                    "OK",
+                                                    MAP_CORS_HEADERS,
+                                                    java.io.ByteArrayInputStream(cachedBytes)
+                                                )
+                                            }
+                                        }
+                                    } catch (_: Exception) {
+                                        // Fall through to network fetch
+                                    }
+
+                                    // 3. Fetch via PiGalleryApi OkHttpClient and persist to Coil's disk cache
                                     try {
                                         val cookies = viewModel.prefs.cookies
-                                        val builder = okhttp3.Request.Builder().url(url)
+                                        val builder = okhttp3.Request.Builder()
+                                            .url(url)
+                                            .header("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
                                         if (cookies.isNotBlank()) {
                                             builder.header("Cookie", cookies)
                                         }
-                                        val response = viewModel.api.client.newCall(builder.build()).execute()
-                                        if (response.isSuccessful) {
-                                            val contentType = response.header("Content-Type") ?: "image/jpeg"
-                                            val mimeType = contentType.substringBefore(';').trim()
-                                            val encoding = if (contentType.contains("charset=")) contentType.substringAfter("charset=").substringBefore(';').trim() else "UTF-8"
-                                            val bodyBytes = response.body?.bytes()
-                                            if (bodyBytes != null) {
-                                                return android.webkit.WebResourceResponse(mimeType, encoding, java.io.ByteArrayInputStream(bodyBytes))
+                                        viewModel.api.client.newCall(builder.build()).execute().use { response ->
+                                            if (response.isSuccessful) {
+                                                val bodyBytes = response.body?.bytes()
+                                                if (bodyBytes != null && bodyBytes.isNotEmpty()) {
+                                                    val targetCacheKey = cacheKey ?: url
+                                                    try {
+                                                        diskCache?.openEditor(targetCacheKey)?.let { editor ->
+                                                            try {
+                                                                editor.data.toFile().writeBytes(bodyBytes)
+                                                                editor.commit()
+                                                            } catch (_: Exception) {
+                                                                editor.abort()
+                                                            }
+                                                        }
+                                                    } catch (_: Exception) {
+                                                    }
+                                                    val mimeType = inferImageMimeType(bodyBytes, bodyBytes.size, response.header("Content-Type"))
+                                                    return android.webkit.WebResourceResponse(
+                                                        mimeType,
+                                                        null,
+                                                        200,
+                                                        "OK",
+                                                        MAP_CORS_HEADERS,
+                                                        java.io.ByteArrayInputStream(bodyBytes)
+                                                    )
+                                                }
                                             }
+                                            return android.webkit.WebResourceResponse(
+                                                "text/plain",
+                                                "UTF-8",
+                                                response.code.coerceAtLeast(400),
+                                                response.message.ifBlank { "Error" },
+                                                MAP_CORS_HEADERS,
+                                                java.io.ByteArrayInputStream(ByteArray(0))
+                                            )
                                         }
                                     } catch (e: Exception) {
-                                        e.printStackTrace()
+                                        android.util.Log.e("MapBrowserWebView", "Failed to load thumbnail: $url", e)
+                                        return android.webkit.WebResourceResponse(
+                                            "text/plain",
+                                            "UTF-8",
+                                            500,
+                                            "Error",
+                                            MAP_CORS_HEADERS,
+                                            java.io.ByteArrayInputStream(ByteArray(0))
+                                        )
                                     }
                                 }
                                 return super.shouldInterceptRequest(view, request)
@@ -964,14 +1255,49 @@ private fun MapViewContainer(
                             }
                             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                                 super.onPageStarted(view, url, favicon)
+                                isMapReady = false
+                                isMapLoading = true
+                                mapError = null
                                 view?.context?.let { ensureCacheDirs(it) }
                             }
                             override fun onPageFinished(view: WebView?, url: String?) {
-                                view?.evaluateJavascript("if (typeof toggleTravelTrack !== 'undefined') toggleTravelTrack(${showTravelTrack})", null)
-                                currentActiveMediaId?.let { mediaId ->
-                                    view?.evaluateJavascript("if (typeof highlightMarker !== 'undefined') highlightMarker('$mediaId', 1)", null)
+                                super.onPageFinished(view, url)
+                                view?.evaluateJavascript("(typeof L !== 'undefined' && typeof L.markerClusterGroup !== 'undefined').toString()") { jsResult ->
+                                    val loadedOk = jsResult?.contains("true") == true
+                                    isMapLoading = false
+                                    if (!loadedOk) {
+                                        isMapReady = false
+                                        mapError = context.getString(R.string.map_load_error)
+                                    } else {
+                                        mapError = null
+                                        isMapReady = true
+                                    }
                                 }
                                 view?.context?.let { ensureCacheDirs(it) }
+                            }
+                            override fun onReceivedError(
+                                view: WebView?,
+                                request: android.webkit.WebResourceRequest?,
+                                error: android.webkit.WebResourceError?
+                            ) {
+                                super.onReceivedError(view, request, error)
+                                if (request?.isForMainFrame == true) {
+                                    isMapLoading = false
+                                    mapError = context.getString(R.string.map_load_error)
+                                }
+                            }
+                            override fun onReceivedHttpError(
+                                view: WebView?,
+                                request: android.webkit.WebResourceRequest?,
+                                errorResponse: android.webkit.WebResourceResponse?
+                            ) {
+                                super.onReceivedHttpError(view, request, errorResponse)
+                                val reqUrl = request?.url?.toString() ?: ""
+                                val statusCode = errorResponse?.statusCode ?: 0
+                                if ((request?.isForMainFrame == true || reqUrl.contains("leaflet.js") || reqUrl.contains("leaflet.markercluster")) && statusCode >= 400) {
+                                    isMapLoading = false
+                                    mapError = context.getString(R.string.map_load_error)
+                                }
                             }
                         }
                         webChromeClient = object : android.webkit.WebChromeClient() {
@@ -1026,21 +1352,34 @@ private fun MapViewContainer(
                     val cookieManager = CookieManager.getInstance()
                     cookieManager.setAcceptCookie(true)
                     cookieManager.setAcceptThirdPartyCookies(webView, true)
-                    
-                    var serverUrl = viewModel.prefs.serverUrl
-                    if (serverUrl.isNotBlank()) {
-                        if (!serverUrl.startsWith("http")) {
-                            serverUrl = "http://$serverUrl"
+
+                    val primaryUrl = viewModel.prefs.serverUrl.trim().let {
+                        if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it
+                    }.trimEnd('/')
+                    val resolvedUrl = viewModel.getActiveServerUrl().trim().let {
+                        if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it
+                    }.trimEnd('/')
+
+                    val rawCookies = viewModel.prefs.cookies
+                    if (rawCookies.isNotBlank()) {
+                        val cookieParts = rawCookies.split(";").map { it.trim() }.filter { it.contains("=") }
+                        for (targetUrl in listOf(resolvedUrl, primaryUrl).distinct().filter { it.isNotBlank() }) {
+                            for (part in cookieParts) {
+                                cookieManager.setCookie(targetUrl, part)
+                            }
                         }
-                        cookieManager.setCookie(serverUrl, viewModel.prefs.cookies)
                         cookieManager.flush()
                     }
 
-                    val baseUrl = if (serverUrl.isNotBlank()) serverUrl else "https://localhost/"
-                    
+                    val baseUrl = when {
+                        resolvedUrl.isNotBlank() -> "$resolvedUrl/"
+                        primaryUrl.isNotBlank() -> "$primaryUrl/"
+                        else -> "https://localhost/"
+                    }
+
                     // Only load once to prevent flickering on recomposition, 
-                    // unless we want to rebuild the map entirely.
-                    if (lastLoadedHash[0] != htmlContent.hashCode()) {
+                    // unless content or manual reload trigger changed.
+                    if (lastLoadedHash[0] != htmlContent.hashCode() || lastReloadTrigger[0] != reloadTrigger) {
                         webView.loadDataWithBaseURL(
                             baseUrl,
                             htmlContent,
@@ -1049,9 +1388,56 @@ private fun MapViewContainer(
                             null
                         )
                         lastLoadedHash[0] = htmlContent.hashCode()
+                        lastReloadTrigger[0] = reloadTrigger
                     }
                 }
             )
+
+            if (isMapLoading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.background.copy(alpha = 0.85f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(text = stringResource(R.string.loading_map), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+                    }
+                }
+            }
+
+            mapError?.let { err ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.background.copy(alpha = 0.95f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.LocationOff,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(text = err, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.Center)
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(onClick = {
+                            mapError = null
+                            isMapLoading = true
+                            reloadTrigger++
+                        }) {
+                            Text(stringResource(R.string.retry))
+                        }
+                    }
+                }
+            }
 
             // Floating Close button
             androidx.compose.animation.AnimatedVisibility(
@@ -1065,12 +1451,12 @@ private fun MapViewContainer(
                     modifier = Modifier
                         .statusBarsPadding()
                         .padding(16.dp)
-                        .size(40.dp)
+                        .size(48.dp)
                         .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f), androidx.compose.foundation.shape.CircleShape)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Close,
-                        contentDescription = "Close Map",
+                        contentDescription = stringResource(R.string.close_map),
                         tint = MaterialTheme.colorScheme.onSurface
                     )
                 }
@@ -1096,7 +1482,7 @@ private fun MapViewContainer(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Add,
-                        contentDescription = "Zoom In"
+                        contentDescription = stringResource(R.string.zoom_in)
                     )
                 }
 
@@ -1112,7 +1498,7 @@ private fun MapViewContainer(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Remove,
-                        contentDescription = "Zoom Out"
+                        contentDescription = stringResource(R.string.zoom_out)
                     )
                 }
 
@@ -1132,7 +1518,7 @@ private fun MapViewContainer(
                 ) {
                     Icon(
                         imageVector = Icons.Default.ZoomInMap,
-                        contentDescription = "Center Map"
+                        contentDescription = stringResource(R.string.center_map)
                     )
                 }
             }
@@ -1150,7 +1536,7 @@ private fun MapViewContainer(
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                 ) {
                     Text(
-                        text = if (isMapInteractionEnabled) "Use D-Pad to pan. Press OK or BACK to exit." else "Press OK to interact with map",
+                        text = if (isMapInteractionEnabled) stringResource(R.string.tv_map_pan_hint) else stringResource(R.string.tv_map_enter_hint),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface
                     )
@@ -1174,18 +1560,29 @@ private fun MapViewContainer(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                val rawThumbUrl = viewModel.getThumbnailUrl(activeMedia)
-                val thumbUrl = rawThumbUrl.let { if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it }
-                val serverUrl = viewModel.prefs.serverUrl.let { if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it }
                 val cookies = viewModel.prefs.cookies
-                val imgRequest = ImageRequest.Builder(LocalContext.current)
-                    .data(thumbUrl)
-                    .apply {
-                        if (serverUrl.isNotBlank() && thumbUrl.startsWith(serverUrl)) {
-                            addHeader("Cookie", cookies)
-                        }
+                val thumbUrl = remember(activeMedia.id, activeMedia.parentPath, activeMedia.name, activeServerUrl, thumbSuffix) {
+                    viewModel.getThumbnailUrl(activeMedia).let {
+                        if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it
                     }
-                    .build()
+                }
+                val cacheKey = "thumb_${activeMedia.id}_${activeMedia.name}"
+                val imgRequest = remember(thumbUrl, cookies, cacheKey) {
+                    ImageRequest.Builder(context)
+                        .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .networkCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .memoryCacheKey(cacheKey)
+                        .diskCacheKey(cacheKey)
+                        .data(thumbUrl)
+                        .apply {
+                            if (cookies.isNotBlank()) {
+                                setHeader("Cookie", cookies)
+                            }
+                        }
+                        .crossfade(true)
+                        .build()
+                }
 
                 Box(
                     modifier = Modifier
@@ -1196,7 +1593,7 @@ private fun MapViewContainer(
                 ) {
                     AsyncImage(
                         model = imgRequest,
-                        contentDescription = "Active Media Preview",
+                        contentDescription = stringResource(R.string.active_media_preview),
                         modifier = Modifier.fillMaxSize(),
                         contentScale = androidx.compose.ui.layout.ContentScale.Fit
                     )
@@ -1217,7 +1614,7 @@ private fun MapViewContainer(
                     )
                     
                     if (activeMedia.metadata?.creationDate != null) {
-                        val dateStr = DateUtils.formatMediaDate(activeMedia.metadata?.creationDate, activeMedia.metadata?.creationDateOffset)
+                        val dateStr = DateUtils.formatMediaDate(activeMedia.metadata?.creationDate, activeMedia.metadata?.creationDateOffset, unknownLabel = unknownLabel)
                         Text(
                             text = dateStr,
                             style = MaterialTheme.typography.bodySmall,
@@ -1227,7 +1624,7 @@ private fun MapViewContainer(
                     
                     val currentIndex = geotaggedMedia.indexOf(activeMedia) + 1
                     Text(
-                        text = "$currentIndex / ${geotaggedMedia.size} (${mediaList.size} all)",
+                        text = stringResource(R.string.map_counter_format, currentIndex, geotaggedMedia.size, mediaList.size),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1275,7 +1672,7 @@ private fun MapViewContainer(
                     ) {
                         Icon(
                             imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = if (isPlaying) "Pause" else "Play",
+                            contentDescription = if (isPlaying) stringResource(R.string.pause) else stringResource(R.string.play),
                             tint = MaterialTheme.colorScheme.primary
                         )
                     }
@@ -1289,18 +1686,29 @@ private fun MapViewContainer(
                     ) {
                         items(sortedMedia, key = { it.id ?: it.hashCode() }) { media ->
                             val isSelected = activeMediaId == media.id?.toString()
-                            val rawThumbUrl = viewModel.getThumbnailUrl(media)
-                            val thumbUrl = rawThumbUrl.let { if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it }
-                            val serverUrl = viewModel.prefs.serverUrl.let { if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it }
                             val cookies = viewModel.prefs.cookies
-                            val imgRequest = ImageRequest.Builder(LocalContext.current)
-                                .data(thumbUrl)
-                                .apply {
-                                    if (serverUrl.isNotBlank() && thumbUrl.startsWith(serverUrl)) {
-                                        addHeader("Cookie", cookies)
-                                    }
+                            val thumbUrl = remember(media.id, media.parentPath, media.name, activeServerUrl, thumbSuffix) {
+                                viewModel.getThumbnailUrl(media).let {
+                                    if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it
                                 }
-                                .build()
+                            }
+                            val cacheKey = "thumb_${media.id}_${media.name}"
+                            val imgRequest = remember(thumbUrl, cookies, cacheKey) {
+                                ImageRequest.Builder(context)
+                                    .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                                    .networkCachePolicy(coil.request.CachePolicy.ENABLED)
+                                    .memoryCacheKey(cacheKey)
+                                    .diskCacheKey(cacheKey)
+                                    .data(thumbUrl)
+                                    .apply {
+                                        if (cookies.isNotBlank()) {
+                                            setHeader("Cookie", cookies)
+                                        }
+                                    }
+                                    .crossfade(true)
+                                    .build()
+                            }
 
                             var isFocused by remember { mutableStateOf(false) }
                             Box(
@@ -1323,7 +1731,7 @@ private fun MapViewContainer(
                             ) {
                                 AsyncImage(
                                     model = imgRequest,
-                                    contentDescription = "Thumbnail",
+                                    contentDescription = stringResource(R.string.thumbnail_cd),
                                     modifier = Modifier.fillMaxSize(),
                                     contentScale = androidx.compose.ui.layout.ContentScale.Crop
                                 )
@@ -1336,29 +1744,29 @@ private fun MapViewContainer(
     } // end Column
 }
 
-enum class MapProvider(val label: String, val url: String, val attribution: String) {
+enum class MapProvider(@StringRes val labelResId: Int, val url: String, val attribution: String) {
     BASE(
-        "Base",
+        R.string.map_provider_base,
         "https://api.maptiler.com/maps/basic-v2/{z}/{x}/{y}.png?key=lZTC1a9vLiM26GQ9Vxmu",
         "&copy; MapTiler &copy; OpenStreetMap contributors"
     ),
     DARK_MATTER(
-        "Dark Matter",
+        R.string.map_provider_dark_matter,
         "https://api.maptiler.com/maps/dataviz-dark/{z}/{x}/{y}.png?key=lZTC1a9vLiM26GQ9Vxmu",
         "&copy; MapTiler &copy; OpenStreetMap contributors"
     ),
     STREETS(
-        "Streets",
+        R.string.map_provider_streets,
         "https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key=lZTC1a9vLiM26GQ9Vxmu",
         "&copy; MapTiler &copy; OpenStreetMap contributors"
     ),
     TOPO(
-        "Topo",
+        R.string.map_provider_topo,
         "https://api.maptiler.com/maps/topo-v2/{z}/{x}/{y}.png?key=lZTC1a9vLiM26GQ9Vxmu",
         "&copy; MapTiler &copy; OpenStreetMap contributors"
     ),
     SATELLITE(
-        "Satellite Hybrid",
+        R.string.map_provider_satellite,
         "https://api.maptiler.com/maps/hybrid/{z}/{x}/{y}.jpg?key=lZTC1a9vLiM26GQ9Vxmu",
         "&copy; MapTiler &copy; OpenStreetMap contributors"
     );

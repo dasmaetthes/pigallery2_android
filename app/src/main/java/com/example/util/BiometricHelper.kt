@@ -6,8 +6,11 @@ import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import com.example.R
 
 object BiometricHelper {
+
+    const val ERROR_CANCELED = "Canceled"
 
     fun getAuthenticators(): Int {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -29,19 +32,19 @@ object BiometricHelper {
 
     fun getStatusMessage(context: Context): String {
         return when (canAuthenticate(context)) {
-            BiometricManager.BIOMETRIC_SUCCESS -> "Available"
-            BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE -> "No biometric hardware available"
-            BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE -> "Biometric sensor unavailable"
-            BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> "No fingerprint or device lock configured in system settings"
-            BiometricManager.BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED -> "Security update required"
-            else -> "Biometric protection unsupported"
+            BiometricManager.BIOMETRIC_SUCCESS -> context.getString(R.string.biometric_available)
+            BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE -> context.getString(R.string.biometric_no_hardware)
+            BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE -> context.getString(R.string.biometric_hw_unavailable)
+            BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> context.getString(R.string.biometric_none_enrolled)
+            BiometricManager.BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED -> context.getString(R.string.biometric_security_update)
+            else -> context.getString(R.string.biometric_unsupported)
         }
     }
 
     fun authenticate(
         activity: FragmentActivity,
-        title: String = "PiGallery2 Security",
-        subtitle: String = "Verify fingerprint, face, or PIN to continue",
+        title: String = activity.getString(R.string.biometric_title),
+        subtitle: String = activity.getString(R.string.biometric_subtitle),
         onSuccess: () -> Unit,
         onError: (String) -> Unit = {}
     ) {
@@ -56,7 +59,7 @@ object BiometricHelper {
             promptInfoBuilder.setAllowedAuthenticators(authenticators)
         } catch (e: Exception) {
             promptInfoBuilder.setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_WEAK)
-            promptInfoBuilder.setNegativeButtonText("Cancel")
+            promptInfoBuilder.setNegativeButtonText(activity.getString(R.string.cancel))
         }
 
         val biometricPrompt = BiometricPrompt(
@@ -74,7 +77,7 @@ object BiometricHelper {
                         errorCode != BiometricPrompt.ERROR_NEGATIVE_BUTTON) {
                         onError(errString.toString())
                     } else {
-                        onError("Canceled")
+                        onError(ERROR_CANCELED)
                     }
                 }
 
@@ -87,7 +90,7 @@ object BiometricHelper {
         try {
             biometricPrompt.authenticate(promptInfoBuilder.build())
         } catch (e: Exception) {
-            onError(e.localizedMessage ?: "Biometric authentication error")
+            onError(e.localizedMessage ?: activity.getString(R.string.biometric_generic_error))
         }
     }
 }

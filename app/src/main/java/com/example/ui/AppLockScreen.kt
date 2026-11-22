@@ -37,7 +37,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
 import androidx.fragment.app.FragmentActivity
+import com.example.R
 import com.example.findActivity
 import com.example.util.BiometricHelper
 
@@ -52,19 +54,19 @@ fun AppLockScreen(
 
     fun triggerAuth() {
         if (activity == null) {
-            errorMessage = "Unable to start security prompt"
+            errorMessage = context.getString(R.string.unable_to_start_security_prompt)
             return
         }
         BiometricHelper.authenticate(
             activity = activity,
-            title = "Unlock PiGallery2",
-            subtitle = "Verify your fingerprint, face, or device PIN to continue",
+            title = context.getString(R.string.unlock_pigallery2),
+            subtitle = context.getString(R.string.unlock_biometric_subtitle),
             onSuccess = {
                 errorMessage = null
                 onUnlockSuccess()
             },
             onError = { err ->
-                if (err != "Canceled") {
+                if (err != BiometricHelper.ERROR_CANCELED) {
                     errorMessage = err
                 }
             }
@@ -108,7 +110,7 @@ fun AppLockScreen(
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = Icons.Default.Lock,
-                                contentDescription = "Locked",
+                                contentDescription = stringResource(R.string.locked_cd),
                                 tint = MaterialTheme.colorScheme.onPrimaryContainer,
                                 modifier = Modifier.size(44.dp)
                             )
@@ -118,7 +120,7 @@ fun AppLockScreen(
                     Spacer(modifier = Modifier.height(24.dp))
 
                     Text(
-                        text = "PiGallery2 is Protected",
+                        text = stringResource(R.string.pigallery2_is_protected),
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
@@ -128,7 +130,7 @@ fun AppLockScreen(
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Text(
-                        text = "Use your fingerprint, face unlock, or device PIN/pattern to unlock your gallery",
+                        text = stringResource(R.string.app_lock_description),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
@@ -159,7 +161,7 @@ fun AppLockScreen(
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(modifier = Modifier.size(8.dp))
-                        Text("Unlock App", fontWeight = FontWeight.SemiBold)
+                        Text(stringResource(R.string.unlock_app), fontWeight = FontWeight.SemiBold)
                     }
                 }
             }

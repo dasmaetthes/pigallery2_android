@@ -1,208 +1,78 @@
 package com.example.ui
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.type
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.text.style.TextAlign
 
+import android.app.Activity
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
-import androidx.compose.ui.draw.blur
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.core.net.toUri
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.material3.InputChip
-import androidx.compose.material3.InputChipDefaults
-import androidx.compose.material.icons.filled.Clear
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.grid.itemsIndexed
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Sort
-import androidx.compose.material.icons.automirrored.filled.Logout
-import androidx.compose.foundation.focusable
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Layers
-import androidx.compose.material.icons.filled.PlayCircle
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.filled.GridView
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Lock
-import com.example.findActivity
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PhotoLibrary
-import androidx.compose.material.icons.filled.Map
-import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.graphics.vector.path
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.unit.Dp
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
+import androidx.fragment.app.FragmentActivity
+import androidx.compose.ui.res.stringResource
 import com.example.R
 import com.example.data.ApiAlbum
-import com.example.data.ApiDirectory
-import com.example.data.ApiMedia
-import com.example.data.ApiSubFolder
-import androidx.compose.ui.composed
-import androidx.compose.ui.focus.onFocusChanged
-
-import android.content.pm.PackageManager
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun AdaptivePullToRefreshBox(
-    isRefreshing: Boolean,
-    onRefresh: () -> Unit,
-    modifier: Modifier = Modifier,
-    content: @Composable BoxScope.() -> Unit
-) {
-    val context = LocalContext.current
-    val isTv = context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
-    if (isTv) {
-        Box(modifier = modifier, content = content)
-    } else {
-        PullToRefreshBox(
-            isRefreshing = isRefreshing,
-            onRefresh = onRefresh,
-            modifier = modifier,
-            indicator = {}, // Eliminates the upper area indicator completely
-        ) {
-            content()
-
-            // Keep only the loading indicator in the center during refresh
-            if (isRefreshing) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Surface(
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.92f),
-                        shadowElevation = 6.dp,
-                        tonalElevation = 6.dp
-                    ) {
-                        Box(modifier = Modifier.padding(14.dp)) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(32.dp),
-                                strokeWidth = 3.dp,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-fun Modifier.tvFocus(
-    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(12.dp),
-    showBorder: Boolean = true
-): Modifier = this.composed {
-    var isFocused by remember { mutableStateOf(false) }
-    
-    val borderModifier = if (showBorder && isFocused) {
-        Modifier.border(4.dp, MaterialTheme.colorScheme.primary, shape)
-    } else {
-        Modifier
-    }
-
-    this
-        .onFocusChanged { isFocused = it.isFocused }
-        .then(borderModifier)
-        .graphicsLayer {
-            // Removed shadowElevation to avoid gray border effect in dark mode
-            this.shape = shape
-            clip = true
-        }
-}
-
-fun Modifier.tvSlider(
-    value: Float,
-    onValueChange: (Float) -> Unit,
-    valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
-    steps: Int = 0
-): Modifier = this.onPreviewKeyEvent { event ->
-    if (event.type == KeyEventType.KeyDown) {
-        val stepSize = if (steps > 0) (valueRange.endInclusive - valueRange.start) / (steps + 1) else (valueRange.endInclusive - valueRange.start) / 10f
-        when (event.key) {
-            Key.DirectionLeft -> {
-                onValueChange((value - stepSize).coerceIn(valueRange))
-                true
-            }
-            Key.DirectionRight -> {
-                onValueChange((value + stepSize).coerceIn(valueRange))
-                true
-            }
-            else -> false
-        }
-    } else {
-        // Consume ACTION_UP for left/right
-        if (event.key == Key.DirectionLeft || event.key == Key.DirectionRight) {
-            true
-        } else {
-            false
-        }
-    }
-}
+import com.example.data.search.SearchQueryParser
+import com.example.findActivity
+import com.example.util.BiometricHelper
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -211,7 +81,7 @@ fun GalleryScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val isTv = context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
+    val isTv = context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
     val isAppLocked by viewModel.isAppLocked.collectAsState()
     if (isAppLocked) {
         AppLockScreen(
@@ -226,37 +96,71 @@ fun GalleryScreen(
     val selectedMedia by viewModel.selectedMedia.collectAsState()
     val isSelectMode by viewModel.isSelectMode.collectAsState()
     val selectedMediaForShare by viewModel.selectedMediaForShare.collectAsState()
-    
+
     val isSearchActive by viewModel.isSearchActive.collectAsState()
+    val showSearchSuggestions by viewModel.showSearchSuggestions.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
-    var textFieldValue by remember { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(searchQuery)) }
+    val searchFieldFocusRequester = remember { FocusRequester() }
+    val searchSuggestionsFocusRequester = remember { FocusRequester() }
+    val galleryGridFirstItemFocusRequester = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    var textFieldValue by remember { mutableStateOf(TextFieldValue(searchQuery)) }
     LaunchedEffect(searchQuery) {
         if (searchQuery != textFieldValue.text) {
             textFieldValue = textFieldValue.copy(
                 text = searchQuery,
-                selection = androidx.compose.ui.text.TextRange(searchQuery.length)
+                selection = TextRange(searchQuery.length)
             )
         }
     }
     val isFlattened by viewModel.isFlattened.collectAsState()
     val galleryViewMode by viewModel.galleryViewMode.collectAsState()
     val defaultRootPath by viewModel.defaultRootPath.collectAsState()
-    val searchSuggestions by viewModel.searchSuggestions.collectAsState()
     var showAboutDialog by remember { mutableStateOf(false) }
     var showQueryBuilder by remember { mutableStateOf(false) }
+    var showSaveAlbumDialog by remember { mutableStateOf(false) }
+    var queryToSaveAsAlbum by remember { mutableStateOf("") }
+    var albumToDelete by remember { mutableStateOf<ApiAlbum?>(null) }
     var showMapDialog by remember { mutableStateOf(false) }
     var mapInitialMediaId by remember { mutableStateOf<String?>(null) }
-    var dismissedUpdateVersion by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
+    var dismissedUpdateVersion by rememberSaveable { mutableStateOf<String?>(null) }
+    val canManageAlbums by viewModel.canManageAlbums.collectAsState()
+    val saveAlbumState by viewModel.saveAlbumState.collectAsState()
+    val deleteAlbumState by viewModel.deleteAlbumState.collectAsState()
 
-    // Collect states to determine list of media for map-based browsing
+    LaunchedEffect(saveAlbumState) {
+        if (saveAlbumState is SaveAlbumUiState.Success) {
+            val savedName = (saveAlbumState as SaveAlbumUiState.Success).albumName
+            Toast.makeText(
+                context,
+                context.getString(R.string.album_saved_toast, savedName),
+                Toast.LENGTH_SHORT
+            ).show()
+            showSaveAlbumDialog = false
+            viewModel.resetSaveAlbumState()
+        }
+    }
+
+    LaunchedEffect(deleteAlbumState) {
+        if (deleteAlbumState is DeleteAlbumUiState.Success) {
+            val deletedName = (deleteAlbumState as DeleteAlbumUiState.Success).albumName
+            Toast.makeText(
+                context,
+                context.getString(R.string.album_deleted_toast, deletedName),
+                Toast.LENGTH_SHORT
+            ).show()
+            albumToDelete = null
+            viewModel.resetDeleteAlbumState()
+        }
+    }
+
     val galleryState by viewModel.galleryState.collectAsState()
     val albumContentState by viewModel.albumContentState.collectAsState()
     val personContentState by viewModel.personContentState.collectAsState()
 
-    // Album Tab sub-navigation states
     val selectedAlbum by viewModel.selectedAlbum.collectAsState()
     val selectedPerson by viewModel.selectedPerson.collectAsState()
-
     val protectedFolders by viewModel.protectedFolders.collectAsState()
 
     val mapMediaList = remember(activeTab, galleryState, albumContentState, personContentState, selectedAlbum, selectedPerson, protectedFolders) {
@@ -287,38 +191,42 @@ fun GalleryScreen(
         }
     }
 
-    // Handle system back navigation nicely
     BackHandler(enabled = true) {
-        val handled = viewModel.goBackFolder()
-        if (!handled) {
-            // If we are on Gallery, do nothing or exit app, but let's allow going back to root folder or gallery if we are in other tabs
-            if (activeTab != ActiveTab.GALLERY) {
-                viewModel.setActiveTab(ActiveTab.GALLERY)
-            } else {
-                (context as? android.app.Activity)?.finish()
+        if (activeTab == ActiveTab.GALLERY && isSearchActive) {
+            if (showSearchSuggestions || !viewModel.goBackFolder()) {
+                viewModel.toggleSearchActive()
+            }
+        } else {
+            val handled = viewModel.goBackFolder()
+            if (!handled) {
+                if (activeTab != ActiveTab.GALLERY) {
+                    viewModel.setActiveTab(ActiveTab.GALLERY)
+                } else {
+                    (context as? Activity)?.finish()
+                }
             }
         }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    if (isSelectMode) {
-                        Text(
-                            text = "${selectedMediaForShare.size} selected",
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.titleLarge
-                        )
-                    } else if (activeTab == ActiveTab.GALLERY && isSearchActive) {
-                            val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
-                            val focusRequester = remember { FocusRequester() }
-                            LaunchedEffect(Unit) {
-                                try {
-                                    kotlinx.coroutines.delay(100)
-                                    focusRequester.requestFocus()
-                                } catch (e: Exception) {}
+            topBar = {
+                TopAppBar(
+                    title = {
+                        if (isSelectMode) {
+                            Text(
+                                text = stringResource(R.string.selected_count, selectedMediaForShare.size),
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleLarge
+                            )
+                        } else if (activeTab == ActiveTab.GALLERY && isSearchActive) {
+                            LaunchedEffect(isSearchActive) {
+                                if (isSearchActive) {
+                                    try {
+                                        delay(100)
+                                        searchFieldFocusRequester.requestFocus()
+                                    } catch (_: Exception) {}
+                                }
                             }
                             TextField(
                                 value = textFieldValue,
@@ -330,12 +238,13 @@ fun GalleryScreen(
                                         viewModel.showSearchSuggestions.value = true
                                     }
                                 },
-                                placeholder = { Text("Search") },
+                                placeholder = { Text(stringResource(R.string.search)) },
                                 singleLine = true,
-                                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
-                                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = {
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                                keyboardActions = KeyboardActions(onSearch = {
                                     viewModel.executeSearch()
                                     keyboardController?.hide()
+                                    focusManager.clearFocus()
                                 }),
                                 colors = TextFieldDefaults.colors(
                                     focusedContainerColor = Color.Transparent,
@@ -345,436 +254,605 @@ fun GalleryScreen(
                                 ),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .focusRequester(focusRequester)
-                            )
-                    } else {
-                        val titleText = when (activeTab) {
-                            ActiveTab.GALLERY -> {
-                                if (galleryViewMode == GalleryViewMode.DATE) {
-                                    val currentPath = pathHistory.lastOrNull() ?: ""
-                                    when {
-                                        currentPath.isEmpty() || currentPath == defaultRootPath -> "Gallery"
-                                        currentPath.startsWith("year:") && !currentPath.contains("month:") -> currentPath.substringAfter("year:")
-                                        currentPath.contains("month:") -> {
-                                            val year = currentPath.substringAfter("year:").substringBefore("/")
-                                            val monthNum = currentPath.substringAfter("month:").toIntOrNull() ?: 1
-                                            "${viewModel.getMonthName(monthNum)} $year"
+                                    .focusRequester(searchFieldFocusRequester)
+                                    .focusProperties {
+                                        down = if (showSearchSuggestions) {
+                                            searchSuggestionsFocusRequester
+                                        } else {
+                                            galleryGridFirstItemFocusRequester
                                         }
-                                        else -> "Gallery"
                                     }
-                                } else {
-                                    val currentFolder = pathHistory.lastOrNull()?.substringAfterLast('/') ?: "Root"
-                                    if (currentFolder.isEmpty()) "Gallery" else currentFolder
+                                    .onPreviewKeyEvent { event ->
+                                        if (event.type == KeyEventType.KeyDown) {
+                                            when (event.key) {
+                                                Key.DirectionDown -> {
+                                                    keyboardController?.hide()
+                                                    val target = if (showSearchSuggestions) {
+                                                        searchSuggestionsFocusRequester
+                                                    } else {
+                                                        galleryGridFirstItemFocusRequester
+                                                    }
+                                                    try {
+                                                        target.requestFocus()
+                                                        true
+                                                    } catch (_: Exception) {
+                                                        focusManager.moveFocus(FocusDirection.Down)
+                                                    }
+                                                }
+                                                Key.Enter, Key.NumPadEnter -> {
+                                                    viewModel.executeSearch()
+                                                    keyboardController?.hide()
+                                                    focusManager.clearFocus()
+                                                    true
+                                                }
+                                                else -> false
+                                            }
+                                        } else {
+                                            false
+                                        }
+                                    }
+                            )
+                        } else {
+                            val titleText = when (activeTab) {
+                                ActiveTab.GALLERY -> {
+                                    if (galleryViewMode == GalleryViewMode.DATE) {
+                                        val currentPath = pathHistory.lastOrNull() ?: ""
+                                        when {
+                                            currentPath.isEmpty() || currentPath == defaultRootPath -> stringResource(R.string.gallery)
+                                            currentPath.startsWith("year:") && !currentPath.contains("month:") -> currentPath.substringAfter("year:")
+                                            currentPath.contains("month:") -> {
+                                                val year = currentPath.substringAfter("year:").substringBefore("/")
+                                                val monthNum = currentPath.substringAfter("month:").toIntOrNull() ?: 1
+                                                "${viewModel.getMonthName(monthNum)} $year"
+                                            }
+                                            else -> stringResource(R.string.gallery)
+                                        }
+                                    } else {
+                                        val currentFolder = pathHistory.lastOrNull()?.substringAfterLast('/') ?: stringResource(R.string.root)
+                                        if (currentFolder.isEmpty()) stringResource(R.string.gallery) else currentFolder
+                                    }
                                 }
+                                ActiveTab.ALBUMS -> selectedAlbum?.name ?: stringResource(R.string.albums)
+                                ActiveTab.PERSONS -> selectedPerson?.name ?: stringResource(R.string.persons)
+                                ActiveTab.REDISCOVER -> stringResource(R.string.rediscover)
+                                ActiveTab.SETTINGS -> stringResource(R.string.settings)
                             }
-                            ActiveTab.ALBUMS -> {
-                                selectedAlbum?.name ?: "Albums"
-                            }
-                            ActiveTab.PERSONS -> {
-                                selectedPerson?.name ?: "Persons"
-                            }
-                            ActiveTab.REDISCOVER -> "Rediscover"
-                            ActiveTab.SETTINGS -> "Settings"
-                        }
-                        Text(
-                            text = titleText,
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.titleLarge
-                        )
-                    }
-                },
-                navigationIcon = {
-                    if (isSelectMode) {
-                        IconButton(onClick = { viewModel.exitSelectMode() }) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Exit selection"
+                            Text(
+                                text = titleText,
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleLarge
                             )
                         }
-                    } else if (activeTab == ActiveTab.GALLERY && pathHistory.size > 1) {
-                        IconButton(onClick = { viewModel.goBackFolder() }) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Go back"
-                            )
-                        }
-                    } else if (activeTab == ActiveTab.ALBUMS && selectedAlbum != null) {
-                        IconButton(onClick = { viewModel.selectAlbum(null) }) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back to albums"
-                            )
-                        }
-                    } else if (activeTab == ActiveTab.PERSONS && selectedPerson != null) {
-                        IconButton(onClick = { viewModel.clearSelectedPerson() }) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back to persons"
-                            )
-                        }
-                    }
-                },
-                actions = {
-                    if (isSelectMode) {
-                        IconButton(onClick = { viewModel.shareSelectedMedia(context) }) {
-                            Icon(
-                                imageVector = Icons.Default.Share,
-                                contentDescription = "Share selected items"
-                            )
-                        }
-                        IconButton(onClick = { viewModel.downloadSelectedMedia(context) }) {
-                            Icon(
-                                imageVector = Icons.Default.Download,
-                                contentDescription = "Download selected items"
-                            )
-                        }
-                    } else {
-                        if (activeTab == ActiveTab.GALLERY) {
-                            if (isSearchActive) {
-                                IconButton(onClick = { showQueryBuilder = true }) {
-                                    Icon(
-                                        imageVector = Icons.Default.Tune,
-                                        contentDescription = "Advanced Search Builder",
-                                        tint = MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                            }
-                            // Search Button
-                            IconButton(onClick = { 
-                                if (isSearchActive && searchQuery.isNotEmpty()) {
-                                    viewModel.updateSearchQueryText("")
-                                } else {
-                                    viewModel.toggleSearchActive() 
-                                }
-                            }) {
+                    },
+                    navigationIcon = {
+                        if (isSelectMode) {
+                            IconButton(onClick = { viewModel.exitSelectMode() }) {
                                 Icon(
-                                    imageVector = if (isSearchActive) Icons.Default.Close else Icons.Default.Search,
-                                    contentDescription = if (isSearchActive) "Close Search" else "Search"
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = stringResource(R.string.exit_selection)
                                 )
                             }
-
-                        }
-                        
-                        if (activeTab == ActiveTab.PERSONS && selectedPerson != null) {
-                            IconButton(onClick = { selectedPerson?.let { viewModel.togglePersonFavourite(it) } }) {
-                                val isFav = selectedPerson?.isFavourite == true
+                        } else if (activeTab == ActiveTab.GALLERY && pathHistory.size > 1) {
+                            IconButton(onClick = { viewModel.goBackFolder() }) {
                                 Icon(
-                                    imageVector = Icons.Default.Star,
-                                    contentDescription = "Toggle favorite",
-                                    tint = if (isFav) Color(0xFFFFD700) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = stringResource(R.string.go_back)
                                 )
                             }
-                        }
-                        
-                        val hasGeotagged = remember(mapMediaList) {
-                            mapMediaList.any { it.metadata?.gps != null }
-                        }
-                        val showMapButton = !isTv && when(activeTab) {
-                            ActiveTab.GALLERY -> hasGeotagged
-                            ActiveTab.ALBUMS -> selectedAlbum != null && hasGeotagged
-                            ActiveTab.PERSONS -> selectedPerson != null && hasGeotagged
-                            else -> false
-                        }
-                        if (showMapButton) {
-                            IconButton(onClick = { showMapDialog = true }) {
+                        } else if (activeTab == ActiveTab.ALBUMS && selectedAlbum != null) {
+                            IconButton(onClick = { viewModel.selectAlbum(null) }) {
                                 Icon(
-                                    imageVector = Icons.Default.Map,
-                                    contentDescription = "Map View"
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = stringResource(R.string.back_to_albums)
                                 )
                             }
-                        }
-
-                        if (activeTab == ActiveTab.GALLERY || activeTab == ActiveTab.ALBUMS || activeTab == ActiveTab.PERSONS) {
-                            // Sorting Menu Button
-                            var showSortDialog by remember { mutableStateOf(false) }
-                            IconButton(onClick = { showSortDialog = true }) {
+                        } else if (activeTab == ActiveTab.PERSONS && selectedPerson != null) {
+                            IconButton(onClick = { viewModel.clearSelectedPerson() }) {
                                 Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.Sort,
-                                    contentDescription = "Sort Options"
-                                )
-                            }
-                            if (showSortDialog) {
-                                SortDialog(
-                                    viewModel = viewModel,
-                                    onDismiss = { showSortDialog = false }
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = stringResource(R.string.back_to_persons)
                                 )
                             }
                         }
-                        
-                        if (activeTab == ActiveTab.SETTINGS) {
-                        }
-                        
-                        var showMoreMenu by remember { mutableStateOf(false) }
-                        IconButton(onClick = { showMoreMenu = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "More Options")
-                        }
-                        DropdownMenu(
-                            expanded = showMoreMenu,
-                            onDismissRequest = { showMoreMenu = false }
-                        ) {
+                    },
+                    actions = {
+                        if (isSelectMode) {
+                            IconButton(onClick = { viewModel.shareSelectedMedia(context) }) {
+                                Icon(
+                                    imageVector = Icons.Default.Share,
+                                    contentDescription = stringResource(R.string.share_selected)
+                                )
+                            }
+                            IconButton(onClick = { viewModel.downloadSelectedMedia(context) }) {
+                                Icon(
+                                    imageVector = Icons.Default.Download,
+                                    contentDescription = stringResource(R.string.download_selected)
+                                )
+                            }
+                        } else {
                             if (activeTab == ActiveTab.GALLERY) {
-                                DropdownMenuItem(
-                                    text = { Text(if (galleryViewMode == GalleryViewMode.DATE) "View by Folder" else "View by Date") },
-                                    onClick = {
-                                        viewModel.setGalleryViewMode(if (galleryViewMode == GalleryViewMode.DATE) GalleryViewMode.FOLDER else GalleryViewMode.DATE)
-                                        showMoreMenu = false
-                                    },
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = if (galleryViewMode == GalleryViewMode.DATE) Icons.Default.Folder else Icons.Default.DateRange,
-                                            contentDescription = null
-                                        )
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(if (isFlattened) "Unflatten Directory" else "Flatten Directory") },
-                                    onClick = {
-                                        viewModel.toggleFlattened()
-                                        showMoreMenu = false
-                                    },
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = if (isFlattened) Icons.Default.GridView else Icons.Default.Layers,
-                                            contentDescription = null
-                                        )
-                                    }
-                                )
-                            }
-                            if (activeTab == ActiveTab.GALLERY && galleryViewMode == GalleryViewMode.FOLDER && (pathHistory.lastOrNull() ?: "").isNotEmpty()) {
-                                val currentFolder = pathHistory.last()
-                                val isProtected = viewModel.isFolderProtected(currentFolder)
-                                val isDirectlyProtected = viewModel.isFolderDirectlyProtected(currentFolder)
-                                val isInheritedProtected = isProtected && !isDirectlyProtected
-
-                                if (isInheritedProtected) {
-                                    DropdownMenuItem(
-                                        text = { Text("Protected (inherited from parent)") },
+                                val searchDownTarget = if (showSearchSuggestions) {
+                                    searchSuggestionsFocusRequester
+                                } else {
+                                    galleryGridFirstItemFocusRequester
+                                }
+                                if (isTv && isSearchActive && searchQuery.isNotBlank()) {
+                                    IconButton(
                                         onClick = {
-                                            showMoreMenu = false
-                                            android.widget.Toast.makeText(
-                                                context,
-                                                "This subfolder is automatically protected because its parent folder is locked.",
-                                                android.widget.Toast.LENGTH_LONG
-                                            ).show()
+                                            viewModel.executeSearch()
+                                            keyboardController?.hide()
+                                            focusManager.clearFocus()
                                         },
-                                        leadingIcon = {
+                                        modifier = Modifier.focusProperties { down = searchDownTarget }
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Search,
+                                            contentDescription = stringResource(R.string.execute_search),
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                                if (isSearchActive) {
+                                    if (canManageAlbums && searchQuery.isNotBlank()) {
+                                        IconButton(
+                                            onClick = {
+                                                queryToSaveAsAlbum = searchQuery
+                                                viewModel.resetSaveAlbumState()
+                                                showSaveAlbumDialog = true
+                                            },
+                                            modifier = Modifier
+                                                .testTag("save_search_as_album_button")
+                                                .focusProperties { down = searchDownTarget }
+                                        ) {
                                             Icon(
-                                                imageVector = Icons.Default.Lock,
-                                                contentDescription = null,
+                                                imageVector = Icons.Default.BookmarkAdd,
+                                                contentDescription = stringResource(R.string.save_search_as_album),
                                                 tint = MaterialTheme.colorScheme.primary
                                             )
                                         }
+                                    }
+                                    IconButton(
+                                        onClick = { showQueryBuilder = true },
+                                        modifier = Modifier.focusProperties { down = searchDownTarget }
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Tune,
+                                            contentDescription = stringResource(R.string.advanced_search_builder),
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                                IconButton(
+                                    onClick = {
+                                        if (isSearchActive && searchQuery.isNotEmpty()) {
+                                            viewModel.updateSearchQueryText("")
+                                        } else {
+                                            viewModel.toggleSearchActive()
+                                        }
+                                    },
+                                    modifier = if (isSearchActive) {
+                                        Modifier.focusProperties { down = searchDownTarget }
+                                    } else {
+                                        Modifier
+                                    }
+                                ) {
+                                    Icon(
+                                        imageVector = if (isSearchActive) Icons.Default.Close else Icons.Default.Search,
+                                        contentDescription = if (isSearchActive) stringResource(R.string.close_search) else stringResource(R.string.search)
                                     )
-                                } else {
-                                    DropdownMenuItem(
-                                        text = { Text(if (isDirectlyProtected) "Unprotect Folder" else "Protect Folder") },
-                                        onClick = {
-                                            showMoreMenu = false
-                                            val activity = context.findActivity() as? androidx.fragment.app.FragmentActivity
-                                            if (activity != null) {
-                                                com.example.util.BiometricHelper.authenticate(
-                                                    activity = activity,
-                                                    title = if (isDirectlyProtected) "Unprotect Folder" else "Protect Folder",
-                                                    subtitle = "Confirm identity to toggle folder protection",
-                                                    onSuccess = {
-                                                        viewModel.toggleProtectedFolder(currentFolder)
-                                                    },
-                                                    onError = { err ->
-                                                        if (err != "Canceled") {
-                                                            android.widget.Toast.makeText(context, err, android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            }
+
+                            if (activeTab == ActiveTab.PERSONS && selectedPerson != null) {
+                                IconButton(onClick = { selectedPerson?.let { viewModel.togglePersonFavourite(it) } }) {
+                                    val isFav = selectedPerson?.isFavourite == true
+                                    Icon(
+                                        imageVector = Icons.Default.Star,
+                                        contentDescription = stringResource(R.string.toggle_favorite),
+                                        tint = if (isFav) Color(0xFFFFD700) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                                    )
+                                }
+                            }
+
+                            val hasGeotagged = remember(mapMediaList) {
+                                mapMediaList.any { it.metadata?.gps != null }
+                            }
+                            val showMapButton = !isTv && when (activeTab) {
+                                ActiveTab.GALLERY -> hasGeotagged
+                                ActiveTab.ALBUMS -> selectedAlbum != null && hasGeotagged
+                                ActiveTab.PERSONS -> selectedPerson != null && hasGeotagged
+                                else -> false
+                            }
+                            if (showMapButton) {
+                                IconButton(onClick = { showMapDialog = true }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Map,
+                                        contentDescription = stringResource(R.string.map_view)
+                                    )
+                                }
+                            }
+
+                            if (activeTab == ActiveTab.GALLERY || activeTab == ActiveTab.ALBUMS || activeTab == ActiveTab.PERSONS) {
+                                var showSortDialog by remember { mutableStateOf(false) }
+                                IconButton(onClick = { showSortDialog = true }) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.Sort,
+                                        contentDescription = stringResource(R.string.sort_options)
+                                    )
+                                }
+                                if (showSortDialog) {
+                                    SortDialog(
+                                        viewModel = viewModel,
+                                        onDismiss = { showSortDialog = false }
+                                    )
+                                }
+                            }
+
+                            var showMoreMenu by remember { mutableStateOf(false) }
+                            val menuCoroutineScope = rememberCoroutineScope()
+                            LaunchedEffect(activeTab, isSelectMode) {
+                                showMoreMenu = false
+                            }
+                            val dismissMenuAndRun: (() -> Unit) -> Unit = { action ->
+                                if (showMoreMenu) {
+                                    showMoreMenu = false
+                                    menuCoroutineScope.launch {
+                                        delay(200)
+                                        action()
+                                    }
+                                }
+                            }
+                            Box {
+                                IconButton(onClick = { showMoreMenu = true }) {
+                                    Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.more_options))
+                                }
+                                DropdownMenu(
+                                    expanded = showMoreMenu,
+                                    onDismissRequest = { showMoreMenu = false }
+                                ) {
+                                    if (activeTab == ActiveTab.GALLERY) {
+                                        val nextViewMode = if (galleryViewMode == GalleryViewMode.DATE) GalleryViewMode.FOLDER else GalleryViewMode.DATE
+                                        DropdownMenuItem(
+                                            text = { Text(if (galleryViewMode == GalleryViewMode.DATE) stringResource(R.string.view_by_folder) else stringResource(R.string.view_by_date)) },
+                                            onClick = {
+                                                dismissMenuAndRun {
+                                                    viewModel.setGalleryViewMode(nextViewMode)
+                                                }
+                                            },
+                                            leadingIcon = {
+                                                Icon(
+                                                    imageVector = if (galleryViewMode == GalleryViewMode.DATE) Icons.Default.Folder else Icons.Default.DateRange,
+                                                    contentDescription = null
+                                                )
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text(if (isFlattened) stringResource(R.string.unflatten_directory) else stringResource(R.string.flatten_directory)) },
+                                            onClick = {
+                                                dismissMenuAndRun {
+                                                    viewModel.toggleFlattened()
+                                                }
+                                            },
+                                            leadingIcon = {
+                                                Icon(
+                                                    imageVector = if (isFlattened) Icons.Default.GridView else Icons.Default.Layers,
+                                                    contentDescription = null
+                                                )
+                                            }
+                                        )
+                                        if (isSearchActive && searchQuery.isNotBlank() && canManageAlbums) {
+                                            val querySnapshot = searchQuery
+                                            DropdownMenuItem(
+                                                text = { Text(stringResource(R.string.save_search_as_album)) },
+                                                onClick = {
+                                                    dismissMenuAndRun {
+                                                        queryToSaveAsAlbum = querySnapshot
+                                                        viewModel.resetSaveAlbumState()
+                                                        showSaveAlbumDialog = true
+                                                    }
+                                                },
+                                                leadingIcon = {
+                                                    Icon(
+                                                        imageVector = Icons.Default.BookmarkAdd,
+                                                        contentDescription = null
+                                                    )
+                                                },
+                                                modifier = Modifier.testTag("menu_save_search_as_album")
+                                            )
+                                        }
+                                    }
+                                    if (activeTab == ActiveTab.GALLERY && galleryViewMode == GalleryViewMode.FOLDER && (pathHistory.lastOrNull() ?: "").isNotEmpty()) {
+                                        val currentFolder = pathHistory.last()
+                                        val isProtected = viewModel.isFolderProtected(currentFolder)
+                                        val isDirectlyProtected = viewModel.isFolderDirectlyProtected(currentFolder)
+                                        val isInheritedProtected = isProtected && !isDirectlyProtected
+
+                                        if (isInheritedProtected) {
+                                            DropdownMenuItem(
+                                                text = { Text(stringResource(R.string.protected_inherited)) },
+                                                onClick = {
+                                                    dismissMenuAndRun {
+                                                        Toast.makeText(
+                                                            context,
+                                                            context.getString(R.string.protected_inherited_toast),
+                                                            Toast.LENGTH_LONG
+                                                        ).show()
+                                                    }
+                                                },
+                                                leadingIcon = {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Lock,
+                                                        contentDescription = null,
+                                                        tint = MaterialTheme.colorScheme.primary
+                                                    )
+                                                }
+                                            )
+                                        } else {
+                                            DropdownMenuItem(
+                                                text = { Text(if (isDirectlyProtected) stringResource(R.string.unprotect_folder) else stringResource(R.string.protect_folder)) },
+                                                onClick = {
+                                                    dismissMenuAndRun {
+                                                        val activity = context.findActivity() as? FragmentActivity
+                                                        if (activity != null) {
+                                                            BiometricHelper.authenticate(
+                                                                activity = activity,
+                                                                title = context.getString(if (isDirectlyProtected) R.string.unprotect_folder else R.string.protect_folder),
+                                                                subtitle = context.getString(R.string.confirm_folder_protection_subtitle),
+                                                                onSuccess = {
+                                                                    viewModel.toggleProtectedFolder(currentFolder)
+                                                                },
+                                                                onError = { err ->
+                                                                    if (err != BiometricHelper.ERROR_CANCELED) {
+                                                                        Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                                                                    }
+                                                                }
+                                                            )
+                                                        } else {
+                                                            viewModel.toggleProtectedFolder(currentFolder)
                                                         }
                                                     }
+                                                },
+                                                leadingIcon = {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Lock,
+                                                        contentDescription = null
+                                                    )
+                                                }
+                                            )
+                                        }
+                                    }
+                                    val openedAlbum = selectedAlbum
+                                    if (activeTab == ActiveTab.ALBUMS && openedAlbum != null && canManageAlbums && !openedAlbum.locked) {
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.delete_album)) },
+                                            onClick = {
+                                                dismissMenuAndRun {
+                                                    viewModel.resetDeleteAlbumState()
+                                                    albumToDelete = openedAlbum
+                                                }
+                                            },
+                                            leadingIcon = {
+                                                Icon(
+                                                    imageVector = Icons.Default.Delete,
+                                                    contentDescription = null
                                                 )
-                                            } else {
-                                                viewModel.toggleProtectedFolder(currentFolder)
+                                            },
+                                            modifier = Modifier.testTag("menu_delete_album")
+                                        )
+                                    }
+
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.settings)) },
+                                        onClick = {
+                                            dismissMenuAndRun {
+                                                viewModel.setActiveTab(ActiveTab.SETTINGS)
                                             }
                                         },
                                         leadingIcon = {
                                             Icon(
-                                                imageVector = Icons.Default.Lock,
+                                                imageVector = Icons.Default.Settings,
+                                                contentDescription = null
+                                            )
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.about)) },
+                                        onClick = {
+                                            dismissMenuAndRun {
+                                                showAboutDialog = true
+                                            }
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.Default.Info,
                                                 contentDescription = null
                                             )
                                         }
                                     )
                                 }
                             }
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        titleContentColor = MaterialTheme.colorScheme.onSurface
+                    )
+                )
+            },
+            bottomBar = {
+                if (!isSelectMode) {
+                    NavigationBar(
+                        containerColor = MaterialTheme.colorScheme.background,
+                        tonalElevation = 0.dp
+                    ) {
+                        NavigationBarItem(
+                            selected = activeTab == ActiveTab.GALLERY,
+                            onClick = { viewModel.setActiveTab(ActiveTab.GALLERY) },
+                            icon = { Icon(Icons.Default.Image, contentDescription = stringResource(R.string.gallery)) },
+                            label = { Text(stringResource(R.string.gallery)) }
+                        )
+                        NavigationBarItem(
+                            selected = activeTab == ActiveTab.ALBUMS,
+                            onClick = { viewModel.setActiveTab(ActiveTab.ALBUMS) },
+                            icon = { Icon(Icons.Default.PhotoLibrary, contentDescription = stringResource(R.string.albums)) },
+                            label = { Text(stringResource(R.string.albums)) }
+                        )
+                        NavigationBarItem(
+                            selected = activeTab == ActiveTab.PERSONS,
+                            onClick = { viewModel.setActiveTab(ActiveTab.PERSONS) },
+                            icon = { Icon(Icons.Default.Person, contentDescription = stringResource(R.string.persons)) },
+                            label = { Text(stringResource(R.string.persons)) }
+                        )
+                        NavigationBarItem(
+                            selected = activeTab == ActiveTab.REDISCOVER,
+                            onClick = { viewModel.setActiveTab(ActiveTab.REDISCOVER) },
+                            icon = { Icon(Icons.Default.History, contentDescription = stringResource(R.string.rediscover)) },
+                            label = { Text(stringResource(R.string.rediscover)) }
+                        )
+                    }
+                }
+            },
+            modifier = modifier.fillMaxSize()
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                val shareProgress by viewModel.shareProgress.collectAsState()
 
-                            DropdownMenuItem(
-                                text = { Text("Settings") },
-                                onClick = {
-                                    viewModel.setActiveTab(ActiveTab.SETTINGS)
-                                    showMoreMenu = false
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        imageVector = Icons.Default.Settings,
-                                        contentDescription = null
-                                    )
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("About") },
-                                onClick = {
-                                    showAboutDialog = true
-                                    showMoreMenu = false
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        imageVector = Icons.Default.Info,
-                                        contentDescription = null
-                                    )
+                Column {
+                    if (shareProgress >= 0f) {
+                        LinearProgressIndicator(
+                            progress = { shareProgress },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    when (activeTab) {
+                        ActiveTab.GALLERY -> {
+                            GalleryTabContent(
+                                viewModel = viewModel,
+                                searchFieldFocusRequester = searchFieldFocusRequester,
+                                searchSuggestionsFocusRequester = searchSuggestionsFocusRequester,
+                                galleryGridFirstItemFocusRequester = galleryGridFirstItemFocusRequester,
+                                onSaveSearchAsAlbum = {
+                                    queryToSaveAsAlbum = searchQuery
+                                    viewModel.resetSaveAlbumState()
+                                    showSaveAlbumDialog = true
                                 }
                             )
                         }
+                        ActiveTab.ALBUMS -> AlbumsTabContent(viewModel = viewModel)
+                        ActiveTab.PERSONS -> PersonsTabContent(viewModel = viewModel)
+                        ActiveTab.REDISCOVER -> RediscoverTabContent(viewModel = viewModel)
+                        ActiveTab.SETTINGS -> SettingsTabContent(viewModel = viewModel)
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface
+                }
+            }
+        }
+
+        val updateState by viewModel.updateState.collectAsState()
+        (updateState as? GalleryViewModel.UpdateState.NewRelease)?.let { newRelease ->
+            if (dismissedUpdateVersion != newRelease.tagName) {
+                NewUpdateDialog(
+                    newRelease = newRelease,
+                    onDismiss = { dismissedUpdateVersion = newRelease.tagName },
+                    onUpdate = {
+                        dismissedUpdateVersion = newRelease.tagName
+                        val intent = Intent(Intent.ACTION_VIEW, newRelease.releaseUrl.toUri())
+                        context.startActivity(intent)
+                    }
                 )
-            )
-        },
-        bottomBar = {
-            // Bottom navigation tabs (hidden when in select mode to keep UI clean)
-            if (!isSelectMode) {
-                NavigationBar(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    tonalElevation = 0.dp
-                ) {
-                    NavigationBarItem(
-                        selected = activeTab == ActiveTab.GALLERY,
-                        onClick = { viewModel.setActiveTab(ActiveTab.GALLERY) },
-                        icon = { Icon(Icons.Default.Image, contentDescription = "Gallery") },
-                        label = { Text("Gallery") }
-                    )
-                    NavigationBarItem(
-                        selected = activeTab == ActiveTab.ALBUMS,
-                        onClick = { viewModel.setActiveTab(ActiveTab.ALBUMS) },
-                        icon = { Icon(Icons.Default.PhotoLibrary, contentDescription = "Albums") },
-                        label = { Text("Albums") }
-                    )
-                    NavigationBarItem(
-                        selected = activeTab == ActiveTab.PERSONS,
-                        onClick = { viewModel.setActiveTab(ActiveTab.PERSONS) },
-                        icon = { Icon(Icons.Default.Person, contentDescription = "Persons") },
-                        label = { Text("Persons") }
-                    )
-                    NavigationBarItem(
-                        selected = activeTab == ActiveTab.REDISCOVER,
-                        onClick = { viewModel.setActiveTab(ActiveTab.REDISCOVER) },
-                        icon = { Icon(Icons.Default.History, contentDescription = "Rediscover") },
-                        label = { Text("Rediscover") }
-                    )
-
-                }
-            }
-        },
-        modifier = modifier.fillMaxSize()
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            val shareProgress by viewModel.shareProgress.collectAsState()
-            
-            Column {
-                if (shareProgress >= 0f) {
-                    androidx.compose.material3.LinearProgressIndicator(
-                        progress = { shareProgress },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-                
-                // Screen content based on active tab
-                when (activeTab) {
-                    ActiveTab.GALLERY -> {
-                        GalleryTabContent(viewModel = viewModel)
-                    }
-                    ActiveTab.ALBUMS -> {
-                        AlbumsTabContent(viewModel = viewModel)
-                    }
-                    ActiveTab.PERSONS -> {
-                        PersonsTabContent(viewModel = viewModel)
-                    }
-                    ActiveTab.REDISCOVER -> {
-                        RediscoverTabContent(viewModel = viewModel)
-                    }
-                    ActiveTab.SETTINGS -> {
-                        SettingsTabContent(viewModel = viewModel)
-                    }
-                }
             }
         }
-    }
 
-    val updateState by viewModel.updateState.collectAsState()
-    (updateState as? GalleryViewModel.UpdateState.NewRelease)?.let { newRelease ->
-        if (dismissedUpdateVersion != newRelease.tagName) {
-            NewUpdateDialog(
-                newRelease = newRelease,
-                onDismiss = {
-                    dismissedUpdateVersion = newRelease.tagName
+        if (showAboutDialog) {
+            AboutScreen(viewModel = viewModel, onBack = { showAboutDialog = false })
+        }
+        if (showQueryBuilder) {
+            AdvancedQueryBuilderDialog(
+                viewModel = viewModel,
+                canManageAlbums = canManageAlbums,
+                onDismissRequest = { showQueryBuilder = false },
+                onSearchApplied = { query ->
+                    viewModel.updateSearchQueryText(query)
+                    viewModel.executeSearch()
+                    showQueryBuilder = false
                 },
-                onUpdate = {
-                    dismissedUpdateVersion = newRelease.tagName
-                    val intent = android.content.Intent(
-                        android.content.Intent.ACTION_VIEW,
-                        android.net.Uri.parse(newRelease.releaseUrl)
-                    )
-                    context.startActivity(intent)
+                onSaveAsAlbum = { query ->
+                    showQueryBuilder = false
+                    queryToSaveAsAlbum = query
+                    viewModel.resetSaveAlbumState()
+                    showSaveAlbumDialog = true
                 }
             )
         }
-    }
-
-    if (showAboutDialog) {
-        AboutScreen(viewModel = viewModel, onBack = { showAboutDialog = false })
-    }
-    if (showQueryBuilder) {
-        AdvancedQueryBuilderDialog(
-            viewModel = viewModel,
-            onDismissRequest = { showQueryBuilder = false },
-            onSearchApplied = { query ->
-                viewModel.updateSearchQueryText(query)
-                viewModel.executeSearch()
-                showQueryBuilder = false
+        if (showSaveAlbumDialog && canManageAlbums) {
+            SaveSearchAsAlbumDialog(
+                searchQuery = queryToSaveAsAlbum,
+                saveAlbumState = saveAlbumState,
+                onSave = { albumName ->
+                    viewModel.saveSearchAsAlbum(albumName, queryToSaveAsAlbum)
+                },
+                onDismiss = {
+                    showSaveAlbumDialog = false
+                    viewModel.resetSaveAlbumState()
+                }
+            )
+        }
+        albumToDelete?.let { targetAlbum ->
+            if (canManageAlbums) {
+                DeleteAlbumDialog(
+                    album = targetAlbum,
+                    deleteAlbumState = deleteAlbumState,
+                    onConfirmDelete = {
+                        viewModel.deleteAlbum(targetAlbum)
+                    },
+                    onDismiss = {
+                        albumToDelete = null
+                        viewModel.resetDeleteAlbumState()
+                    }
+                )
             }
-        )
-    }
-    if (showMapDialog && !isTv) {
-        MapBrowserDialog(
-            mediaList = mapMediaList,
-            viewModel = viewModel,
-            initialMediaId = mapInitialMediaId,
-            onDismiss = {
-                showMapDialog = false
-                mapInitialMediaId = null
-            }
-        )
-    }
+        }
+        if (showMapDialog && !isTv) {
+            MapBrowserDialog(
+                mediaList = mapMediaList,
+                viewModel = viewModel,
+                initialMediaId = mapInitialMediaId,
+                onDismiss = {
+                    showMapDialog = false
+                    mapInitialMediaId = null
+                }
+            )
+        }
 
-    // Fullscreen view popup dialog
-    selectedMedia?.let { media ->
-        MediaViewerDialog(
-            media = media,
-            viewModel = viewModel,
-            onDismiss = { viewModel.selectMedia(null) },
-            onOpenMap = { clickedMedia ->
-                mapInitialMediaId = clickedMedia.id?.toString()
-                showMapDialog = true
-                viewModel.selectMedia(null)
-            },
-            isMapOpen = showMapDialog
-        )
+        selectedMedia?.let { media ->
+            MediaViewerDialog(
+                media = media,
+                viewModel = viewModel,
+                onDismiss = { viewModel.selectMedia(null) },
+                onOpenMap = { clickedMedia ->
+                    mapInitialMediaId = clickedMedia.id?.toString()
+                    showMapDialog = true
+                    viewModel.selectMedia(null)
+                },
+                isMapOpen = showMapDialog
+            )
+        }
     }
 }
-}
-
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GalleryTabContent(viewModel: GalleryViewModel) {
+fun GalleryTabContent(
+    viewModel: GalleryViewModel,
+    searchFieldFocusRequester: FocusRequester = remember { FocusRequester() },
+    searchSuggestionsFocusRequester: FocusRequester = remember { FocusRequester() },
+    galleryGridFirstItemFocusRequester: FocusRequester = remember { FocusRequester() },
+    onSaveSearchAsAlbum: () -> Unit = {}
+) {
     val galleryState by viewModel.galleryState.collectAsState()
     val pathHistory by viewModel.pathHistory.collectAsState()
     val galleryViewMode by viewModel.galleryViewMode.collectAsState()
@@ -783,90 +861,99 @@ fun GalleryTabContent(viewModel: GalleryViewModel) {
     val searchSuggestions by viewModel.searchSuggestions.collectAsState()
     val showSearchSuggestions by viewModel.showSearchSuggestions.collectAsState()
     val localSearchHistory by viewModel.localSearchHistory.collectAsState(initial = emptyList())
+    val canManageAlbums by viewModel.canManageAlbums.collectAsState()
+    val gridState = rememberLazyGridState()
 
     Box(modifier = Modifier.fillMaxSize()) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            BreadcrumbBar(
-                pathHistory = pathHistory,
-                galleryViewMode = galleryViewMode,
-                onBreadcrumbClick = { index -> viewModel.navigateToBreadcrumb(index) }
-            )
-
-            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
-
-            val isRefreshing by viewModel.isRefreshing.collectAsState()
-            AdaptivePullToRefreshBox(
-                isRefreshing = isRefreshing,
-                onRefresh = { viewModel.refreshCurrentDirectory() },
-                modifier = Modifier.weight(1f).fillMaxWidth()
-            ) {
-                when (val state = galleryState) {
-                    is GalleryUiState.Loading -> {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator()
-                        }
-                    }
-                    is GalleryUiState.Error -> {
-                        ErrorStateView(message = state.message) {
-                            viewModel.refreshCurrentDirectory()
-                        }
-                    }
-                    is GalleryUiState.Success -> {
-                        val directory = state.directory
-                        val rawSubfolders = directory.directories ?: emptyList()
-                        val hideProtectedItems by viewModel.hideProtectedItems.collectAsState()
-                        val protectedFolders by viewModel.protectedFolders.collectAsState()
-                        val subfolders = remember(rawSubfolders, galleryViewMode, hideProtectedItems, protectedFolders) {
-                            rawSubfolders.filter {
-                                if (hideProtectedItems && viewModel.isFolderProtected(it.path)) {
-                                    false
-                                } else if (galleryViewMode == GalleryViewMode.DATE) {
-                                    (it.mediaCount ?: 0) > 0
-                                } else {
-                                    it.mediaCount == null || it.mediaCount > 0
-                                }
-                            }
-                        }
-                        val mediaList = directory.media ?: emptyList()
-
-                        if (subfolders.isEmpty() && mediaList.isEmpty()) {
-                            EmptyStateView("This folder is empty", "No subdirectories or images found inside this folder.")
-                        } else {
-                            GalleryContentGrid(
-                                subfolders = subfolders,
-                                mediaList = mediaList,
-                                viewModel = viewModel,
-                                onFolderClick = { folder -> viewModel.enterFolder(folder.path) },
-                                onMediaClick = { media ->
-                                    viewModel.selectMedia(media, mediaList)
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
         if (isSearchActive && showSearchSuggestions) {
             SearchSuggestionsOverlay(
                 searchQuery = searchQuery,
                 searchSuggestions = searchSuggestions,
                 localSearchHistory = localSearchHistory,
+                canManageAlbums = canManageAlbums,
+                firstItemFocusRequester = searchSuggestionsFocusRequester,
                 onSuggestionClick = { clickedSuggestion ->
                     viewModel.setSearchQueryFromSuggestion(clickedSuggestion)
+                    try {
+                        searchFieldFocusRequester.requestFocus()
+                    } catch (_: Exception) {}
                 },
                 onHistoryClick = { query ->
                     viewModel.updateSearchQueryText(query)
                     viewModel.executeSearch()
                 },
-                onPrefixClick = { prefix ->
-                    viewModel.appendPrefixToSearch(prefix)
-                },
-                onRemoveToken = { token ->
-                    viewModel.removeTokenFromSearch(token)
-                },
+                onExecuteSearch = { viewModel.executeSearch() },
+                onSaveAsAlbum = onSaveSearchAsAlbum,
+                onRemoveToken = { token -> viewModel.removeTokenFromSearch(token) },
                 modifier = Modifier.fillMaxSize()
             )
+        } else {
+            Column(modifier = Modifier.fillMaxSize()) {
+                if (!isSearchActive) {
+                    BreadcrumbBar(
+                        pathHistory = pathHistory,
+                        galleryViewMode = galleryViewMode,
+                        onBreadcrumbClick = { index -> viewModel.navigateToBreadcrumb(index) }
+                    )
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                }
+
+                val isRefreshing by viewModel.isRefreshing.collectAsState()
+                AdaptivePullToRefreshBox(
+                    isRefreshing = isRefreshing,
+                    onRefresh = { viewModel.refreshCurrentDirectory() },
+                    modifier = Modifier.weight(1f).fillMaxWidth()
+                ) {
+                    when (val state = galleryState) {
+                        is GalleryUiState.Loading -> {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator()
+                            }
+                        }
+                        is GalleryUiState.Error -> {
+                            ErrorStateView(message = state.message) {
+                                viewModel.refreshCurrentDirectory()
+                            }
+                        }
+                        is GalleryUiState.Success -> {
+                            val directory = state.directory
+                            val rawSubfolders = directory.directories ?: emptyList()
+                            val hideProtectedItems by viewModel.hideProtectedItems.collectAsState()
+                            val protectedFolders by viewModel.protectedFolders.collectAsState()
+                            val subfolders = remember(rawSubfolders, galleryViewMode, hideProtectedItems, protectedFolders) {
+                                rawSubfolders.filter {
+                                    if (hideProtectedItems && viewModel.isFolderProtected(it.path)) {
+                                        false
+                                    } else if (galleryViewMode == GalleryViewMode.DATE) {
+                                        (it.mediaCount ?: 0) > 0
+                                    } else {
+                                        it.mediaCount == null || it.mediaCount > 0
+                                    }
+                                }
+                            }
+                            val mediaList = directory.media ?: emptyList()
+
+                            if (subfolders.isEmpty() && mediaList.isEmpty()) {
+                                EmptyStateView(
+                                    if (isSearchActive) stringResource(R.string.no_search_results) else stringResource(R.string.folder_empty),
+                                    if (isSearchActive) stringResource(R.string.no_search_results_subtitle) else stringResource(R.string.folder_empty_subtitle)
+                                )
+                            } else {
+                                GalleryContentGrid(
+                                    subfolders = subfolders,
+                                    mediaList = mediaList,
+                                    viewModel = viewModel,
+                                    onFolderClick = { folder -> viewModel.enterFolder(folder.path) },
+                                    onMediaClick = { media -> viewModel.selectMedia(media, mediaList) },
+                                    state = gridState,
+                                    firstItemFocusRequester = galleryGridFirstItemFocusRequester
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -877,19 +964,25 @@ fun SearchSuggestionsOverlay(
     searchQuery: String,
     searchSuggestions: List<String>,
     localSearchHistory: List<String>,
+    modifier: Modifier = Modifier,
+    canManageAlbums: Boolean = false,
+    firstItemFocusRequester: FocusRequester = remember { FocusRequester() },
     onSuggestionClick: (String) -> Unit,
     onHistoryClick: (String) -> Unit,
-    onPrefixClick: (String) -> Unit,
-    onRemoveToken: (String) -> Unit,
-    modifier: Modifier = Modifier
+    onExecuteSearch: () -> Unit = {},
+    onSaveAsAlbum: () -> Unit = {},
+    onRemoveToken: (String) -> Unit
 ) {
-    val tokens = com.example.data.search.SearchQueryParser.tokenize(searchQuery)
+    val tokens = SearchQueryParser.tokenize(searchQuery)
+    val hasListItems = searchSuggestions.isNotEmpty() || localSearchHistory.isNotEmpty()
+    val showQuickSearchButton = searchQuery.isNotBlank()
+
     Column(
         modifier = modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        if (tokens.isNotEmpty()) {
+        if (tokens.isNotEmpty() || showQuickSearchButton) {
             FlowRow(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -897,13 +990,55 @@ fun SearchSuggestionsOverlay(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                tokens.forEach { token ->
+                if (showQuickSearchButton) {
+                    val quickSearchFocusMod = if (!hasListItems) {
+                        Modifier.focusRequester(firstItemFocusRequester)
+                    } else {
+                        Modifier
+                    }
+                    Button(
+                        onClick = onExecuteSearch,
+                        modifier = quickSearchFocusMod
+                            .testTag("suggestions_execute_search_button")
+                            .tvFocus(shape = RoundedCornerShape(20.dp))
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(stringResource(R.string.search))
+                    }
+                    if (canManageAlbums) {
+                        FilledTonalButton(
+                            onClick = onSaveAsAlbum,
+                            modifier = Modifier
+                                .testTag("suggestions_save_album_button")
+                                .tvFocus(shape = RoundedCornerShape(20.dp))
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.BookmarkAdd,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(stringResource(R.string.save_album))
+                        }
+                    }
+                }
+                tokens.forEachIndexed { index, token ->
+                    val tokenFocusMod = if (!hasListItems && !showQuickSearchButton && index == 0) {
+                        Modifier.focusRequester(firstItemFocusRequester)
+                    } else {
+                        Modifier
+                    }
                     InputChip(
                         selected = false,
                         onClick = { onRemoveToken(token) },
                         label = { Text(token) },
                         trailingIcon = {
-                            Icon(Icons.Default.Close, contentDescription = "Remove", modifier = Modifier.size(16.dp))
+                            Icon(Icons.Default.Close, contentDescription = stringResource(R.string.remove), modifier = Modifier.size(16.dp))
                         },
                         colors = InputChipDefaults.inputChipColors(
                             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
@@ -912,7 +1047,8 @@ fun SearchSuggestionsOverlay(
                             borderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
                             enabled = true,
                             selected = false
-                        )
+                        ),
+                        modifier = tokenFocusMod.tvFocus(shape = RoundedCornerShape(8.dp))
                     )
                 }
             }
@@ -922,7 +1058,7 @@ fun SearchSuggestionsOverlay(
         if (searchSuggestions.isEmpty() && localSearchHistory.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    text = "No suggestions",
+                    text = stringResource(R.string.no_suggestions),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -936,17 +1072,26 @@ fun SearchSuggestionsOverlay(
                 if (searchSuggestions.isEmpty() && localSearchHistory.isNotEmpty()) {
                     item {
                         Text(
-                            text = "Recent Searches",
+                            text = stringResource(R.string.recent_searches),
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(bottom = 4.dp, start = 4.dp)
                         )
                     }
-                    items(localSearchHistory) { historyItem ->
+                    itemsIndexed(localSearchHistory) { index, historyItem ->
+                        val focusMod = if (index == 0) {
+                            Modifier.focusRequester(firstItemFocusRequester)
+                        } else {
+                            Modifier
+                        }
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .then(focusMod)
+                                .tvFocus(shape = RoundedCornerShape(12.dp))
                                 .clickable { onHistoryClick(historyItem) },
+                            shape = RoundedCornerShape(12.dp),
                             colors = CardDefaults.cardColors(
                                 containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
                             )
@@ -957,7 +1102,12 @@ fun SearchSuggestionsOverlay(
                                     .padding(16.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.Default.History, contentDescription = "History", modifier = Modifier.padding(end = 16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Icon(
+                                    Icons.Default.History,
+                                    contentDescription = stringResource(R.string.history_cd),
+                                    modifier = Modifier.padding(end = 16.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                                 Text(
                                     text = historyItem,
                                     style = MaterialTheme.typography.bodyLarge,
@@ -967,11 +1117,20 @@ fun SearchSuggestionsOverlay(
                         }
                     }
                 } else if (searchSuggestions.isNotEmpty()) {
-                    items(searchSuggestions) { suggestion ->
+                    itemsIndexed(searchSuggestions) { index, suggestion ->
+                        val focusMod = if (index == 0) {
+                            Modifier.focusRequester(firstItemFocusRequester)
+                        } else {
+                            Modifier
+                        }
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .then(focusMod)
+                                .tvFocus(shape = RoundedCornerShape(12.dp))
                                 .clickable { onSuggestionClick(suggestion) },
+                            shape = RoundedCornerShape(12.dp),
                             colors = CardDefaults.cardColors(
                                 containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
                             )
@@ -982,7 +1141,12 @@ fun SearchSuggestionsOverlay(
                                     .padding(16.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.Default.Search, contentDescription = "Search", modifier = Modifier.padding(end = 16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Icon(
+                                    Icons.Default.Search,
+                                    contentDescription = stringResource(R.string.search),
+                                    modifier = Modifier.padding(end = 16.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                                 Text(
                                     text = suggestion,
                                     style = MaterialTheme.typography.bodyLarge,
@@ -995,3059 +1159,4 @@ fun SearchSuggestionsOverlay(
             }
         }
     }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun AlbumsTabContent(viewModel: GalleryViewModel) {
-    val albumsState by viewModel.albumsState.collectAsState()
-    var searchQuery by remember { mutableStateOf("") }
-    val selectedAlbum by viewModel.selectedAlbum.collectAsState()
-    val albumContentState by viewModel.albumContentState.collectAsState()
-
-    val itemsPerRowPortrait by viewModel.itemsPerRowPortrait.collectAsState()
-    val itemsPerRowLandscape by viewModel.itemsPerRowLandscape.collectAsState()
-    val isLandscape = LocalConfiguration.current.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
-    val itemsPerRow = if (isLandscape) itemsPerRowLandscape else itemsPerRowPortrait
-    val spacing by viewModel.spacing.collectAsState()
-    val cornerRadius by viewModel.cornerRadius.collectAsState()
-    val aspectRatio by viewModel.aspectRatio.collectAsState()
-
-    if (selectedAlbum != null) {
-        // Render current album's content
-        Column(modifier = Modifier.fillMaxSize()) {
-            val isRefreshing by viewModel.isAlbumContentRefreshing.collectAsState()
-            AdaptivePullToRefreshBox(
-                isRefreshing = isRefreshing,
-                onRefresh = { selectedAlbum?.let { viewModel.refreshAlbumContent(it) } },
-                modifier = Modifier.weight(1f).fillMaxWidth()
-            ) {
-                when (val state = albumContentState) {
-                    is GalleryUiState.Loading -> {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator()
-                        }
-                    }
-                    is GalleryUiState.Error -> {
-                        ErrorStateView(message = state.message) {
-                            selectedAlbum?.let { viewModel.selectAlbum(it) }
-                        }
-                    }
-                    is GalleryUiState.Success -> {
-                        val mediaList = state.directory.media ?: emptyList()
-                        if (mediaList.isEmpty()) {
-                            EmptyStateView("No items in album", "This query yielded no matching media results.")
-                        } else {
-                            GalleryContentGrid(
-                                subfolders = emptyList(),
-                                mediaList = mediaList,
-                                viewModel = viewModel,
-                                onFolderClick = {},
-                                onMediaClick = { media ->
-                                    viewModel.selectMedia(media, mediaList)
-                                }
-                            )
-                        }
-                    }
-                    else -> {}
-                }
-            }
-        }
-    } else {
-        // Render Album list
-        val isRefreshing by viewModel.isAlbumsRefreshing.collectAsState()
-        AdaptivePullToRefreshBox(
-            isRefreshing = isRefreshing,
-            onRefresh = { viewModel.refreshAlbums() },
-            modifier = Modifier.fillMaxSize()
-        ) {
-            when (val state = albumsState) {
-                is AlbumsUiState.Loading -> {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator()
-                    }
-                }
-                is AlbumsUiState.Error -> {
-                    ErrorStateView(message = state.message) {
-                        viewModel.loadAlbums()
-                    }
-                }
-                is AlbumsUiState.Success -> {
-                    val allAlbums = state.albums
-                    val albums = remember(allAlbums, searchQuery) {
-                        if (searchQuery.isBlank()) allAlbums else allAlbums.filter { it.name.contains(searchQuery, ignoreCase = true) }
-                    }
-                    
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        androidx.compose.material3.TextField(
-                            value = searchQuery,
-                            onValueChange = { searchQuery = it },
-                            placeholder = { Text("Search albums...") },
-                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
-                            trailingIcon = {
-                                if (searchQuery.isNotEmpty()) {
-                                    IconButton(onClick = { searchQuery = "" }) {
-                                        Icon(Icons.Default.Clear, contentDescription = "Clear search")
-                                    }
-                                }
-                            },
-                            singleLine = true,
-                            shape = androidx.compose.foundation.shape.RoundedCornerShape(percent = 50),
-                            colors = androidx.compose.material3.TextFieldDefaults.colors(
-                                focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
-                                unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
-                                disabledIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp)
-                        )
-
-                        if (albums.isEmpty()) {
-                            if (allAlbums.isEmpty()) {
-                                EmptyStateView("No saved albums", "Create smart query albums in PiGallery2 web app to view them here.")
-                            } else {
-                                EmptyStateView("No matching albums", "Try a different search term.")
-                            }
-                        } else {
-    
-                            val spacingDp = spacing.dp
-                            val cornerRadiusDp = cornerRadius.dp
-                            
-                            val isTv = LocalContext.current.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
-                            val firstItemFocusRequester = remember { FocusRequester() }
-                            
-                            LaunchedEffect(albums) {
-                                if (isTv && albums.isNotEmpty()) {
-                                    try {
-                                        kotlinx.coroutines.delay(100)
-                                        firstItemFocusRequester.requestFocus()
-                                    } catch (e: Exception) {}
-                                }
-                            }
-                            
-                            LazyVerticalGrid(
-                                columns = GridCells.Fixed(itemsPerRow),
-                                contentPadding = PaddingValues(16.dp),
-                                verticalArrangement = Arrangement.spacedBy(spacingDp),
-                                horizontalArrangement = Arrangement.spacedBy(spacingDp),
-                                modifier = Modifier.weight(1f).fillMaxWidth()
-                            ) {
-                                items(count = albums.size, key = { index -> "album_${albums[index].name}_${albums[index].id}" }) { index -> val album = albums[index]
-                                    val focusModifier = if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
-                                    AlbumCard(
-                                        modifier = focusModifier,
-                                        album = album,
-                                        viewModel = viewModel,
-                                        cornerRadius = cornerRadiusDp,
-                                        aspectRatio = aspectRatio
-                                    ) {
-                                        viewModel.selectAlbum(album)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun RediscoverTabContent(viewModel: GalleryViewModel) {
-    val rediscoverState by viewModel.rediscoverState.collectAsState()
-    val daysRange by viewModel.rediscoverDays.collectAsState()
-    val itemsPerRowPortrait by viewModel.itemsPerRowPortrait.collectAsState()
-    val itemsPerRowLandscape by viewModel.itemsPerRowLandscape.collectAsState()
-    val isLandscape = LocalConfiguration.current.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
-    val itemsPerRow = if (isLandscape) itemsPerRowLandscape else itemsPerRowPortrait
-    val spacing by viewModel.spacing.collectAsState()
-    val cornerRadius by viewModel.cornerRadius.collectAsState()
-    val aspectRatio by viewModel.aspectRatio.collectAsState()
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        // Days length settings slider header
-        
-        HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
-
-        when (val state = rediscoverState) {
-            is RediscoverUiState.Loading -> {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-            }
-            is RediscoverUiState.Error -> {
-                ErrorStateView(message = state.message) {
-                    viewModel.loadRediscover()
-                }
-            }
-            is RediscoverUiState.Success -> {
-                val grouped = state.groupedMedia
-                if (grouped.isEmpty()) {
-                    EmptyStateView("Nothing to rediscover today", "No photos were taken on this day range in previous years.")
-                } else {
-                    val expandedYears = remember { mutableStateMapOf<Int, Boolean>() }
-                
-                    val spacingDp = spacing.dp
-                    val cornerRadiusDp = cornerRadius.dp
-                    val isTv = LocalContext.current.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
-                    val firstItemFocusRequester = remember { FocusRequester() }
-                    
-                    LaunchedEffect(grouped) {
-                        if (isTv && grouped.isNotEmpty()) {
-                            try {
-                                kotlinx.coroutines.delay(100)
-                                firstItemFocusRequester.requestFocus()
-                            } catch (e: Exception) {}
-                        }
-                    }
-
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(itemsPerRow.toInt()),
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(spacing.dp),
-                        horizontalArrangement = Arrangement.spacedBy(spacing.dp)
-                    ) {
-                        grouped.forEach { (year, mediaList) ->
-                            val isExpanded = expandedYears[year] ?: false
-                            val currentYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
-                            val diff = currentYear - year
-                            
-                            val isFirstYear = year == grouped.keys.first()
-                            
-                            // Header
-                            item(span = { GridItemSpan(itemsPerRow.toInt()) }) {
-                                var isFocused by remember { mutableStateOf(false) }
-                                Column(modifier = Modifier.padding(vertical = 8.dp)) {
-                                    val hasMore = mediaList.size > itemsPerRow.toInt()
-                                    
-                                    val focusModifier = if (isFirstYear) Modifier.focusRequester(firstItemFocusRequester) else Modifier
-                                    
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .then(focusModifier)
-                                            .onFocusChanged { isFocused = it.isFocused }
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .tvFocus(shape = RoundedCornerShape(8.dp), showBorder = true)
-                                            .then(if (hasMore) Modifier.clickable { expandedYears[year] = !isExpanded } else Modifier.focusable())
-                                            .background(
-                                                color = if (isFocused) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
-                                            )
-                                            .padding(horizontal = 8.dp, vertical = 12.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Column {
-                                            Text(
-                                                text = if (diff == 1) "1 Year Ago ($year)" else "$diff Years Ago ($year)",
-                                                style = MaterialTheme.typography.titleMedium,
-                                                fontWeight = FontWeight.ExtraBold,
-                                                color = if (isFocused) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary
-                                            )
-                                            Text(
-                                                text = "${mediaList.size} items",
-                                                fontSize = 12.sp,
-                                                color = if (isFocused) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                                            )
-                                        }
-                                        if (hasMore) {
-                                            Icon(
-                                                imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                                                contentDescription = if (isExpanded) "Collapse" else "Expand",
-                                                tint = if (isFocused) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Content
-                            val displayList = if (isExpanded) mediaList else mediaList.take(itemsPerRow.toInt())
-                            items(displayList) { media ->
-                                RediscoverMediaItem(
-                                    media = media, 
-                                    viewModel = viewModel, 
-                                    list = mediaList,
-                                    cornerRadius = cornerRadius.dp,
-                                    aspectRatio = aspectRatio
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun SettingsTabContent(viewModel: GalleryViewModel) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val serverUrl by viewModel.savedServerUrl.collectAsState()
-    val username by viewModel.savedUsername.collectAsState()
-
-    // Suffix states
-    var thumbnailSuffix by remember { mutableStateOf(viewModel.prefs.thumbnailPathSuffix) }
-    var preloadSuffix by remember { mutableStateOf(viewModel.prefs.preloadPathSuffix) }
-    var videoSuffix by remember { mutableStateOf(viewModel.prefs.videoPathSuffix) }
-    var defaultRootPath by remember { mutableStateOf(viewModel.prefs.defaultRootPath) }
-
-    // Visual states
-    var showItemCount by remember { mutableStateOf(viewModel.prefs.showDirectoryItemCount) }
-    var itemsPerRowPortrait by remember { mutableStateOf(viewModel.prefs.itemsPerRowPortrait.toFloat()) }
-    var itemsPerRowLandscape by remember { mutableStateOf(viewModel.prefs.itemsPerRowLandscape.toFloat()) }
-    var cornerRadius by remember { mutableStateOf(viewModel.prefs.cornerRadius.toFloat()) }
-    var spacing by remember { mutableStateOf(viewModel.prefs.spacing.toFloat()) }
-    var selectedRatioIndex by remember {
-        mutableStateOf(
-            when (viewModel.prefs.aspectRatio) {
-                1.0f -> 0
-                1.5f -> 1 // 3:2
-                1.3333333f -> 2 // 4:3
-                1.7777778f -> 3 // 16:9
-                0.0f -> 4 // Original
-                else -> 4
-            }
-        )
-    }
-
-    val ratioOptions = listOf("Square (1:1)", "Classic (3:2)", "Standard (4:3)", "Wide (16:9)", "Original")
-    val ratioValues = listOf(1.0f, 1.5f, 1.3333333f, 1.7777778f, 0.0f)
-
-    var selectedSettingsTab by remember { mutableStateOf(0) }
-    val tabTitles = listOf("Appearance", "Features", "Server")
-    val tabIcons = listOf(Icons.Default.Palette, Icons.Default.Star, Icons.Default.Cloud)
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        TabRow(
-            selectedTabIndex = selectedSettingsTab,
-            containerColor = MaterialTheme.colorScheme.surface,
-            contentColor = MaterialTheme.colorScheme.primary
-        ) {
-            tabTitles.forEachIndexed { index, title ->
-                Tab(
-                    selected = selectedSettingsTab == index,
-                    onClick = { selectedSettingsTab = index },
-                    icon = { Icon(imageVector = tabIcons[index], contentDescription = title) },
-                    text = { 
-                        Text(
-                            text = title,
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = if (selectedSettingsTab == index) FontWeight.Bold else FontWeight.Normal
-                        )
-                    }
-                )
-            }
-        }
-
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            if (selectedSettingsTab == 0) {
-                // --- 1. Theme Settings ---
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "Theme",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Theme Color Picker
-                        Column {
-                            Text(text = "Theme Color", style = MaterialTheme.typography.bodyMedium)
-                            Spacer(modifier = Modifier.height(10.dp))
-                            
-                            val colorsList = listOf(
-                                "Purple" to Color(0xFFD0BCFF),
-                                "Blue" to Color(0xFF82CFFF),
-                                "Green" to Color(0xFF88F3A2),
-                                "Orange" to Color(0xFFFFB77C),
-                                "Teal" to Color(0xFF80F2DB),
-                                "Pink" to Color(0xFFFFAEBA),
-                                "Grey" to Color(0xFF8F9099),
-                                "White" to Color(0xFFFFFFFF)
-                            )
-                            
-                            val selectedThemeColor by viewModel.themeColorOption.collectAsState()
-                            
-                            val scrollState = rememberScrollState()
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(scrollState),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                colorsList.forEach { (name, color) ->
-                                    val isSelected = selectedThemeColor == name
-                                    Box(
-                                        modifier = Modifier
-                                            .size(40.dp)
-                                            .clip(CircleShape)
-                                            .background(color)
-                                            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), CircleShape)
-                                            .clickable {
-                                                viewModel.setThemeColorOption(name)
-                                            }
-                                            .then(
-                                                if (isSelected) {
-                                                    Modifier.border(
-                                                        width = 3.dp,
-                                                        color = MaterialTheme.colorScheme.onSurface,
-                                                        shape = CircleShape
-                                                    )
-                                                } else {
-                                                    Modifier
-                                                }
-                                            ),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        if (isSelected) {
-                                            Icon(
-                                                imageVector = Icons.Default.Check,
-                                                contentDescription = name,
-                                                tint = Color.Black,
-                                                modifier = Modifier.size(20.dp)
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                            
-                            if (scrollState.maxValue > 0) {
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(4.dp)
-                                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f), shape = CircleShape)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth(0.2f)
-                                            .fillMaxHeight()
-                                            .align(Alignment.CenterStart)
-                                            .graphicsLayer {
-                                                val max = scrollState.maxValue
-                                                val value = scrollState.value
-                                                val fraction = if (max > 0) value.toFloat() / max.toFloat() else 0f
-                                                translationX = fraction * (size.width * 4f)
-                                            }
-                                            .background(MaterialTheme.colorScheme.primary, shape = CircleShape)
-                                    )
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        // Theme Mode Selector
-                        Column {
-                            Text(text = "Theme Mode", style = MaterialTheme.typography.bodyMedium)
-                            Spacer(modifier = Modifier.height(10.dp))
-                            
-                            val selectedThemeMode by viewModel.themeMode.collectAsState()
-                            val themeModes = listOf("Auto", "Light", "Dark", "Black")
-                            val themeModeScrollState = rememberScrollState()
-                            
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(themeModeScrollState),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                themeModes.forEach { mode ->
-                                    val isSelected = selectedThemeMode == mode || (mode == "Black" && (selectedThemeMode == "OLED Black" || selectedThemeMode == "OLED"))
-                                    FilterChip(
-                                        selected = isSelected,
-                                        onClick = { viewModel.setThemeMode(mode) },
-                                        label = { Text(mode) }
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // --- 2. View Settings ---
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "View",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Show Directory Item Count Switch
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(text = "Show Folder Item Count", style = MaterialTheme.typography.bodyMedium)
-                                Text(text = "Display media count under subfolders", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            Switch(
-                                checked = showItemCount,
-                                onCheckedChange = {
-                                    showItemCount = it
-                                    viewModel.setShowDirectoryItemCount(it)
-                                }
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        // Max Brightness Toggle
-                        val maxBrightnessEnabled by viewModel.maxBrightnessEnabled.collectAsState()
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Max Brightness",
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                                Text(
-                                    text = "Override system brightness and set to 100%",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Switch(
-                                checked = maxBrightnessEnabled,
-                                onCheckedChange = { viewModel.setMaxBrightnessEnabled(it) }
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        // Items Per Row (Portrait) Slider
-                        Column {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(text = "Items Per Row (Portrait)", style = MaterialTheme.typography.bodyMedium)
-                                Text(text = "${itemsPerRowPortrait.toInt()}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                            }
-                            Slider(
-                                value = itemsPerRowPortrait,
-                                onValueChange = {
-                                    itemsPerRowPortrait = it
-                                    viewModel.setItemsPerRowPortrait(it.toInt())
-                                },
-                                valueRange = 1f..6f,
-                                steps = 4,
-                                modifier = Modifier.tvSlider(
-                                    value = itemsPerRowPortrait,
-                                    onValueChange = {
-                                        itemsPerRowPortrait = it
-                                        viewModel.setItemsPerRowPortrait(it.toInt())
-                                    },
-                                    valueRange = 1f..6f,
-                                    steps = 4
-                                )
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        // Items Per Row (Landscape) Slider
-                        Column {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(text = "Items Per Row (Landscape)", style = MaterialTheme.typography.bodyMedium)
-                                Text(text = "${itemsPerRowLandscape.toInt()}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                            }
-                            Slider(
-                                value = itemsPerRowLandscape,
-                                onValueChange = {
-                                    itemsPerRowLandscape = it
-                                    viewModel.setItemsPerRowLandscape(it.toInt())
-                                },
-                                valueRange = 2f..10f,
-                                steps = 7,
-                                modifier = Modifier.tvSlider(
-                                    value = itemsPerRowLandscape,
-                                    onValueChange = {
-                                        itemsPerRowLandscape = it
-                                        viewModel.setItemsPerRowLandscape(it.toInt())
-                                    },
-                                    valueRange = 2f..10f,
-                                    steps = 7
-                                )
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        // Spacing Slider
-                        Column {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(text = "Spacing", style = MaterialTheme.typography.bodyMedium)
-                                Text(text = "${spacing.toInt()} dp", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                            }
-                            Slider(
-                                value = spacing,
-                                onValueChange = {
-                                    spacing = it
-                                    viewModel.setSpacing(it.toInt())
-                                },
-                                valueRange = 0f..24f,
-                                steps = 24,
-                                modifier = Modifier.tvSlider(
-                                    value = spacing,
-                                    onValueChange = {
-                                        spacing = it
-                                        viewModel.setSpacing(it.toInt())
-                                    },
-                                    valueRange = 0f..24f,
-                                    steps = 24
-                                )
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        // Corner Radius Slider
-                        Column {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(text = "Corner Radius", style = MaterialTheme.typography.bodyMedium)
-                                Text(text = "${cornerRadius.toInt()} dp", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                            }
-                            Slider(
-                                value = cornerRadius,
-                                onValueChange = {
-                                    cornerRadius = it
-                                    viewModel.setCornerRadius(it.toInt())
-                                },
-                                valueRange = 0f..32f,
-                                steps = 32,
-                                modifier = Modifier.tvSlider(
-                                    value = cornerRadius,
-                                    onValueChange = {
-                                        cornerRadius = it
-                                        viewModel.setCornerRadius(it.toInt())
-                                    },
-                                    valueRange = 0f..32f,
-                                    steps = 32
-                                )
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        // Aspect Ratio Dropdown/Chips Option
-                        Column {
-                            Text(text = "Aspect Ratio", style = MaterialTheme.typography.bodyMedium)
-                            Spacer(modifier = Modifier.height(8.dp))
-                            
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                var expanded by remember { mutableStateOf(false) }
-                                Box(modifier = Modifier.fillMaxWidth()) {
-                                    OutlinedButton(
-                                        onClick = { expanded = true },
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(ratioOptions[selectedRatioIndex])
-                                    }
-                                    DropdownMenu(
-                                        expanded = expanded,
-                                        onDismissRequest = { expanded = false },
-                                        modifier = Modifier.fillMaxWidth(0.9f)
-                                    ) {
-                                        ratioOptions.forEachIndexed { index, option ->
-                                            DropdownMenuItem(
-                                                text = { Text(option) },
-                                                onClick = {
-                                                    selectedRatioIndex = index
-                                                    viewModel.setAspectRatio(ratioValues[index])
-                                                    expanded = false
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // --- 3. Gestures Settings ---
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "Gestures",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Dismiss Gesture Switch
-                        val dismissGestureEnabled by viewModel.dismissGestureEnabled.collectAsState()
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Swipe Down to Dismiss",
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                                Text(
-                                    text = "Swipe down on a photo or video to exit full-screen viewer",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Switch(
-                                checked = dismissGestureEnabled,
-                                onCheckedChange = { viewModel.setDismissGestureEnabled(it) }
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        // Show Metadata Gesture Switch
-                        val showMetadataGestureEnabled by viewModel.showMetadataGestureEnabled.collectAsState()
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Swipe Up for Details",
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                                Text(
-                                    text = "Swipe up on a photo or video to view EXIF information and metadata",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Switch(
-                                checked = showMetadataGestureEnabled,
-                                onCheckedChange = { viewModel.setShowMetadataGestureEnabled(it) }
-                            )
-                        }
-                    }
-                }
-
-            } else if (selectedSettingsTab == 1) {
-                // --- 3. Features Settings ---
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "Features",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Rediscover Range
-                        Column {
-                             Text(text = "Rediscover Range", style = MaterialTheme.typography.bodyMedium)
-                             Spacer(modifier = Modifier.height(8.dp))
-                             val daysRange by viewModel.rediscoverDays.collectAsState()
-                             Text(text = "$daysRange ${if (daysRange == 1) "day" else "days"}")
-                             Slider(
-                                 value = daysRange.toFloat(),
-                                 onValueChange = { viewModel.setRediscoverDays(it.toInt()) },
-                                 valueRange = 1f..14f,
-                                 steps = 13,
-                                 modifier = Modifier.tvSlider(
-                                     value = daysRange.toFloat(),
-                                     onValueChange = { viewModel.setRediscoverDays(it.toInt()) },
-                                     valueRange = 1f..14f,
-                                     steps = 13
-                                 )
-                             )
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        // Slideshow & Map Timeline Duration
-                        Column {
-                             Text(text = "Slideshow & Map Timeline Duration", style = MaterialTheme.typography.bodyMedium)
-                             Spacer(modifier = Modifier.height(8.dp))
-                             val slideDuration by viewModel.slideshowDuration.collectAsState()
-                             Text(text = "$slideDuration ${if (slideDuration == 1) "second" else "seconds"}")
-                             Slider(
-                                 value = slideDuration.toFloat(),
-                                 onValueChange = { viewModel.setSlideshowDuration(it.toInt()) },
-                                 valueRange = 1f..10f,
-                                 steps = 8,
-                                 modifier = Modifier.tvSlider(
-                                     value = slideDuration.toFloat(),
-                                     onValueChange = { viewModel.setSlideshowDuration(it.toInt()) },
-                                     valueRange = 1f..10f,
-                                     steps = 8
-                                 )
-                             )
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        // People Fallback to Keywords Switch
-                        val peopleFallback by viewModel.peopleFallbackToKeywords.collectAsState()
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(text = "Keyword Fallback for Persons", style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    text = "Also show photos where the person's name is found in the keywords or tags (e.g. when face recognition is unavailable)",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Switch(
-                                checked = peopleFallback,
-                                onCheckedChange = {
-                                    viewModel.setPeopleFallbackToKeywords(it)
-                                }
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-                    }
-                }
-
-                // Security & App Protection Card inside Features Tab
-                val isBiometricEnabled by viewModel.isBiometricLockEnabled.collectAsState()
-                val hideProtected by viewModel.hideProtectedItems.collectAsState()
-                val activity = remember(context) { context.findActivity() as? androidx.fragment.app.FragmentActivity }
-                val biometricStatus = remember(context) { com.example.util.BiometricHelper.getStatusMessage(context) }
-                val isBiometricAvailable = remember(context) { com.example.util.BiometricHelper.isBiometricAvailable(context) }
-
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "Security & App Protection",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Fingerprint / Device Lock",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = if (isBiometricAvailable) {
-                                        "Protect app with fingerprint, face unlock, or device PIN/pattern"
-                                    } else {
-                                        "Status: $biometricStatus"
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Switch(
-                                checked = isBiometricEnabled,
-                                onCheckedChange = { targetState ->
-                                    if (targetState) {
-                                        if (activity != null) {
-                                            com.example.util.BiometricHelper.authenticate(
-                                                activity = activity,
-                                                title = "Enable App Lock",
-                                                subtitle = "Verify fingerprint, face, or PIN to confirm",
-                                                onSuccess = {
-                                                    viewModel.setBiometricLockEnabled(true)
-                                                },
-                                                onError = { err ->
-                                                    if (err != "Canceled") {
-                                                        android.widget.Toast.makeText(context, err, android.widget.Toast.LENGTH_SHORT).show()
-                                                    }
-                                                }
-                                            )
-                                        } else {
-                                            viewModel.setBiometricLockEnabled(true)
-                                        }
-                                    } else {
-                                        if (activity != null) {
-                                            com.example.util.BiometricHelper.authenticate(
-                                                activity = activity,
-                                                title = "Disable App Lock",
-                                                subtitle = "Verify fingerprint, face, or PIN to confirm",
-                                                onSuccess = {
-                                                    viewModel.setBiometricLockEnabled(false)
-                                                },
-                                                onError = { err ->
-                                                    if (err != "Canceled") {
-                                                        android.widget.Toast.makeText(context, err, android.widget.Toast.LENGTH_SHORT).show()
-                                                    }
-                                                }
-                                            )
-                                        } else {
-                                            viewModel.setBiometricLockEnabled(false)
-                                        }
-                                    }
-                                }
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Hide Protected Items",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = "Completely hide protected folders, albums, & persons from grids instead of displaying lock badges",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Switch(
-                                checked = hideProtected,
-                                onCheckedChange = {
-                                    viewModel.setHideProtectedItems(it)
-                                }
-                            )
-                        }
-                    }
-                }
-            } else if (selectedSettingsTab == 2) {
-                // --- 4. Server Settings & Connection Monitor ---
-                val netInfo by viewModel.networkConnectionInfo.collectAsState()
-
-                LaunchedEffect(Unit) {
-                    viewModel.testNetworkConnections()
-                }
-
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Server Configuration",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-
-                            val (activeText, activeColor, activeIcon) = when (netInfo.activeRoute) {
-                                com.example.ui.ActiveRouteType.LOCAL_WIFI -> Triple(
-                                    "Local Server Active",
-                                    Color(0xFF4CAF50),
-                                    Icons.Default.Wifi
-                                )
-                                com.example.ui.ActiveRouteType.REMOTE_PRIMARY -> Triple(
-                                    "Primary Server Active",
-                                    Color(0xFF2196F3),
-                                    Icons.Default.Cloud
-                                )
-                                com.example.ui.ActiveRouteType.NONE -> Triple(
-                                    "Offline",
-                                    MaterialTheme.colorScheme.error,
-                                    Icons.Default.Close
-                                )
-                            }
-
-                            Surface(
-                                shape = RoundedCornerShape(20.dp),
-                                color = activeColor.copy(alpha = 0.15f),
-                                contentColor = activeColor
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = activeIcon,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp),
-                                        tint = activeColor
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = activeText,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Text(
-                            text = "Logged in as: ${if (viewModel.prefs.username.isEmpty()) "Demo / Public User" else viewModel.prefs.username}",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        var localServerUrl by remember { mutableStateOf(viewModel.prefs.localServerUrl) }
-                        OutlinedTextField(
-                            value = localServerUrl,
-                            onValueChange = {
-                                localServerUrl = it
-                                viewModel.prefs.localServerUrl = it
-                            },
-                            label = { Text("Local Server (Optimal for Home Wi-Fi)") },
-                            placeholder = { Text("http://192.168.178.50:3000") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        
-                        Button(
-                            onClick = { viewModel.logout() },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Disconnect Server")
-                        }
-                    }
-                }
-
-                // --- Path Configuration ---
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "Path Configuration",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        OutlinedTextField(
-                            value = defaultRootPath,
-                            onValueChange = {
-                                defaultRootPath = it
-                                viewModel.setDefaultRootPath(it)
-                            },
-                            label = { Text("Default Root Path (e.g. 'Photos/2023')") },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Leave empty for root gallery.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
-                // --- API Suffix Settings ---
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "API Suffix Configuration",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        OutlinedTextField(
-                            value = thumbnailSuffix,
-                            onValueChange = {
-                                thumbnailSuffix = it
-                                viewModel.prefs.thumbnailPathSuffix = it
-                            },
-                            label = { Text("Thumbnail Path Suffix (e.g., 320)") },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = preloadSuffix,
-                            onValueChange = {
-                                preloadSuffix = it
-                                viewModel.prefs.preloadPathSuffix = it
-                            },
-                            label = { Text("Fullscreen Preload Size Suffix (e.g., 720; empty to disable)") },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = videoSuffix,
-                            onValueChange = {
-                                videoSuffix = it
-                                viewModel.prefs.videoPathSuffix = it
-                            },
-                            label = { Text("Video Path Suffix") },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
-
-                // --- Storage Settings ---
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "Storage",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        
-                        val cacheSize by viewModel.cacheSize.collectAsState()
-                        LaunchedEffect(selectedSettingsTab) {
-                            if (selectedSettingsTab == 2) {
-                                viewModel.updateCacheSize()
-                            }
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column {
-                                Text(
-                                    text = "Cache",
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                                Text(
-                                    text = "Currently used: $cacheSize",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Button(
-                                onClick = { 
-                                    viewModel.clearCaches() 
-                                    android.widget.Toast.makeText(context, "Cache cleared successfully", android.widget.Toast.LENGTH_SHORT).show()
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
-                            ) {
-                                Text("Clear")
-                            }
-                        }
-                    }
-                }
-
-
-            }
-        }
-    }
-}
-
-@Composable
-fun ThumbnailOverlay(
-    name: String,
-    count: String,
-    modifier: Modifier = Modifier
-) {
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(
-                androidx.compose.ui.graphics.Brush.verticalGradient(
-                    colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f)),
-                    startY = 100f
-                )
-            )
-    )
-    Column(
-        modifier = modifier
-            .padding(8.dp)
-            .fillMaxSize(),
-        verticalArrangement = Arrangement.Bottom,
-        horizontalAlignment = Alignment.Start
-    ) {
-        if (count.isNotBlank()) {
-            Text(
-                text = count,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = Color.White.copy(alpha = 0.7f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Spacer(modifier = Modifier.height(1.dp))
-        }
-        Text(
-            text = name,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = Color.White,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
-@Composable
-fun AlbumCard(
-    modifier: Modifier = Modifier,
-    album: ApiAlbum,
-    viewModel: GalleryViewModel,
-    cornerRadius: Dp,
-    aspectRatio: Float,
-    onClick: () -> Unit
-) {
-    val context = LocalContext.current
-    val cookies = viewModel.getCookiesHeader()
-    val handleAlbumClick = {
-        onClick()
-    }
-
-    val cardRatio = if (aspectRatio > 0f) aspectRatio else 1f
-
-    Card(
-        modifier = modifier
-            .fillMaxWidth()
-            .aspectRatio(cardRatio)
-            .clip(RoundedCornerShape(cornerRadius))
-            .tvFocus(shape = RoundedCornerShape(cornerRadius))
-            .clickable { handleAlbumClick() },
-        shape = RoundedCornerShape(cornerRadius),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            val coverName = album.cache?.coverName
-            val coverDirectory = album.cache?.coverDirectory
-            val isCoverProtected = coverDirectory != null && viewModel.isFolderProtected(coverDirectory)
-
-            if (coverName != null && coverDirectory != null && !isCoverProtected) {
-                val imageRequest = ImageRequest.Builder(context)
-                    .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
-                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
-                    .networkCachePolicy(coil.request.CachePolicy.ENABLED)
-                    .data(viewModel.getAlbumCoverUrl(coverName, coverDirectory))
-                    .apply {
-                        if (cookies.isNotEmpty()) {
-                            setHeader("Cookie", cookies)
-                        }
-                    }
-                    .crossfade(true)
-                    .build()
-
-                AsyncImage(
-                    model = imageRequest,
-                    contentDescription = album.name,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.PhotoLibrary,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(48.dp)
-                    )
-                }
-            }
-
-            ThumbnailOverlay(
-                name = album.name,
-                count = "${album.cache?.itemCount ?: 0}"
-            )
-
-
-        }
-    }
-}
-
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
-@Composable
-fun RediscoverMediaItem(
-    media: ApiMedia,
-    viewModel: GalleryViewModel,
-    list: List<ApiMedia> = emptyList(),
-    cornerRadius: Dp,
-    aspectRatio: Float
-) {
-    val context = LocalContext.current
-    val cookies = viewModel.getCookiesHeader()
-    val cardRatio = if (aspectRatio > 0f) aspectRatio else 1f
-    
-    val isSelectMode by viewModel.isSelectMode.collectAsState()
-    val selectedMediaForShare by viewModel.selectedMediaForShare.collectAsState()
-    val isSelected = selectedMediaForShare.contains(media)
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(cardRatio)
-            .clip(RoundedCornerShape(cornerRadius))
-            .tvFocus(shape = RoundedCornerShape(cornerRadius))
-            .combinedClickable(
-                onClick = {
-                    if (isSelectMode) {
-                        viewModel.toggleSelectMedia(media)
-                    } else {
-                        viewModel.selectMedia(media, list)
-                    }
-                },
-                onLongClick = {
-                    viewModel.toggleSelectMedia(media)
-                }
-            ),
-        shape = RoundedCornerShape(cornerRadius),
-        border = if (isSelected) BorderStroke(3.dp, MaterialTheme.colorScheme.primary) else null,
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-    ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            val thumbnailUrl = remember(media.id, media.parentPath, media.name) {
-                viewModel.getThumbnailUrl(media)
-            }
-            val imageRequest = remember(thumbnailUrl, cookies) {
-                val cacheKey = "thumb_${media.id}_${media.name}"
-                ImageRequest.Builder(context)
-                    .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
-                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
-                    .networkCachePolicy(coil.request.CachePolicy.ENABLED)
-                    .memoryCacheKey(cacheKey)
-                    .diskCacheKey(cacheKey)
-                    .data(thumbnailUrl)
-                    .apply {
-                        if (cookies.isNotEmpty()) {
-                            setHeader("Cookie", cookies)
-                        }
-                    }
-                    .build()
-            }
-
-            AsyncImage(
-                model = imageRequest,
-                contentDescription = media.name,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-
-            if (media.isVideo) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.2f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.PlayCircle,
-                        contentDescription = "Video",
-                        tint = Color.White,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-
-                val durationStr = formatVideoDuration(media.metadata?.duration)
-                if (durationStr.isNotEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(6.dp)
-                            .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                    ) {
-                        Text(
-                            text = durationStr,
-                            color = Color.White,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
-            }
-            if (isSelectMode) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(if (isSelected) Color.Black.copy(alpha = 0.2f) else Color.Transparent)
-                )
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(8.dp)
-                ) {
-                    if (isSelected) {
-                        Icon(
-                            imageVector = Icons.Default.CheckCircle,
-                            contentDescription = "Selected",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .size(24.dp)
-                                .background(Color.White, androidx.compose.foundation.shape.CircleShape)
-                        )
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .size(22.dp)
-                                .border(2.dp, Color.White, androidx.compose.foundation.shape.CircleShape)
-                                .background(Color.Black.copy(alpha = 0.3f), androidx.compose.foundation.shape.CircleShape)
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-fun GalleryContentGrid(
-    subfolders: List<ApiSubFolder>,
-    mediaList: List<ApiMedia>,
-    viewModel: GalleryViewModel,
-    onFolderClick: (ApiSubFolder) -> Unit,
-    onMediaClick: (ApiMedia) -> Unit
-) {
-    val context = LocalContext.current
-    val cookies = viewModel.getCookiesHeader()
-    val isSelectMode by viewModel.isSelectMode.collectAsState()
-    val selectedMediaForShare by viewModel.selectedMediaForShare.collectAsState()
-
-    val spacing by viewModel.spacing.collectAsState()
-    val itemsPerRowPortrait by viewModel.itemsPerRowPortrait.collectAsState()
-    val itemsPerRowLandscape by viewModel.itemsPerRowLandscape.collectAsState()
-    val isLandscape = LocalConfiguration.current.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
-    val itemsPerRow = if (isLandscape) itemsPerRowLandscape else itemsPerRowPortrait
-    val cornerRadius by viewModel.cornerRadius.collectAsState()
-    val showCount by viewModel.showDirectoryItemCount.collectAsState()
-    val aspectRatio by viewModel.aspectRatio.collectAsState()
-
-    val spacingDp = spacing.dp
-    val cornerRadiusDp = cornerRadius.dp
-
-
-    val currentMediaSort = viewModel.getCurrentMediaSortBy().lowercase()
-    val isDateSort = currentMediaSort == "date"
-
-    val groupedMedia = remember(mediaList, isDateSort) {
-        if (!isDateSort) {
-            emptyMap()
-        } else {
-            val grouped = LinkedHashMap<String, MutableList<ApiMedia>>()
-            for (media in mediaList) {
-                val key = DateUtils.formatMediaDate(media.metadata?.creationDate, media.metadata?.creationDateOffset, "MMMM yyyy")
-                grouped.getOrPut(key) { mutableListOf() }.add(media)
-            }
-            grouped
-        }
-    }
-
-    val isTv = LocalContext.current.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
-    val firstItemFocusRequester = remember { FocusRequester() }
-    
-    LaunchedEffect(subfolders, mediaList) {
-        if (isTv && (subfolders.isNotEmpty() || mediaList.isNotEmpty())) {
-            try {
-                kotlinx.coroutines.delay(100)
-                firstItemFocusRequester.requestFocus()
-            } catch (e: Exception) {}
-        }
-    }
-
-    val state = rememberLazyGridState()
-    Box(modifier = Modifier.fillMaxSize()) {
-        LazyVerticalGrid(
-            state = state,
-            columns = GridCells.Fixed(itemsPerRow),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(spacingDp),
-        horizontalArrangement = Arrangement.spacedBy(spacingDp),
-        modifier = Modifier.fillMaxSize()
-    ) {
-        // Render Subfolders
-        items(count = subfolders.size, key = { index -> "folder_${subfolders[index].path}_$index" }) { index -> val folder = subfolders[index]
-            val coverUrl = viewModel.getFolderCoverUrl(folder)
-            val isFolderProtected = viewModel.isFolderProtected(folder.path)
-            val isCurrentFolderAlreadyProtected = viewModel.currentPath.isNotEmpty() && viewModel.isFolderProtected(viewModel.currentPath)
-            val shouldShowLockAndBlur = isFolderProtected && !isCurrentFolderAlreadyProtected
-
-            val handleFolderCardClick = {
-                // If user is already inside a protected folder session, subfolders do not need to be unlocked separately
-                if (shouldShowLockAndBlur) {
-                    val activity = context.findActivity() as? androidx.fragment.app.FragmentActivity
-                    if (activity != null) {
-                        com.example.util.BiometricHelper.authenticate(
-                            activity = activity,
-                            title = "Protected Folder",
-                            subtitle = "Authenticate to open ${folder.name}",
-                            onSuccess = { onFolderClick(folder) },
-                            onError = { err ->
-                                if (err != "Canceled") {
-                                    android.widget.Toast.makeText(context, err, android.widget.Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        )
-                    } else {
-                        onFolderClick(folder)
-                    }
-                } else {
-                    onFolderClick(folder)
-                }
-            }
-
-            val focusModifier = if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
-
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f)
-                    .clip(RoundedCornerShape(cornerRadiusDp))
-                    .then(focusModifier)
-                    .then(
-                        if (!isSelectMode) {
-                            Modifier
-                                .tvFocus(shape = RoundedCornerShape(cornerRadiusDp))
-                                .clickable { handleFolderCardClick() }
-                        } else {
-                            Modifier.graphicsLayer(alpha = 0.4f)
-                        }
-                    ),
-                shape = RoundedCornerShape(cornerRadiusDp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-            ) {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    if (coverUrl != null) {
-                        val imageRequest = remember(coverUrl, cookies) {
-                            val cacheKey = "folder_${folder.path}"
-                            val builder = ImageRequest.Builder(context)
-                                .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
-                                .diskCachePolicy(coil.request.CachePolicy.ENABLED)
-                                .networkCachePolicy(coil.request.CachePolicy.ENABLED)
-                                .memoryCacheKey(cacheKey)
-                                .diskCacheKey(cacheKey)
-                                .data(coverUrl)
-                                .crossfade(true)
-                            if (cookies.isNotEmpty()) {
-                                builder.addHeader("Cookie", cookies)
-                            }
-                            builder.build()
-                        }
-
-                        AsyncImage(
-                            model = imageRequest,
-                            contentDescription = folder.name,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .then(if (shouldShowLockAndBlur) Modifier.blur(25.dp) else Modifier)
-                        )
-
-                        if (shouldShowLockAndBlur) {
-                            // Frosted privacy scrim to blur/obscure thumbnail across all Android versions
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .background(Color.Black.copy(alpha = 0.5f)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(42.dp)
-                                        .background(Color.Black.copy(alpha = 0.55f), CircleShape),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Lock,
-                                        contentDescription = "Protected Folder",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-                            }
-                        }
-
-                        ThumbnailOverlay(
-                            name = folder.name,
-                            count = if (showCount && folder.mediaCount != null) "${folder.mediaCount}" else ""
-                        )
-                    } else {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(12.dp),
-                            verticalArrangement = Arrangement.Center,
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(52.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Folder,
-                                    contentDescription = "Folder",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(28.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(6.dp))
-                            if (showCount && folder.mediaCount != null) {
-                                Text(
-                                    text = "${folder.mediaCount}",
-                                    fontSize = 13.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                    fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Spacer(modifier = Modifier.height(1.dp))
-                            }
-                            Text(
-                                text = folder.name,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-
-
-                }
-            }
-        }
-
-        // Render Media grid
-        val hasSubfolders = subfolders.isNotEmpty()
-        if (isDateSort) {
-            groupedMedia.forEach { (monthYear, mediaItems) ->
-                item(span = { GridItemSpan(maxLineSpan) }) {
-                    Text(
-                        text = monthYear,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.padding(start = 4.dp, top = 24.dp, bottom = 8.dp, end = 4.dp).fillMaxWidth()
-                    )
-                }
-                items(count = mediaItems.size, key = { index -> "media_${mediaItems[index].id ?: "none"}_${mediaItems[index].parentPath ?: ""}_${mediaItems[index].name}_$index" }) { index ->
-                    val media = mediaItems[index]
-                    val isFirstOverallMedia = !hasSubfolders && monthYear == groupedMedia.keys.firstOrNull() && index == 0
-                    GalleryMediaCardItem(
-                        media = media,
-                        aspectRatio = aspectRatio,
-                        cornerRadiusDp = cornerRadiusDp,
-                        isSelectMode = isSelectMode,
-                        isSelected = selectedMediaForShare.contains(media),
-                        cookies = cookies,
-                        isFirstOverallMedia = isFirstOverallMedia,
-                        firstItemFocusRequester = firstItemFocusRequester,
-                        onMediaClick = onMediaClick,
-                        onToggleSelect = { viewModel.toggleSelectMedia(media) },
-                        viewModel = viewModel
-                    )
-                }
-            }
-        } else {
-            // Continuous ungrouped grid so Name (A-Z, Z-A) and Random sorting work across all items without month headers
-            items(count = mediaList.size, key = { index -> "media_${mediaList[index].id ?: "none"}_${mediaList[index].parentPath ?: ""}_${mediaList[index].name}_$index" }) { index ->
-                val media = mediaList[index]
-                val isFirstOverallMedia = !hasSubfolders && index == 0
-                GalleryMediaCardItem(
-                    media = media,
-                    aspectRatio = aspectRatio,
-                    cornerRadiusDp = cornerRadiusDp,
-                    isSelectMode = isSelectMode,
-                    isSelected = selectedMediaForShare.contains(media),
-                    cookies = cookies,
-                    isFirstOverallMedia = isFirstOverallMedia,
-                    firstItemFocusRequester = firstItemFocusRequester,
-                    onMediaClick = onMediaClick,
-                    onToggleSelect = { viewModel.toggleSelectMedia(media) },
-                    viewModel = viewModel
-                )
-            }
-        }
-        }
-
-        FastScrollIndicator(
-            state = state,
-            groupedMedia = groupedMedia,
-            subfolders = subfolders,
-            subfoldersCount = subfolders.size,
-            hasHeaders = isDateSort,
-            mediaList = mediaList,
-            modifier = Modifier.align(Alignment.CenterEnd)
-        )
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun GalleryMediaCardItem(
-    media: ApiMedia,
-    aspectRatio: Float,
-    cornerRadiusDp: Dp,
-    isSelectMode: Boolean,
-    isSelected: Boolean,
-    cookies: String,
-    isFirstOverallMedia: Boolean,
-    firstItemFocusRequester: FocusRequester,
-    onMediaClick: (ApiMedia) -> Unit,
-    onToggleSelect: () -> Unit,
-    viewModel: GalleryViewModel
-) {
-    val context = LocalContext.current
-    val focusModifier = if (isFirstOverallMedia) Modifier.focusRequester(firstItemFocusRequester) else Modifier
-
-    val cardModifier = Modifier
-        .then(focusModifier)
-        .fillMaxWidth()
-        .let { modifier ->
-            if (aspectRatio > 0f) {
-                modifier.aspectRatio(aspectRatio)
-            } else {
-                modifier
-            }
-        }
-        .clip(RoundedCornerShape(cornerRadiusDp))
-        .tvFocus(shape = RoundedCornerShape(cornerRadiusDp))
-        .combinedClickable(
-            onClick = {
-                if (isSelectMode) {
-                    onToggleSelect()
-                } else {
-                    onMediaClick(media)
-                }
-            },
-            onLongClick = {
-                onToggleSelect()
-            }
-        )
-
-    Card(
-        modifier = cardModifier,
-        shape = RoundedCornerShape(cornerRadiusDp),
-        border = if (isSelected) BorderStroke(3.dp, MaterialTheme.colorScheme.primary) else null,
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-    ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            val thumbnailUrl = remember(media.id, media.parentPath, media.name) {
-                viewModel.getThumbnailUrl(media)
-            }
-            val imageRequest = remember(thumbnailUrl, cookies) {
-                val cacheKey = "thumb_${media.id}_${media.name}"
-                ImageRequest.Builder(context)
-                    .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
-                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
-                    .networkCachePolicy(coil.request.CachePolicy.ENABLED)
-                    .memoryCacheKey(cacheKey)
-                    .diskCacheKey(cacheKey)
-                    .data(thumbnailUrl)
-                    .apply {
-                        if (cookies.isNotEmpty()) {
-                            setHeader("Cookie", cookies)
-                        }
-                    }
-                    .build()
-            }
-
-            AsyncImage(
-                model = imageRequest,
-                contentDescription = media.name,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-
-            // Render video overlay icon
-            if (media.isVideo) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.25f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.PlayCircle,
-                        contentDescription = "Video",
-                        tint = Color.White.copy(alpha = 0.9f),
-                        modifier = Modifier.size(36.dp)
-                    )
-                }
-
-                val durationStr = formatVideoDuration(media.metadata?.duration)
-                if (durationStr.isNotEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(8.dp)
-                            .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
-                            .padding(horizontal = 6.dp, vertical = 3.dp)
-                    ) {
-                        Text(
-                            text = durationStr,
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
-            }
-
-            // Render Checkbox Indicator if in Select Mode or Item is Selected
-            if (isSelectMode) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(if (isSelected) Color.Black.copy(alpha = 0.2f) else Color.Transparent)
-                )
-
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(8.dp)
-                ) {
-                    if (isSelected) {
-                        Icon(
-                            imageVector = Icons.Default.CheckCircle,
-                            contentDescription = "Selected",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .size(24.dp)
-                                .background(Color.White, CircleShape)
-                        )
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .size(22.dp)
-                                .border(2.dp, Color.White, CircleShape)
-                                .background(Color.Black.copy(alpha = 0.3f), CircleShape)
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun BreadcrumbBar(
-    pathHistory: List<String>,
-    galleryViewMode: GalleryViewMode,
-    onBreadcrumbClick: (Int) -> Unit
-) {
-    LazyRow(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        itemsIndexed(pathHistory, key = { index, path -> "bc_${index}_$path" }) { index, path ->
-            val folderName = if (galleryViewMode == GalleryViewMode.DATE) {
-                when {
-                    index == 0 -> "Datum"
-                    path.startsWith("year:") && !path.contains("month:") -> path.substringAfter("year:")
-                    path.contains("month:") -> {
-                        val monthNum = path.substringAfter("month:").toIntOrNull() ?: 1
-                        // Parse month name directly
-                        when (monthNum) {
-                            1 -> "Januar"
-                            2 -> "Februar"
-                            3 -> "März"
-                            4 -> "April"
-                            5 -> "Mai"
-                            6 -> "Juni"
-                            7 -> "Juli"
-                            8 -> "August"
-                            9 -> "September"
-                            10 -> "Oktober"
-                            11 -> "November"
-                            12 -> "Dezember"
-                            else -> "$monthNum"
-                        }
-                    }
-                    else -> "Root"
-                }
-            } else {
-                if (path.isEmpty()) "Root" else path.substringAfterLast('/')
-            }
-            val isActive = index == pathHistory.lastIndex
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (index > 0) {
-                    Text(
-                        text = "/",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                        fontSize = 12.sp,
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    )
-                }
-                Text(
-                    text = folderName,
-                    color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 13.sp,
-                    fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
-                    modifier = Modifier
-                        .clickable { onBreadcrumbClick(index) }
-                        .padding(vertical = 4.dp, horizontal = 2.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun ErrorStateView(
-    message: String,
-    onRetry: () -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = "An Error Occurred",
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = message,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(horizontal = 16.dp),
-                lineHeight = 20.sp
-            )
-            Spacer(modifier = Modifier.height(24.dp))
-            Button(onClick = onRetry) {
-                Text("Retry")
-            }
-        }
-    }
-}
-
-@Composable
-fun EmptyStateView(
-    title: String,
-    subtitle: String
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(32.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.Image,
-                contentDescription = "Empty",
-                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f),
-                modifier = Modifier.size(80.dp)
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = subtitle,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
-                style = MaterialTheme.typography.bodyMedium
-            )
-        }
-    }
-}
-
-fun formatVideoDuration(durationMs: Double?): String {
-    if (durationMs == null || durationMs <= 0.0) return ""
-    var totalSecs = (durationMs / 1000.0).toLong()
-    if (totalSecs == 0L && durationMs > 0.0) {
-        totalSecs = durationMs.toLong()
-    }
-    val hours = totalSecs / 3600
-    val minutes = (totalSecs % 3600) / 60
-    val seconds = totalSecs % 60
-    return if (hours > 0) {
-        String.format("%d:%02d:%02d", hours, minutes, seconds)
-    } else {
-        String.format("%d:%02d", minutes, seconds)
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun SortDialog(
-    viewModel: GalleryViewModel,
-    onDismiss: () -> Unit
-) {
-    val activeTab by viewModel.activeTab.collectAsState()
-    val selectedAlbum by viewModel.selectedAlbum.collectAsState()
-    val selectedPerson by viewModel.selectedPerson.collectAsState()
-
-    if (activeTab == ActiveTab.ALBUMS && selectedAlbum == null) {
-        // --- 1. SORT ALBUMS (Root albums list - completely isolated from folders & persons) ---
-        var albumSortBy by remember { mutableStateOf(viewModel.prefs.getAlbumSortBy("name")) }
-        var albumSortDir by remember { mutableStateOf(viewModel.prefs.getAlbumSortDirection("asc")) }
-
-        androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-            Card(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Sort Albums", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Text("Sort albums by", style = MaterialTheme.typography.labelMedium)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        FilterChip(selected = albumSortBy == "name", onClick = { albumSortBy = "name" }, label = { Text("Name") })
-                        FilterChip(selected = albumSortBy == "date", onClick = { albumSortBy = "date" }, label = { Text("Date") })
-                        FilterChip(selected = albumSortBy == "count", onClick = { albumSortBy = "count" }, label = { Text("Count") })
-                        FilterChip(selected = albumSortBy == "random", onClick = { albumSortBy = "random" }, label = { Text("Random") })
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(selected = albumSortDir == "asc", onClick = { albumSortDir = "asc" }, label = { if (albumSortBy == "name") Text("A - Z") else Text("Ascending") })
-                        FilterChip(selected = albumSortDir == "desc", onClick = { albumSortDir = "desc" }, label = { if (albumSortBy == "name") Text("Z - A") else Text("Descending") })
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = onDismiss) { Text("Cancel") }
-                        Button(onClick = {
-                            viewModel.updateAlbumSort(albumSortBy, albumSortDir)
-                            onDismiss()
-                        }) {
-                            Text("Apply")
-                        }
-                    }
-                }
-            }
-        }
-    } else if (activeTab == ActiveTab.PERSONS && selectedPerson == null) {
-        // --- 2. SORT PERSONS (Root persons list - completely isolated from folders & albums) ---
-        var personSortBy by remember { mutableStateOf(viewModel.prefs.getPersonSortBy("name")) }
-        var personSortDir by remember { mutableStateOf(viewModel.prefs.getPersonSortDirection("asc")) }
-
-        androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-            Card(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Sort Persons", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Text("Sort persons by", style = MaterialTheme.typography.labelMedium)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        FilterChip(selected = personSortBy == "name", onClick = { personSortBy = "name" }, label = { Text("Name") })
-                        FilterChip(selected = personSortBy == "count", onClick = { personSortBy = "count" }, label = { Text("Count") })
-                        FilterChip(selected = personSortBy == "random", onClick = { personSortBy = "random" }, label = { Text("Random") })
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(selected = personSortDir == "asc", onClick = { personSortDir = "asc" }, label = { if (personSortBy == "name") Text("A - Z") else Text("Ascending") })
-                        FilterChip(selected = personSortDir == "desc", onClick = { personSortDir = "desc" }, label = { if (personSortBy == "name") Text("Z - A") else Text("Descending") })
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = onDismiss) { Text("Cancel") }
-                        Button(onClick = {
-                            viewModel.updatePersonSort(personSortBy, personSortDir)
-                            onDismiss()
-                        }) {
-                            Text("Apply")
-                        }
-                    }
-                }
-            }
-        }
-    } else {
-        // --- 3. GALLERY / ALBUM MEDIA / PERSON MEDIA ---
-        val isInsideAlbum = activeTab == ActiveTab.ALBUMS && selectedAlbum != null
-        val isInsidePerson = activeTab == ActiveTab.PERSONS && selectedPerson != null
-        val isGallery = activeTab == ActiveTab.GALLERY
-
-        val isDateMode = viewModel.galleryViewMode.collectAsState().value == GalleryViewMode.DATE
-        val defaultFSort = if (isDateMode) "date" else "name"
-        val defaultFDir = if (isDateMode) "desc" else "asc"
-        val defaultMSort = "date"
-        val defaultMDir = if (isDateMode) "desc" else "asc"
-
-        val currentPath = viewModel.getSortPath()
-        val globalPath = if (isDateMode) "date_mode_global" else "global"
-
-        val g_fSort = viewModel.prefs.getFolderSortBy(globalPath, defaultFSort)
-        val g_fDir = viewModel.prefs.getFolderSortDirection(globalPath, defaultFDir)
-        val g_mSort = viewModel.prefs.getMediaSortBy(globalPath, defaultMSort)
-        val g_mDir = viewModel.prefs.getMediaSortDirection(globalPath, defaultMDir)
-
-        var folderSortBy by remember {
-            mutableStateOf(
-                if (viewModel.prefs.hasFolderSort(currentPath)) viewModel.prefs.getFolderSortBy(currentPath, g_fSort)
-                else g_fSort
-            )
-        }
-        var folderSortDir by remember {
-            mutableStateOf(
-                if (viewModel.prefs.hasFolderSort(currentPath)) viewModel.prefs.getFolderSortDirection(currentPath, g_fDir)
-                else g_fDir
-            )
-        }
-
-        var mediaSortBy by remember {
-            mutableStateOf(
-                if (viewModel.prefs.hasMediaSort(currentPath)) viewModel.prefs.getMediaSortBy(currentPath, g_mSort)
-                else g_mSort
-            )
-        }
-        var mediaSortDir by remember {
-            mutableStateOf(
-                if (viewModel.prefs.hasMediaSort(currentPath)) viewModel.prefs.getMediaSortDirection(currentPath, g_mDir)
-                else g_mDir
-            )
-        }
-
-        var currentFolderOnly by remember {
-            mutableStateOf(true)
-        }
-
-        val dialogTitle = when {
-            isInsideAlbum -> "Sort Album Media"
-            isInsidePerson -> "Sort Person Media"
-            else -> "Sort Gallery"
-        }
-
-        val checkboxLabel = when {
-            isInsideAlbum -> "This album only"
-            isInsidePerson -> "This person only"
-            viewModel.currentPath.isBlank() -> "Only root folder (do not apply to subfolders)"
-            else -> "Only this folder (do not apply to subfolders)"
-        }
-
-        androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-            Card(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(dialogTitle, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    if (isGallery) {
-                        Text("Sort folders by", style = MaterialTheme.typography.labelMedium)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            FilterChip(selected = folderSortBy == "name", onClick = { folderSortBy = "name" }, label = { Text("Name") })
-                            FilterChip(selected = folderSortBy == "date", onClick = { folderSortBy = "date" }, label = { Text("Date") })
-                            FilterChip(selected = folderSortBy == "count", onClick = { folderSortBy = "count" }, label = { Text("Count") })
-                            FilterChip(selected = folderSortBy == "random", onClick = { folderSortBy = "random" }, label = { Text("Random") })
-                        }
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilterChip(selected = folderSortDir == "asc", onClick = { folderSortDir = "asc" }, label = { Text("Ascending") })
-                            FilterChip(selected = folderSortDir == "desc", onClick = { folderSortDir = "desc" }, label = { Text("Descending") })
-                        }
-                        Spacer(modifier = Modifier.height(16.dp))
-                    }
-
-                    Text("Sort media by", style = MaterialTheme.typography.labelMedium)
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(selected = mediaSortBy == "name", onClick = { mediaSortBy = "name" }, label = { Text("Name") })
-                        FilterChip(selected = mediaSortBy == "date", onClick = { mediaSortBy = "date" }, label = { Text("Date") })
-                        FilterChip(selected = mediaSortBy == "random", onClick = { mediaSortBy = "random" }, label = { Text("Random") })
-                    }
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(selected = mediaSortDir == "asc", onClick = { mediaSortDir = "asc" }, label = { if (mediaSortBy == "name") Text("A - Z") else Text("Ascending") })
-                        FilterChip(selected = mediaSortDir == "desc", onClick = { mediaSortDir = "desc" }, label = { if (mediaSortBy == "name") Text("Z - A") else Text("Descending") })
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { currentFolderOnly = !currentFolderOnly }
-                    ) {
-                        Checkbox(checked = currentFolderOnly, onCheckedChange = { currentFolderOnly = it })
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(checkboxLabel, style = MaterialTheme.typography.bodyMedium)
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = onDismiss) { Text("Cancel") }
-                        Button(onClick = {
-                            viewModel.updateSort(folderSortBy, folderSortDir, mediaSortBy, mediaSortDir, currentFolderOnly)
-                            onDismiss()
-                        }) {
-                            Text("Apply")
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun PersonsTabContent(viewModel: GalleryViewModel) {
-    val personsState by viewModel.personsState.collectAsState()
-    var searchQuery by remember { mutableStateOf("") }
-    val selectedPerson by viewModel.selectedPerson.collectAsState()
-    val personContentState by viewModel.personContentState.collectAsState()
-    val itemsPerRowPortrait by viewModel.itemsPerRowPortrait.collectAsState()
-    val itemsPerRowLandscape by viewModel.itemsPerRowLandscape.collectAsState()
-    val isLandscape = LocalConfiguration.current.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
-    val itemsPerRow = if (isLandscape) itemsPerRowLandscape else itemsPerRowPortrait
-    val spacing by viewModel.spacing.collectAsState()
-
-    if (selectedPerson != null) {
-        // Render current person's content
-        val isRefreshing by viewModel.isPersonContentRefreshing.collectAsState()
-        AdaptivePullToRefreshBox(
-            isRefreshing = isRefreshing,
-            onRefresh = { selectedPerson?.let { viewModel.refreshPersonContent(it) } },
-            modifier = Modifier.fillMaxSize()
-        ) {
-                when (val state = personContentState) {
-                    is GalleryUiState.Loading -> {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator()
-                        }
-                    }
-                    is GalleryUiState.Error -> {
-                        ErrorStateView(message = state.message) {
-                            selectedPerson?.let { viewModel.selectPerson(it) }
-                        }
-                    }
-                    is GalleryUiState.Success -> {
-                        val mediaList = state.directory.media ?: emptyList()
-                        if (mediaList.isEmpty()) {
-                            EmptyStateView("No items for this person", "This query yielded no matching media results.")
-                        } else {
-                            GalleryContentGrid(
-                                subfolders = emptyList(),
-                                mediaList = mediaList,
-                                viewModel = viewModel,
-                                onFolderClick = {},
-                                onMediaClick = { media ->
-                                    viewModel.selectMedia(media, mediaList)
-                                }
-                            )
-                        }
-                    }
-                    else -> {}
-                }
-            }
-    } else {
-        // Render persons list
-        val isRefreshing by viewModel.isPersonsRefreshing.collectAsState()
-        AdaptivePullToRefreshBox(
-            isRefreshing = isRefreshing,
-            onRefresh = { viewModel.refreshPersons() },
-            modifier = Modifier.fillMaxSize()
-        ) {
-            when (val state = personsState) {
-                is PersonsUiState.Loading -> {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator()
-                    }
-                }
-                is PersonsUiState.Error -> {
-                    ErrorStateView(message = state.message) {
-                        viewModel.loadPersons()
-                    }
-                }
-                is PersonsUiState.Success -> {
-                    val allPersons = state.persons
-                    val persons = remember(allPersons, searchQuery) {
-                        if (searchQuery.isBlank()) allPersons else allPersons.filter { it.name.contains(searchQuery, ignoreCase = true) }
-                    }
-                    
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        androidx.compose.material3.TextField(
-                            value = searchQuery,
-                            onValueChange = { searchQuery = it },
-                            placeholder = { Text("Search persons...") },
-                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
-                            trailingIcon = {
-                                if (searchQuery.isNotEmpty()) {
-                                    IconButton(onClick = { searchQuery = "" }) {
-                                        Icon(Icons.Default.Clear, contentDescription = "Clear search")
-                                    }
-                                }
-                            },
-                            singleLine = true,
-                            shape = androidx.compose.foundation.shape.RoundedCornerShape(percent = 50),
-                            colors = androidx.compose.material3.TextFieldDefaults.colors(
-                                focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
-                                unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
-                                disabledIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp)
-                        )
-
-                        if (persons.isEmpty()) {
-                            if (allPersons.isEmpty()) {
-                                EmptyStateView("No persons found", "No faces detected or server hasn't scanned persons yet.")
-                            } else {
-                                EmptyStateView("No matching persons", "Try a different search term.")
-                            }
-                        } else {
-                            val spacingDp = spacing.dp
-                            
-                            val isTv = LocalContext.current.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
-                            val firstItemFocusRequester = remember { FocusRequester() }
-                            
-                            LaunchedEffect(persons) {
-                                if (isTv && persons.isNotEmpty()) {
-                                    try {
-                                        kotlinx.coroutines.delay(100)
-                                        firstItemFocusRequester.requestFocus()
-                                    } catch (e: Exception) {}
-                                }
-                            }
-                            
-                            LazyVerticalGrid(
-                                columns = GridCells.Fixed(itemsPerRow),
-                                modifier = Modifier.weight(1f).fillMaxWidth(),
-                                contentPadding = PaddingValues(16.dp),
-                                horizontalArrangement = Arrangement.spacedBy(spacingDp),
-                                verticalArrangement = Arrangement.spacedBy(spacingDp)
-                            ) {
-                                items(count = persons.size, key = { index -> persons[index].name }) { index -> val person = persons[index]
-                                    val focusModifier = if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
-                                    PersonItem(
-                                        modifier = focusModifier,
-                                        person = person,
-                                        viewModel = viewModel,
-                                        onClick = { viewModel.selectPerson(person) }
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun PersonItem(modifier: Modifier = Modifier, person: com.example.data.ApiPerson, viewModel: GalleryViewModel, onClick: () -> Unit) {
-    val context = LocalContext.current
-    val thumbnailUrl = viewModel.getPersonThumbnailUrl(person)
-    val cookies = viewModel.prefs.cookies
-    val cornerRadius by viewModel.cornerRadius.collectAsState()
-    val aspectRatio by viewModel.aspectRatio.collectAsState()
-    val cardRatio = if (aspectRatio > 0f) aspectRatio else 1f
-    val handlePersonClick = {
-        onClick()
-    }
-
-    val imgRequest = ImageRequest.Builder(LocalContext.current)
-        .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
-        .diskCachePolicy(coil.request.CachePolicy.ENABLED)
-        .networkCachePolicy(coil.request.CachePolicy.ENABLED)
-        .data(thumbnailUrl)
-        .apply {
-            if (cookies.isNotEmpty()) {
-                addHeader("Cookie", cookies)
-            }
-        }
-        .crossfade(true)
-        .build()
-
-    Card(
-        modifier = modifier
-            .fillMaxWidth()
-            .aspectRatio(cardRatio)
-            .clip(RoundedCornerShape(cornerRadius.dp))
-            .tvFocus(shape = RoundedCornerShape(cornerRadius.dp))
-            .clickable { handlePersonClick() },
-        shape = RoundedCornerShape(cornerRadius.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            AsyncImage(
-                model = imgRequest,
-                contentDescription = person.name,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-            ThumbnailOverlay(
-                name = person.name,
-                count = "${person.cache?.count ?: 0}"
-            )
-
-            // Top-Right Actions: Lock badge and Favorite Star
-            Row(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                IconButton(
-                    onClick = { viewModel.togglePersonFavourite(person) },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    val isFav = person.isFavourite == true
-                    Icon(
-                        imageVector = Icons.Default.Star,
-                        contentDescription = "Toggle favorite",
-                        tint = if (isFav) Color(0xFFFFD700) else Color.White.copy(alpha = 0.8f),
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun AboutScreen(viewModel: GalleryViewModel, onBack: () -> Unit) {
-    androidx.activity.compose.BackHandler { onBack() }
-
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
-
-    val version = remember {
-        try {
-            val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-            packageInfo.versionName ?: "2.6"
-        } catch (e: Exception) {
-            "2.6"
-        }
-    }
-
-    val updateState by viewModel.updateState.collectAsState()
-    val autoCheckUpdates by viewModel.autoCheckUpdates.collectAsState()
-
-    LaunchedEffect(autoCheckUpdates) {
-        if (autoCheckUpdates && updateState is GalleryViewModel.UpdateState.Idle) {
-            viewModel.checkForUpdates()
-        }
-    }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("About PiGallery2", fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back"
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
-            )
-        },
-        contentWindowInsets = WindowInsets.systemBars
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            // Hero App Header Card
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
-                ),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Surface(
-                        shape = androidx.compose.foundation.shape.CircleShape,
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        shadowElevation = 4.dp,
-                        modifier = Modifier.size(80.dp)
-                    ) {
-                        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                            Icon(
-                                painter = androidx.compose.ui.res.painterResource(id = com.example.R.drawable.ic_launcher_foreground),
-                                contentDescription = "PiGallery2 Logo",
-                                modifier = Modifier.size(64.dp),
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Text(
-                        text = "PiGallery2",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-                    ) {
-                        Text(
-                            text = "Version $version",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Text(
-                        text = "A beautiful, fast, and modern gallery application connecting to your self-hosted PiGallery2 server.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                    )
-                }
-            }
-
-            // Software Updates Section
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                )
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Info,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Text(
-                            text = "Software Updates",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(MaterialTheme.colorScheme.surface)
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Auto-check for updates",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Text(
-                                text = "Check for new releases automatically",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Switch(
-                            checked = autoCheckUpdates,
-                            onCheckedChange = { viewModel.setAutoCheckUpdates(it) }
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    when (val state = updateState) {
-                        is GalleryViewModel.UpdateState.Idle -> {
-                            Button(
-                                onClick = { viewModel.checkForUpdates(force = true) },
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Check for Updates")
-                            }
-                        }
-                        is GalleryViewModel.UpdateState.Checking -> {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.Center
-                            ) {
-                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Text("Checking GitHub for updates...", style = MaterialTheme.typography.bodyMedium)
-                            }
-                        }
-                        is GalleryViewModel.UpdateState.UpToDate -> {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.CheckCircle,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "You are on the latest version (${state.currentVersion})",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Medium,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(8.dp))
-                                OutlinedButton(
-                                    onClick = { viewModel.checkForUpdates(force = true) },
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Text("Check Again")
-                                }
-                            }
-                        }
-                        is GalleryViewModel.UpdateState.NewRelease -> {
-                            Card(
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-                                shape = RoundedCornerShape(16.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(16.dp),
-                                    horizontalAlignment = Alignment.Start
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(
-                                            imageVector = Icons.Default.Download,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.onPrimaryContainer
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text(
-                                            text = "New Update Available (${state.tagName})",
-                                            fontWeight = FontWeight.Bold,
-                                            style = MaterialTheme.typography.titleMedium,
-                                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Text(
-                                        text = state.releaseNotes,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                        maxLines = 4,
-                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                                    )
-                                    Spacer(modifier = Modifier.height(12.dp))
-                                    Button(
-                                        onClick = {
-                                            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(state.releaseUrl))
-                                            context.startActivity(intent)
-                                        },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        shape = RoundedCornerShape(12.dp)
-                                    ) {
-                                        Text("View & Download Release")
-                                    }
-                                }
-                            }
-                        }
-                        is GalleryViewModel.UpdateState.Error -> {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Text(
-                                    text = "Error: ${state.message}",
-                                    color = MaterialTheme.colorScheme.error,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Button(
-                                    onClick = { viewModel.checkForUpdates(force = true) },
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Text("Retry")
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Links & Resources Card
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                )
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                ) {
-                    Text(
-                        text = "Links & Resources",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    FilledTonalButton(
-                        onClick = { uriHandler.openUri("https://github.com/dasmaetthes/pigallery2_android") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(
-                            painter = androidx.compose.ui.res.painterResource(id = com.example.R.drawable.ic_github),
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("View Source Code on GitHub", fontWeight = FontWeight.SemiBold)
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    OutlinedButton(
-                        onClick = { uriHandler.openUri("https://github.com/dasmaetthes/pigallery2_android/issues") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Info,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Report an Issue / Feedback")
-                    }
-                }
-            }
-
-            // Open Source Software Licenses Card
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                )
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                ) {
-                    Text(
-                        text = "Open Source Licenses",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    val annotatedString = androidx.compose.ui.text.buildAnnotatedString {
-                        append("PiGallery2 Android Client is open-source software licensed under the ")
-
-                        val licenseStartIndex = length
-                        append("MIT License")
-                        val licenseEndIndex = length
-
-                        addStyle(
-                            style = androidx.compose.ui.text.SpanStyle(
-                                color = MaterialTheme.colorScheme.primary,
-                                textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
-                            ),
-                            start = licenseStartIndex,
-                            end = licenseEndIndex
-                        )
-                        addLink(
-                            androidx.compose.ui.text.LinkAnnotation.Url(
-                                url = "https://github.com/dasmaetthes/pigallery2_android/tree/main?tab=MIT-1-ov-file#MIT-1-ov-file",
-                                linkInteractionListener = androidx.compose.ui.text.LinkInteractionListener {
-                                    uriHandler.openUri("https://github.com/dasmaetthes/pigallery2_android/tree/main?tab=MIT-1-ov-file#MIT-1-ov-file")
-                                }
-                            ),
-                            start = licenseStartIndex,
-                            end = licenseEndIndex
-                        )
-
-                        append(".\n\nBuilt with open source software:\n")
-                        append("• Android Jetpack & Compose (Apache 2.0)\n")
-                        append("• Kotlin & Coroutines (Apache 2.0)\n")
-                        append("• Coil Image Loader (Apache 2.0)\n")
-                        append("• OkHttp & Retrofit (Apache 2.0)\n")
-                        append("• Moshi (Apache 2.0)\n")
-                        append("• Room Database (Apache 2.0)\n\n")
-                        append("These third-party libraries are licensed under the Apache License, Version 2.0. ")
-                        append("You may obtain a copy of the License at ")
-
-                        val startIndex = length
-                        append("http://www.apache.org/licenses/LICENSE-2.0")
-                        val endIndex = length
-
-                        addStyle(
-                            style = androidx.compose.ui.text.SpanStyle(
-                                color = MaterialTheme.colorScheme.primary,
-                                textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
-                            ),
-                            start = startIndex,
-                            end = endIndex
-                        )
-                        addLink(
-                            androidx.compose.ui.text.LinkAnnotation.Url(
-                                url = "http://www.apache.org/licenses/LICENSE-2.0",
-                                linkInteractionListener = androidx.compose.ui.text.LinkInteractionListener {
-                                    uriHandler.openUri("http://www.apache.org/licenses/LICENSE-2.0")
-                                }
-                            ),
-                            start = startIndex,
-                            end = endIndex
-                        )
-                    }
-
-                    Text(
-                        text = annotatedString,
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-    }
-}
-
-@Composable
-fun NewUpdateDialog(
-    newRelease: GalleryViewModel.UpdateState.NewRelease,
-    onDismiss: () -> Unit,
-    onUpdate: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = {
-            Icon(
-                imageVector = Icons.Default.Download,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(32.dp)
-            )
-        },
-        title = {
-            Text(
-                text = "New Update Available",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
-            )
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = "A new version of PiGallery2 (${newRelease.tagName}) is available!",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                if (newRelease.releaseNotes.isNotBlank()) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 180.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .padding(12.dp)
-                                .verticalScroll(rememberScrollState())
-                        ) {
-                            Text(
-                                text = "Release Notes:",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = newRelease.releaseNotes,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Button(onClick = onUpdate) {
-                Text("Update Now")
-            }
-        },
-        dismissButton = {
-            OutlinedButton(onClick = onDismiss) {
-                Text("Later")
-            }
-        }
-    )
 }

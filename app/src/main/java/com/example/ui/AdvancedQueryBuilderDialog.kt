@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -17,15 +18,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.PopupProperties
+import com.example.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class VisualQueryRow(
     val openParen: String = "",       // "", "(", "((", etc.
@@ -39,8 +45,10 @@ data class VisualQueryRow(
 @Composable
 fun AdvancedQueryBuilderDialog(
     viewModel: GalleryViewModel,
+    canManageAlbums: Boolean = false,
     onDismissRequest: () -> Unit,
-    onSearchApplied: (String) -> Unit
+    onSearchApplied: (String) -> Unit,
+    onSaveAsAlbum: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -93,13 +101,13 @@ fun AdvancedQueryBuilderDialog(
                         )
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
-                            text = "Advanced Search",
+                            text = stringResource(R.string.advanced_search),
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )
                     }
                     IconButton(onClick = onDismissRequest) {
-                        Icon(imageVector = Icons.Default.Close, contentDescription = "Close")
+                        Icon(imageVector = Icons.Default.Close, contentDescription = stringResource(R.string.close))
                     }
                 }
 
@@ -139,7 +147,7 @@ fun AdvancedQueryBuilderDialog(
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text(
-                                            text = "Filter #${index + 1}",
+                                            text = stringResource(R.string.filter_number, index + 1),
                                             style = MaterialTheme.typography.labelLarge,
                                             color = MaterialTheme.colorScheme.primary,
                                             fontWeight = FontWeight.SemiBold
@@ -149,11 +157,11 @@ fun AdvancedQueryBuilderDialog(
                                                 onClick = {
                                                     rows = rows.toMutableList().apply { removeAt(index) }
                                                 },
-                                                modifier = Modifier.size(32.dp)
+                                                modifier = Modifier.size(48.dp)
                                             ) {
                                                 Icon(
                                                     imageVector = Icons.Default.Delete,
-                                                    contentDescription = "Remove Filter",
+                                                    contentDescription = stringResource(R.string.remove_filter),
                                                     tint = MaterialTheme.colorScheme.error,
                                                     modifier = Modifier.size(20.dp)
                                                 )
@@ -195,10 +203,17 @@ fun AdvancedQueryBuilderDialog(
                                                     DropdownMenuItem(
                                                         text = { Text(valName.ifEmpty { "-" }) },
                                                         onClick = {
-                                                            rows = rows.toMutableList().apply {
-                                                                this[index] = this[index].copy(openParen = valName)
+                                                            if (expanded) {
+                                                                expanded = false
+                                                                coroutineScope.launch {
+                                                                    delay(150)
+                                                                    rows = rows.toMutableList().apply {
+                                                                        if (index in indices) {
+                                                                            this[index] = this[index].copy(openParen = valName)
+                                                                        }
+                                                                    }
+                                                                }
                                                             }
-                                                            expanded = false
                                                         }
                                                     )
                                                 }
@@ -209,21 +224,21 @@ fun AdvancedQueryBuilderDialog(
                                         Box(modifier = Modifier.weight(1f)) {
                                             var expanded by remember { mutableStateOf(false) }
                                             val attributeLabels = mapOf(
-                                                "person" to "Person",
-                                                "keyword" to "Keyword / Tag",
-                                                "place" to "Place / Location",
-                                                "caption" to "Caption",
-                                                "file-name" to "File Name",
-                                                "directory" to "Directory",
-                                                "date" to "Date",
-                                                "rating" to "Rating",
-                                                "person-count" to "People Count"
+                                                "person" to stringResource(R.string.attr_person),
+                                                "keyword" to stringResource(R.string.attr_keyword),
+                                                "place" to stringResource(R.string.attr_place),
+                                                "caption" to stringResource(R.string.attr_caption),
+                                                "file-name" to stringResource(R.string.attr_filename),
+                                                "directory" to stringResource(R.string.attr_directory),
+                                                "date" to stringResource(R.string.attr_date),
+                                                "rating" to stringResource(R.string.attr_rating),
+                                                "person-count" to stringResource(R.string.attr_person_count)
                                             )
                                             OutlinedTextField(
                                                 value = attributeLabels[row.attribute] ?: row.attribute,
                                                 onValueChange = {},
                                                 readOnly = true,
-                                                label = { Text("Attribute") },
+                                                label = { Text(stringResource(R.string.attribute_label)) },
                                                 textStyle = MaterialTheme.typography.bodyMedium,
                                                 trailingIcon = {
                                                     Icon(
@@ -242,10 +257,17 @@ fun AdvancedQueryBuilderDialog(
                                                     DropdownMenuItem(
                                                         text = { Text(label) },
                                                         onClick = {
-                                                            rows = rows.toMutableList().apply {
-                                                                this[index] = this[index].copy(attribute = key, value = "")
+                                                            if (expanded) {
+                                                                expanded = false
+                                                                coroutineScope.launch {
+                                                                    delay(150)
+                                                                    rows = rows.toMutableList().apply {
+                                                                        if (index in indices) {
+                                                                            this[index] = this[index].copy(attribute = key, value = "")
+                                                                        }
+                                                                    }
+                                                                }
                                                             }
-                                                            expanded = false
                                                         }
                                                     )
                                                 }
@@ -278,10 +300,17 @@ fun AdvancedQueryBuilderDialog(
                                                     DropdownMenuItem(
                                                         text = { Text(valName.ifEmpty { "-" }) },
                                                         onClick = {
-                                                            rows = rows.toMutableList().apply {
-                                                                this[index] = this[index].copy(closeParen = valName)
+                                                            if (expanded) {
+                                                                expanded = false
+                                                                coroutineScope.launch {
+                                                                    delay(150)
+                                                                    rows = rows.toMutableList().apply {
+                                                                        if (index in indices) {
+                                                                            this[index] = this[index].copy(closeParen = valName)
+                                                                        }
+                                                                    }
+                                                                }
                                                             }
-                                                            expanded = false
                                                         }
                                                     )
                                                 }
@@ -311,7 +340,7 @@ fun AdvancedQueryBuilderDialog(
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Text(
-                                                text = "Connector to next filter:",
+                                                text = stringResource(R.string.connector_to_next_filter),
                                                 style = MaterialTheme.typography.labelMedium,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
@@ -323,7 +352,7 @@ fun AdvancedQueryBuilderDialog(
                                                         this[index] = this[index].copy(connector = "AND")
                                                     }
                                                 },
-                                                label = { Text("AND") }
+                                                label = { Text(stringResource(R.string.connector_and)) }
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))
                                             FilterChip(
@@ -333,7 +362,7 @@ fun AdvancedQueryBuilderDialog(
                                                         this[index] = this[index].copy(connector = "OR")
                                                     }
                                                 },
-                                                label = { Text("OR") }
+                                                label = { Text(stringResource(R.string.connector_or)) }
                                             )
                                         }
                                     }
@@ -354,7 +383,7 @@ fun AdvancedQueryBuilderDialog(
                         ) {
                             Icon(imageVector = Icons.Default.Add, contentDescription = null)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Add Filter Attribute")
+                            Text(stringResource(R.string.add_filter_attribute))
                         }
                     }
                 }
@@ -375,14 +404,14 @@ fun AdvancedQueryBuilderDialog(
                             .padding(12.dp)
                     ) {
                         Text(
-                            text = "Query Preview:",
+                            text = stringResource(R.string.query_preview),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontWeight = FontWeight.Bold
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = compiledQuery.ifEmpty { "(empty query)" },
+                            text = compiledQuery.ifEmpty { stringResource(R.string.empty_query) },
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Medium,
                             color = if (compiledQuery.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f) else MaterialTheme.colorScheme.onSurface
@@ -395,26 +424,46 @@ fun AdvancedQueryBuilderDialog(
                 // Action buttons
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     OutlinedButton(
                         onClick = {
                             rows = listOf(VisualQueryRow())
                         },
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("query_builder_clear_button")
                     ) {
-                        Text("Clear All")
+                        Text(stringResource(R.string.clear_all))
+                    }
+
+                    if (canManageAlbums && compiledQuery.isNotBlank()) {
+                        FilledTonalIconButton(
+                            onClick = { onSaveAsAlbum(compiledQuery) },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("query_builder_save_album_button")
+                                .tvFocus(shape = CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.BookmarkAdd,
+                                contentDescription = stringResource(R.string.save_search_as_album)
+                            )
+                        }
                     }
 
                     Button(
                         onClick = {
                             onSearchApplied(compiledQuery)
                         },
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("query_builder_search_button")
                     ) {
                         Icon(imageVector = Icons.Default.Search, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Search")
+                        Text(stringResource(R.string.search))
                     }
                 }
             }
@@ -434,8 +483,10 @@ fun FilterValueInputSection(
 
     var textInput by remember { mutableStateOf(row.value) }
     var suggestions by remember { mutableStateOf<List<String>>(emptyList()) }
+    var displayedSuggestions by remember { mutableStateOf<List<String>>(emptyList()) }
     var isFetching by remember { mutableStateOf(false) }
     var suggestionsExpanded by remember { mutableStateOf(false) }
+    var suppressNextAutocomplete by remember { mutableStateOf(false) }
 
     LaunchedEffect(row.value) {
         if (row.value != textInput) {
@@ -444,13 +495,18 @@ fun FilterValueInputSection(
     }
 
     // On text change, fetch suggestions if applicable
-    LaunchedEffect(textInput) {
+    LaunchedEffect(textInput, row.attribute) {
+        if (suppressNextAutocomplete) {
+            suppressNextAutocomplete = false
+            return@LaunchedEffect
+        }
         if (textInput.isBlank() || row.attribute == "date" || row.attribute == "rating" || row.attribute == "person-count") {
             suggestions = emptyList()
             suggestionsExpanded = false
             return@LaunchedEffect
         }
 
+        delay(120)
         isFetching = true
         val searchType = when (row.attribute) {
             "keyword", "tag" -> 104
@@ -462,8 +518,8 @@ fun FilterValueInputSection(
             else -> 100
         }
 
-        coroutineScope.launch(Dispatchers.IO) {
-            try {
+        try {
+            val cleaned = withContext(Dispatchers.IO) {
                 val result = viewModel.api.getAutocompleteSuggestions(
                     serverUrl = viewModel.prefs.serverUrl,
                     text = textInput,
@@ -482,21 +538,28 @@ fun FilterValueInputSection(
                     else -> ""
                 }
 
-                val cleaned = result.map {
+                result.map {
                     if (it.startsWith(prefixToStrip, ignoreCase = true)) {
                         it.substring(prefixToStrip.length)
                     } else {
                         it
                     }
                 }
-                suggestions = cleaned
-                suggestionsExpanded = cleaned.isNotEmpty()
-            } catch (e: Exception) {
-                suggestions = emptyList()
-                suggestionsExpanded = false
-            } finally {
-                isFetching = false
             }
+            suggestions = cleaned
+            if (cleaned.isNotEmpty()) {
+                displayedSuggestions = cleaned
+                suggestionsExpanded = true
+            } else {
+                suggestionsExpanded = false
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            suggestions = emptyList()
+            suggestionsExpanded = false
+        } finally {
+            isFetching = false
         }
     }
 
@@ -508,13 +571,13 @@ fun FilterValueInputSection(
                     textInput = it
                     onValueChange(it)
                 },
-                label = { Text("Filter Value") },
+                label = { Text(stringResource(R.string.filter_value)) },
                 placeholder = {
                     val placeholderText = when (row.attribute) {
-                        "date" -> "e.g., 2023, 2023-05-10, 2023-01..2023-12"
-                        "rating" -> "e.g., 4, >=4, 1..3"
-                        "person-count" -> "e.g., 1, >2, 0"
-                        else -> "Enter value..."
+                        "date" -> stringResource(R.string.placeholder_date)
+                        "rating" -> stringResource(R.string.placeholder_rating)
+                        "person-count" -> stringResource(R.string.placeholder_person_count)
+                        else -> stringResource(R.string.placeholder_enter_value)
                     }
                     Text(placeholderText)
                 },
@@ -538,7 +601,7 @@ fun FilterValueInputSection(
                                 )
                                 datePickerDialog.show()
                             }) {
-                                Icon(imageVector = Icons.Default.DateRange, contentDescription = "Pick Date")
+                                Icon(imageVector = Icons.Default.DateRange, contentDescription = stringResource(R.string.pick_date))
                             }
                         }
                         if (textInput.isNotEmpty()) {
@@ -546,7 +609,7 @@ fun FilterValueInputSection(
                                 textInput = ""
                                 onValueChange("")
                             }) {
-                                Icon(imageVector = Icons.Default.Clear, contentDescription = "Clear")
+                                Icon(imageVector = Icons.Default.Clear, contentDescription = stringResource(R.string.clear))
                             }
                         }
                     }
@@ -555,23 +618,53 @@ fun FilterValueInputSection(
             )
 
             // Autocomplete suggestions dropdown (for text attributes)
-            if (suggestionsExpanded && suggestions.isNotEmpty()) {
+            val isTv = remember(context) {
+                context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
+            }
+            if (!isTv) {
                 DropdownMenu(
-                    expanded = suggestionsExpanded,
+                    expanded = suggestionsExpanded && displayedSuggestions.isNotEmpty(),
                     onDismissRequest = { suggestionsExpanded = false },
                     properties = PopupProperties(focusable = false),
                     modifier = Modifier.fillMaxWidth(0.85f)
                 ) {
-                    suggestions.forEach { suggestion ->
+                    displayedSuggestions.forEach { suggestion ->
                         DropdownMenuItem(
                             text = { Text(suggestion) },
                             onClick = {
-                                textInput = suggestion
-                                onValueChange(suggestion)
-                                suggestionsExpanded = false
+                                if (suggestionsExpanded) {
+                                    suggestionsExpanded = false
+                                    suppressNextAutocomplete = true
+                                    textInput = suggestion
+                                    onValueChange(suggestion)
+                                }
                             }
                         )
                     }
+                }
+            }
+        }
+
+        val isTv = remember(context) {
+            context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
+        }
+        if (isTv && suggestionsExpanded && suggestions.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(6.dp))
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                suggestions.forEach { suggestion ->
+                    SuggestionChip(
+                        onClick = {
+                            textInput = suggestion
+                            onValueChange(suggestion)
+                            suggestionsExpanded = false
+                        },
+                        label = { Text(suggestion) },
+                        modifier = Modifier.tvFocus(shape = RoundedCornerShape(8.dp))
+                    )
                 }
             }
         }
@@ -586,19 +679,19 @@ fun FilterValueInputSection(
             ) {
                 val helpers = when (row.attribute) {
                     "date" -> listOf(
-                        "Today" to java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date()),
-                        "This Year" to java.text.SimpleDateFormat("yyyy", java.util.Locale.US).format(java.util.Date()),
-                        "Last Year" to (java.text.SimpleDateFormat("yyyy", java.util.Locale.US).format(java.util.Date()).toInt() - 1).toString()
+                        stringResource(R.string.quick_today) to java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date()),
+                        stringResource(R.string.quick_this_year) to java.text.SimpleDateFormat("yyyy", java.util.Locale.US).format(java.util.Date()),
+                        stringResource(R.string.quick_last_year) to (java.text.SimpleDateFormat("yyyy", java.util.Locale.US).format(java.util.Date()).toInt() - 1).toString()
                     )
                     "rating" -> listOf(
-                        "High (>=4)" to ">=4",
-                        "5 Stars" to "5",
-                        "Unrated" to "0"
+                        stringResource(R.string.quick_high_rating) to ">=4",
+                        stringResource(R.string.quick_five_stars) to "5",
+                        stringResource(R.string.quick_unrated) to "0"
                     )
                     "person-count" -> listOf(
-                        "No people (0)" to "0",
-                        "Has people (>0)" to ">0",
-                        "Group (>=2)" to ">=2"
+                        stringResource(R.string.quick_no_people) to "0",
+                        stringResource(R.string.quick_has_people) to ">0",
+                        stringResource(R.string.quick_group) to ">=2"
                     )
                     else -> emptyList()
                 }

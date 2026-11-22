@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -85,7 +86,7 @@ fun LoginScreen(
                 ) {
                     Image(
                         painter = androidx.compose.ui.res.painterResource(id = R.drawable.ic_launcher_foreground),
-                        contentDescription = "App Logo",
+                        contentDescription = stringResource(R.string.app_logo_cd),
                         modifier = Modifier.size(80.dp)
                     )
                 }
@@ -101,7 +102,7 @@ fun LoginScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = "PiGallery2",
+                    text = stringResource(R.string.app_name),
                     fontSize = 28.sp,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onBackground,
@@ -109,7 +110,7 @@ fun LoginScreen(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Connect to your self-hosted directory-first photo gallery",
+                    text = stringResource(R.string.login_subtitle),
                     fontSize = 14.sp,
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                     textAlign = TextAlign.Center
@@ -135,7 +136,7 @@ fun LoginScreen(
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     Text(
-                        text = "Server Configuration",
+                        text = stringResource(R.string.server_configuration),
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.SemiBold
@@ -145,12 +146,12 @@ fun LoginScreen(
                     OutlinedTextField(
                         value = serverUrl,
                         onValueChange = { serverUrl = it },
-                        label = { Text("Primary Server URL") },
-                        placeholder = { Text("https://gallery.deinedomain.de") },
+                        label = { Text(stringResource(R.string.primary_server_url)) },
+                        placeholder = { Text(stringResource(R.string.primary_server_placeholder)) },
                         leadingIcon = {
                             Icon(
                                 imageVector = Icons.Default.Language,
-                                contentDescription = "Server URL"
+                                contentDescription = stringResource(R.string.primary_server_url)
                             )
                         },
                         singleLine = true,
@@ -168,12 +169,12 @@ fun LoginScreen(
                             localServerUrl = it
                             viewModel.prefs.localServerUrl = it
                         },
-                        label = { Text("Local Server (Optimal for Home Wi-Fi)") },
-                        placeholder = { Text("http://192.168.178.50:3000") },
+                        label = { Text(stringResource(R.string.local_server_label)) },
+                        placeholder = { Text(stringResource(R.string.local_server_placeholder)) },
                         leadingIcon = {
                             Icon(
                                 imageVector = Icons.Default.Language,
-                                contentDescription = "Local Server URL"
+                                contentDescription = stringResource(R.string.local_server_label)
                             )
                         },
                         singleLine = true,
@@ -188,11 +189,11 @@ fun LoginScreen(
                     OutlinedTextField(
                         value = username,
                         onValueChange = { username = it },
-                        label = { Text("Username (Optional)") },
+                        label = { Text(stringResource(R.string.username_optional)) },
                         leadingIcon = {
                             Icon(
                                 imageVector = Icons.Default.Person,
-                                contentDescription = "Username"
+                                contentDescription = stringResource(R.string.username_optional)
                             )
                         },
                         singleLine = true,
@@ -206,11 +207,11 @@ fun LoginScreen(
                     OutlinedTextField(
                         value = password,
                         onValueChange = { password = it },
-                        label = { Text("Password (Optional)") },
+                        label = { Text(stringResource(R.string.password_optional)) },
                         leadingIcon = {
                             Icon(
                                 imageVector = Icons.Default.Key,
-                                contentDescription = "Password"
+                                contentDescription = stringResource(R.string.password_optional)
                             )
                         },
                         trailingIcon = {
@@ -219,7 +220,7 @@ fun LoginScreen(
                             else Icons.Default.VisibilityOff
 
                             IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                                Icon(imageVector = image, contentDescription = "Toggle password")
+                                Icon(imageVector = image, contentDescription = stringResource(R.string.toggle_password))
                             }
                         },
                         visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
@@ -245,7 +246,7 @@ fun LoginScreen(
                             checked = allowInsecureSsl,
                             onCheckedChange = { allowInsecureSsl = it }
                         )
-                        Text("Allow insecure SSL (bad/no cert)", style = MaterialTheme.typography.bodyMedium)
+                        Text(stringResource(R.string.allow_insecure_ssl), style = MaterialTheme.typography.bodyMedium)
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))
@@ -274,7 +275,7 @@ fun LoginScreen(
                             )
                         } else {
                             Text(
-                                "Connect & Login",
+                                stringResource(R.string.connect_and_login),
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.Bold
                             )
@@ -293,7 +294,7 @@ fun LoginScreen(
                             .tvFocus(shape = RoundedCornerShape(12.dp)),
                         shape = RoundedCornerShape(12.dp)
                     ) {
-                        Text("Fill with Public Demo Server")
+                        Text(stringResource(R.string.fill_demo_server))
                     }
                 }
             }

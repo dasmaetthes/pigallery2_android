@@ -3,10 +3,11 @@ package com.example.ui
 import android.app.DownloadManager
 import android.content.Context
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Environment
 import android.view.ViewGroup
 import android.widget.Toast
+import androidx.core.net.toUri
+import com.example.findActivity
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -56,6 +57,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -71,7 +74,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
@@ -79,6 +82,7 @@ import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import coil.imageLoader
 import coil.request.ImageRequest
+import com.example.R
 import com.example.data.ApiMedia
 import com.example.data.PreferencesManager
 import kotlinx.coroutines.Dispatchers
@@ -233,10 +237,10 @@ fun MediaViewerDialog(
     var isSlideshowPlaying by remember { mutableStateOf(false) }
 
     // Intelligent Behavior-Analyzing Preloader
-    var previousPage by remember { mutableStateOf(initialIndex) }
-    var swipeDirection by remember { mutableStateOf(1) } // 1: forward, -1: backward
-    var lastSwipeTime by remember { mutableStateOf(System.currentTimeMillis()) }
-    var consecutiveDirectionCount by remember { mutableStateOf(1) }
+    var previousPage by remember { mutableIntStateOf(initialIndex) }
+    var swipeDirection by remember { mutableIntStateOf(1) } // 1: forward, -1: backward
+    var lastSwipeTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var consecutiveDirectionCount by remember { mutableIntStateOf(1) }
     val activePreloadDisposables = remember { mutableListOf<coil.request.Disposable>() }
 
     // Clean up all pending background requests when viewer is dismissed
@@ -416,9 +420,16 @@ fun MediaViewerDialog(
     var showBars by remember { mutableStateOf(true) }
     var showFaceRegions by remember { mutableStateOf(false) }
     var isVideoPlaying by remember(currentMedia) { mutableStateOf(true) }
-    var videoCurrentPosition by remember(currentMedia) { mutableStateOf(0) }
+    var isLivePhotoPlaying by remember(currentMedia) { mutableStateOf(false) }
+    var videoCurrentPosition by remember(currentMedia) { mutableIntStateOf(0) }
     var isDraggingVideoSlider by remember(currentMedia) { mutableStateOf(false) }
-    var videoSliderValue by remember(currentMedia) { mutableStateOf(0f) }
+    var videoSliderValue by remember(currentMedia) { mutableFloatStateOf(0f) }
+
+    LaunchedEffect(pagerState.isScrollInProgress) {
+        if (pagerState.isScrollInProgress) {
+            isLivePhotoPlaying = false
+        }
+    }
 
     val preparedVideoPlayers = remember { mutableStateMapOf<Int, VideoPlayerController>() }
     val videoDurations = remember { mutableStateMapOf<Int, Int>() }
@@ -454,8 +465,17 @@ fun MediaViewerDialog(
         }
     }
     var showMoreMenu by remember { mutableStateOf(false) }
+    var keepTopBarForMenu by remember { mutableStateOf(false) }
+    LaunchedEffect(showMoreMenu) {
+        if (showMoreMenu) {
+            keepTopBarForMenu = true
+        } else {
+            kotlinx.coroutines.delay(200)
+            keepTopBarForMenu = false
+        }
+    }
     
-    var interactionCount by remember { mutableStateOf(0) }
+    var interactionCount by remember { mutableIntStateOf(0) }
     var topBarFocused by remember { mutableStateOf(false) }
     var bottomBarFocused by remember { mutableStateOf(false) }
     val isControlsFocused = topBarFocused || bottomBarFocused || showMoreMenu
@@ -470,13 +490,17 @@ fun MediaViewerDialog(
 
 
 
-    var videoCompletionTrigger by remember { mutableStateOf(0L) }
+    var videoCompletionTrigger by remember { mutableLongStateOf(0L) }
 
     LaunchedEffect(isSlideshowPlaying) {
         if (!isSlideshowPlaying) return@LaunchedEffect
-        if (mediaList.size <= 1) return@LaunchedEffect
+        if (mediaList.isEmpty()) {
+            isSlideshowPlaying = false
+            onDismiss()
+            return@LaunchedEffect
+        }
         
-        while (isActive) {
+        while (isActive && isSlideshowPlaying) {
             val pageAtStart = pagerState.currentPage
             val currentMedia = mediaList.getOrNull(pageAtStart)
             
@@ -523,9 +547,20 @@ fun MediaViewerDialog(
             
             if (!isActive) break
             
-            // If we are still on the same page, we animate to the next page!
+            // Wait if user currently has the menu open so viewer/bars do not dismiss underneath the popup
+            while (isActive && showMoreMenu) {
+                kotlinx.coroutines.delay(200)
+            }
+            if (!isActive || !isSlideshowPlaying) break
+
+            // If we are still on the same page, advance or finish and dismiss fullscreen on the last item
             if (pagerState.currentPage == pageAtStart) {
-                val nextPage = (pageAtStart + 1) % mediaList.size
+                if (pageAtStart >= mediaList.lastIndex) {
+                    isSlideshowPlaying = false
+                    onDismiss()
+                    break
+                }
+                val nextPage = pageAtStart + 1
                 try {
                     pagerState.animateScrollToPage(nextPage)
                 } catch (e: kotlinx.coroutines.CancellationException) {
@@ -549,19 +584,16 @@ fun MediaViewerDialog(
     // Map to track custom client-side image rotations per page/index
     val rotationMap = remember { mutableStateMapOf<Int, Float>() }
 
-    androidx.activity.compose.BackHandler(onBack = onDismiss)
+    androidx.activity.compose.BackHandler {
+        if (showMoreMenu) {
+            showMoreMenu = false
+        } else {
+            onDismiss()
+        }
+    }
 
     val view = LocalView.current
-    val window = remember(view) {
-        var contextActivity = context
-        while (contextActivity is android.content.ContextWrapper) {
-            if (contextActivity is android.app.Activity) {
-                break
-            }
-            contextActivity = contextActivity.baseContext
-        }
-        (contextActivity as? android.app.Activity)?.window
-    }
+    val window = remember(view) { context.findActivity()?.window }
 
     // Keep screen on when on fullscreen media viewer
     DisposableEffect(window) {
@@ -604,8 +636,6 @@ fun MediaViewerDialog(
     val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
     val dismissGestureEnabled by viewModel.dismissGestureEnabled.collectAsState()
     val showMetadataGestureEnabled by viewModel.showMetadataGestureEnabled.collectAsState()
-    
-    androidx.activity.compose.BackHandler { onDismiss() }
 
     Box(
         modifier = Modifier
@@ -723,6 +753,8 @@ fun MediaViewerDialog(
                             isCurrentPage = (page == pagerState.currentPage),
                             isVideoPlaying = if (page == pagerState.currentPage && !pagerState.isScrollInProgress) isVideoPlaying else false,
                             onVideoPlayingChange = { if (page == pagerState.currentPage) isVideoPlaying = it },
+                            isLivePhotoPlaying = if (page == pagerState.currentPage && !pagerState.isScrollInProgress) isLivePhotoPlaying else false,
+                            onLivePhotoPlayingChange = { if (page == pagerState.currentPage) isLivePhotoPlaying = it },
                             onVideoCompletion = { videoCompletionTrigger = System.currentTimeMillis() },
                             onToggleBars = {
                                 showBars = !showBars
@@ -800,7 +832,7 @@ fun MediaViewerDialog(
 
             // Top Bar Overlay
             AnimatedVisibility(
-                visible = showBars,
+                visible = showBars || keepTopBarForMenu,
                 enter = slideInVertically { -it },
                 exit = slideOutVertically { -it },
                 modifier = Modifier.align(Alignment.TopCenter)
@@ -816,18 +848,61 @@ fun MediaViewerDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(
-                        onClick = onDismiss,
-                        modifier = Modifier
-                            .focusRequester(topBarFocusRequester)
-                            .focusProperties { down = focusRequester; right = FocusRequester.Default }
-                            .tvFocus(shape = androidx.compose.foundation.shape.CircleShape)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = "Close",
-                            tint = Color.White
-                        )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = onDismiss,
+                            modifier = Modifier
+                                .focusRequester(topBarFocusRequester)
+                                .focusProperties { down = focusRequester; right = FocusRequester.Default }
+                                .tvFocus(shape = androidx.compose.foundation.shape.CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = stringResource(R.string.close),
+                                tint = Color.White
+                            )
+                        }
+
+                        if (currentMedia.isLivePhoto && !currentMedia.isVideo) {
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Surface(
+                                onClick = { isLivePhotoPlaying = !isLivePhotoPlaying },
+                                shape = RoundedCornerShape(20.dp),
+                                color = if (isLivePhotoPlaying) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    Color.White.copy(alpha = 0.16f)
+                                },
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (isLivePhotoPlaying) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.45f)
+                                ),
+                                modifier = Modifier
+                                    .defaultMinSize(minWidth = 48.dp, minHeight = 36.dp)
+                                    .testTag("live_photo_toggle")
+                                    .tvFocus(shape = RoundedCornerShape(20.dp))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (isLivePhotoPlaying) Icons.Default.MotionPhotosAuto else Icons.Default.MotionPhotosOn,
+                                        contentDescription = if (isLivePhotoPlaying) stringResource(R.string.stop_live_photo) else stringResource(R.string.play_live_photo),
+                                        tint = if (isLivePhotoPlaying) MaterialTheme.colorScheme.onPrimary else Color.White,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        text = if (isLivePhotoPlaying) "LIVE ●" else "LIVE",
+                                        color = if (isLivePhotoPlaying) MaterialTheme.colorScheme.onPrimary else Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 0.6.sp
+                                    )
+                                }
+                            }
+                        }
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -841,7 +916,7 @@ fun MediaViewerDialog(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Info,
-                                contentDescription = "Metadata",
+                                contentDescription = stringResource(R.string.metadata_cd),
                                 tint = Color.White
                             )
                         }
@@ -857,7 +932,7 @@ fun MediaViewerDialog(
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Map,
-                                    contentDescription = "Show on Map",
+                                    contentDescription = stringResource(R.string.show_on_map),
                                     tint = Color.White
                                 )
                             }
@@ -874,7 +949,7 @@ fun MediaViewerDialog(
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Share,
-                                    contentDescription = "Share",
+                                    contentDescription = stringResource(R.string.share),
                                     tint = Color.White
                                 )
                             }
@@ -888,69 +963,100 @@ fun MediaViewerDialog(
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Download,
-                                    contentDescription = "Download",
+                                    contentDescription = stringResource(R.string.download),
                                     tint = Color.White
                                 )
                             }
                         }
                         
-                        IconButton(
-                            onClick = { showMoreMenu = true },
-                            modifier = Modifier
-                                .focusProperties { down = focusRequester }
-                                .tvFocus(shape = androidx.compose.foundation.shape.CircleShape)
-                        ) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "More Options", tint = Color.White)
-                        }
-                        androidx.compose.material3.DropdownMenu(
-                            expanded = showMoreMenu,
-                            onDismissRequest = { showMoreMenu = false }
-                        ) {
-                            androidx.compose.material3.DropdownMenuItem(
-                                modifier = Modifier.tvFocus(),
-                                text = { androidx.compose.material3.Text(if (isSlideshowPlaying) "Stop Diashow" else "Start Diashow") },
-                                onClick = {
-                                    isSlideshowPlaying = !isSlideshowPlaying
-                                    if (isSlideshowPlaying) showBars = false
-                                    showMoreMenu = false
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        imageVector = if (isSlideshowPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                        contentDescription = null
+                        Box {
+                            IconButton(
+                                onClick = { showMoreMenu = true },
+                                modifier = Modifier
+                                    .focusProperties { down = focusRequester }
+                                    .tvFocus(shape = androidx.compose.foundation.shape.CircleShape)
+                            ) {
+                                Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.more_options), tint = Color.White)
+                            }
+                            androidx.compose.material3.DropdownMenu(
+                                expanded = showMoreMenu,
+                                onDismissRequest = { showMoreMenu = false }
+                            ) {
+                                androidx.compose.material3.DropdownMenuItem(
+                                    modifier = Modifier.tvFocus(),
+                                    text = {
+                                        androidx.compose.material3.Text(
+                                            if (isSlideshowPlaying) stringResource(R.string.slideshow_stop)
+                                            else stringResource(R.string.slideshow_start)
+                                        )
+                                    },
+                                    onClick = {
+                                        if (showMoreMenu) {
+                                            showMoreMenu = false
+                                            val willPlay = !isSlideshowPlaying
+                                            coroutineScope.launch {
+                                                kotlinx.coroutines.delay(200)
+                                                isSlideshowPlaying = willPlay
+                                                if (willPlay && !showMoreMenu) {
+                                                    showBars = false
+                                                }
+                                            }
+                                        }
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = if (isSlideshowPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                            contentDescription = null
+                                        )
+                                    }
+                                )
+                                if (!currentMedia.isVideo) {
+                                    androidx.compose.material3.DropdownMenuItem(
+                                        modifier = Modifier.tvFocus(),
+                                        text = { androidx.compose.material3.Text(stringResource(R.string.rotate)) },
+                                        onClick = {
+                                            if (showMoreMenu) {
+                                                showMoreMenu = false
+                                                val page = pagerState.currentPage
+                                                coroutineScope.launch {
+                                                    kotlinx.coroutines.delay(200)
+                                                    rotationMap[page] = ((rotationMap[page] ?: 0f) + 90f) % 360f
+                                                }
+                                            }
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.AutoMirrored.Filled.RotateRight,
+                                                contentDescription = null
+                                            )
+                                        }
+                                    )
+                                    androidx.compose.material3.DropdownMenuItem(
+                                        modifier = Modifier.tvFocus(),
+                                        text = {
+                                            androidx.compose.material3.Text(
+                                                if (showFaceRegions) stringResource(R.string.hide_face_regions)
+                                                else stringResource(R.string.show_face_regions)
+                                            )
+                                        },
+                                        onClick = {
+                                            if (showMoreMenu) {
+                                                showMoreMenu = false
+                                                val nextShowFaceRegions = !showFaceRegions
+                                                coroutineScope.launch {
+                                                    kotlinx.coroutines.delay(200)
+                                                    showFaceRegions = nextShowFaceRegions
+                                                }
+                                            }
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.Default.Face,
+                                                contentDescription = null
+                                            )
+                                        }
                                     )
                                 }
-                            )
-                            if (!currentMedia.isVideo) {
-                                androidx.compose.material3.DropdownMenuItem(
-                                    modifier = Modifier.tvFocus(),
-                                    text = { androidx.compose.material3.Text("Rotate") },
-                                    onClick = {
-                                        val page = pagerState.currentPage
-                                        rotationMap[page] = ((rotationMap[page] ?: 0f) + 90f) % 360f
-                                        showMoreMenu = false
-                                    },
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = Icons.AutoMirrored.Filled.RotateRight,
-                                            contentDescription = null
-                                        )
-                                    }
-                                )
-                                androidx.compose.material3.DropdownMenuItem(
-                                    modifier = Modifier.tvFocus(),
-                                    text = { androidx.compose.material3.Text(if (showFaceRegions) "Hide Face Regions" else "Show Face Regions") },
-                                    onClick = {
-                                        showFaceRegions = !showFaceRegions
-                                        showMoreMenu = false
-                                    },
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = Icons.Default.Face,
-                                            contentDescription = null
-                                        )
-                                    }
-                                )
                             }
                         }
                     }
@@ -982,7 +1088,7 @@ fun MediaViewerDialog(
                             ) {
                                 Icon(
                                     imageVector = if (isVideoPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                    contentDescription = if (isVideoPlaying) "Pause" else "Play",
+                                    contentDescription = if (isVideoPlaying) stringResource(R.string.pause) else stringResource(R.string.play),
                                     tint = Color.White
                                 )
                             }
@@ -1053,6 +1159,27 @@ fun MediaViewerDialog(
                 }
             }
 
+            // Compact Diashow "x/y" indicator when playing with bars hidden
+            if (isSlideshowPlaying && !showBars && mediaList.isNotEmpty()) {
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = Color.Black.copy(alpha = 0.55f),
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .windowInsetsPadding(WindowInsets.safeDrawing)
+                        .padding(16.dp)
+                        .testTag("diashow_counter_indicator")
+                ) {
+                    Text(
+                        text = "${pagerState.currentPage + 1}/${mediaList.size}",
+                        color = Color.White.copy(alpha = 0.9f),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                    )
+                }
+            }
+
             // Share/Download Progress Indicator Overlay
             val shareProgress by viewModel.shareProgress.collectAsState()
             if (shareProgress >= 0f) {
@@ -1082,8 +1209,8 @@ fun MediaViewerDialog(
         }
     }
 
-fun formatFileSize(bytes: Long): String {
-    if (bytes <= 0) return "Unknown"
+fun formatFileSize(bytes: Long, unknownLabel: String = "Unknown"): String {
+    if (bytes <= 0) return unknownLabel
     val kb = bytes / 1024.0
     val mb = kb / 1024.0
     val gb = mb / 1024.0
@@ -1127,6 +1254,7 @@ fun MetadataContent(media: ApiMedia, viewModel: GalleryViewModel, onClose: () ->
         }
     }
 
+    val unknownLabel = stringResource(R.string.unknown)
     Column(
         modifier = Modifier
             .padding(16.dp)
@@ -1139,7 +1267,7 @@ fun MetadataContent(media: ApiMedia, viewModel: GalleryViewModel, onClose: () ->
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Metadata Info",
+                text = stringResource(R.string.metadata_info),
                 color = Color.White,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
@@ -1147,79 +1275,91 @@ fun MetadataContent(media: ApiMedia, viewModel: GalleryViewModel, onClose: () ->
             IconButton(
                 onClick = onClose,
                 modifier = Modifier
-                    .size(24.dp)
+                    .size(48.dp)
                     .tvFocus(shape = androidx.compose.foundation.shape.CircleShape)
             ) {
                 Icon(
                     imageVector = Icons.Default.Close,
-                    contentDescription = "Close",
+                    contentDescription = stringResource(R.string.close),
                     tint = Color.White.copy(alpha = 0.7f),
-                    modifier = Modifier.size(16.dp)
+                    modifier = Modifier.size(18.dp)
                 )
             }
         }
 
         HorizontalDivider(color = Color.White.copy(alpha = 0.15f))
 
-        MetadataRow(icon = Icons.AutoMirrored.Outlined.InsertDriveFile, label = "Filename", value = media.name)
+        MetadataRow(icon = Icons.AutoMirrored.Outlined.InsertDriveFile, label = stringResource(R.string.meta_filename), value = media.name)
         media.parentPath?.let {
             val cleanedPath = it.replace(Regex("/{2,}"), "/")
-            MetadataRow(icon = Icons.Outlined.Folder, label = "Folder", value = cleanedPath)
+            MetadataRow(icon = Icons.Outlined.Folder, label = stringResource(R.string.meta_folder), value = cleanedPath)
         }
 
         currentFileSize?.let { bytes ->
             if (bytes > 0) {
-                MetadataRow(icon = Icons.Outlined.SdCard, label = "File Size", value = formatFileSize(bytes))
+                MetadataRow(icon = Icons.Outlined.SdCard, label = stringResource(R.string.meta_file_size), value = formatFileSize(bytes, unknownLabel))
             }
         }
 
         val size = media.metadata?.size
         if (size != null && size.width != null && size.height != null) {
-            MetadataRow(icon = Icons.Outlined.AspectRatio, label = "Dimensions", value = "${size.width} × ${size.height} px")
+            MetadataRow(icon = Icons.Outlined.AspectRatio, label = stringResource(R.string.meta_dimensions), value = "${size.width} × ${size.height} px")
         }
 
-        val dateStr = DateUtils.formatMediaDate(media.metadata?.creationDate, media.metadata?.creationDateOffset)
-        MetadataRow(icon = Icons.Outlined.DateRange, label = "Date Taken", value = dateStr)
+        val dateStr = DateUtils.formatMediaDate(media.metadata?.creationDate, media.metadata?.creationDateOffset, unknownLabel)
+        MetadataRow(icon = Icons.Outlined.DateRange, label = stringResource(R.string.meta_date_taken), value = dateStr)
 
-        MetadataRow(icon = if (media.isVideo) Icons.Outlined.Videocam else Icons.Outlined.Image, label = "Type", value = if (media.isVideo) "Video (MP4)" else "Image")
+        MetadataRow(
+            icon = when {
+                media.isVideo -> Icons.Outlined.Videocam
+                media.isLivePhoto -> Icons.Outlined.MotionPhotosOn
+                else -> Icons.Outlined.Image
+            },
+            label = stringResource(R.string.meta_type),
+            value = when {
+                media.isVideo -> stringResource(R.string.type_video)
+                media.isLivePhoto -> stringResource(R.string.type_live_photo)
+                else -> stringResource(R.string.type_image)
+            }
+        )
         
         media.metadata?.cameraData?.let { camera ->
             val cameraName = listOfNotNull(camera.make, camera.model).joinToString(" ")
             if (cameraName.isNotBlank()) {
-                MetadataRow(icon = Icons.Outlined.CameraAlt, label = "Camera", value = cameraName)
+                MetadataRow(icon = Icons.Outlined.CameraAlt, label = stringResource(R.string.meta_camera), value = cameraName)
             }
             camera.lens?.let { lens ->
                 if (lens.isNotBlank()) {
-                    MetadataRow(icon = CameraLensSide, label = "Lens", value = lens)
+                    MetadataRow(icon = CameraLensSide, label = stringResource(R.string.meta_lens), value = lens)
                 }
             }
             camera.focalLength?.let { focal ->
                 val focalLengthStr = if (focal % 1.0 == 0.0) "${focal.toInt()} mm" else "${focal} mm"
-                MetadataRow(icon = Icons.Outlined.Straighten, label = "Focal Length", value = focalLengthStr)
+                MetadataRow(icon = Icons.Outlined.Straighten, label = stringResource(R.string.meta_focal_length), value = focalLengthStr)
             }
-            camera.ISO?.let { MetadataRow(icon = Icons.Outlined.Iso, label = "ISO", value = it.toString()) }
-            camera.fStop?.let { MetadataRow(icon = ApertureIcon, label = "Aperture", value = "f/${it}") }
+            camera.ISO?.let { MetadataRow(icon = Icons.Outlined.Iso, label = stringResource(R.string.meta_iso), value = it.toString()) }
+            camera.fStop?.let { MetadataRow(icon = ApertureIcon, label = stringResource(R.string.meta_aperture), value = "f/${it}") }
             camera.exposure?.let { 
                 val exposureStr = if (it < 1.0 && it > 0.0) "1/${(1.0 / it).toInt()}s" else "${it}s"
-                MetadataRow(icon = Icons.Outlined.Timer, label = "Exposure Time", value = exposureStr) 
+                MetadataRow(icon = Icons.Outlined.Timer, label = stringResource(R.string.meta_exposure_time), value = exposureStr) 
             }
         }
         
         media.metadata?.gps?.let { gps ->
             val gpsStr = String.format(java.util.Locale.US, "%.6f, %.6f", gps.latitude, gps.longitude)
-            MetadataRow(icon = Icons.Outlined.LocationOn, label = "GPS Coordinates", value = gpsStr)
+            MetadataRow(icon = Icons.Outlined.LocationOn, label = stringResource(R.string.meta_gps_coordinates), value = gpsStr)
         }
         
         val keywords = media.metadata?.keywords?.distinct()
         if (!keywords.isNullOrEmpty()) {
-            MetadataBlock(icon = Icons.AutoMirrored.Outlined.Label, label = "Keywords", value = keywords.joinToString(", "))
+            MetadataRow(icon = Icons.AutoMirrored.Outlined.Label, label = stringResource(R.string.meta_keywords), value = keywords.joinToString(", "))
         }
         
         val faces = media.metadata?.faces
         if (!faces.isNullOrEmpty()) {
             val faceNames = faces.mapNotNull { it.name }.filter { it.isNotBlank() }
             if (faceNames.isNotEmpty()) {
-                MetadataBlock(icon = Icons.Outlined.Person, label = "People", value = faceNames.joinToString(", "))
+                MetadataRow(icon = Icons.Outlined.Person, label = stringResource(R.string.meta_people), value = faceNames.joinToString(", "))
             }
         }
     }
@@ -1237,6 +1377,8 @@ fun MediaViewerItem(
     isCurrentPage: Boolean,
     isVideoPlaying: Boolean,
     onVideoPlayingChange: (Boolean) -> Unit,
+    isLivePhotoPlaying: Boolean = false,
+    onLivePhotoPlayingChange: (Boolean) -> Unit = {},
     onVideoCompletion: () -> Unit,
     onToggleBars: () -> Unit,
     showBars: Boolean,
@@ -1249,9 +1391,9 @@ fun MediaViewerItem(
     val mediaUrl = viewModel.getOriginalMediaUrl(media)
 
     // Pinch to Zoom states (for images)
-    var scale by remember(media.id) { mutableStateOf(1f) }
-    var offsetX by remember(media.id) { mutableStateOf(0f) }
-    var offsetY by remember(media.id) { mutableStateOf(0f) }
+    var scale by remember(media.id) { mutableFloatStateOf(1f) }
+    var offsetX by remember(media.id) { mutableFloatStateOf(0f) }
+    var offsetY by remember(media.id) { mutableFloatStateOf(0f) }
 
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -1270,7 +1412,7 @@ fun MediaViewerItem(
             }
             var videoAspectRatio by remember(media) { mutableStateOf(initialAspectRatio) }
 
-            val exoPlayer = remember(media.id) {
+            val exoPlayer = remember(media.id, viewModel.api.client) {
                 // Progressive buffering strategy:
                 // bufferForPlaybackMs = 1,000ms: Starts playback as soon as 1s is buffered — does not wait for all to be buffered!
                 // bufferForPlaybackAfterRebufferMs = 2,500ms: Quick and stable resumption after rebuffering
@@ -1287,10 +1429,14 @@ fun MediaViewerItem(
                     .setBackBuffer(15_000, true)
                     .build()
 
-                val dataSourceFactory = DefaultHttpDataSource.Factory()
-                    .setConnectTimeoutMs(15000)
-                    .setReadTimeoutMs(30000)
-                    .setAllowCrossProtocolRedirects(true)
+                // Reuse shared OkHttpClient pool & SSL config (supports self-signed certs), without HTTP response cache for streaming
+                val videoCallFactory = viewModel.api.client.newBuilder()
+                    .cache(null)
+                    .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .build()
+
+                val dataSourceFactory = OkHttpDataSource.Factory(videoCallFactory)
                     .apply {
                         if (cookies.isNotEmpty()) {
                             setDefaultRequestProperties(mapOf("Cookie" to cookies))
@@ -1433,12 +1579,53 @@ fun MediaViewerItem(
             }
 
             if (hasError) {
-                Text(
-                    text = "Playback failed. Stream might be unsupported.",
-                    color = Color.LightGray,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(16.dp)
-                )
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = Color.Black.copy(alpha = 0.78f),
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.16f)),
+                    modifier = Modifier.padding(24.dp)
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ErrorOutline,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(40.dp)
+                        )
+                        Text(
+                            text = stringResource(R.string.video_playback_failed),
+                            color = Color.White,
+                            style = MaterialTheme.typography.bodyMedium,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        Button(
+                            onClick = {
+                                hasError = false
+                                isPreparing = true
+                                isBuffering = true
+                                exoPlayer.prepare()
+                                exoPlayer.playWhenReady = true
+                                onVideoPlayingChange(true)
+                            },
+                            modifier = Modifier
+                                .defaultMinSize(minHeight = 48.dp)
+                                .testTag("video_retry_button")
+                                .tvFocus(shape = RoundedCornerShape(20.dp))
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(stringResource(R.string.retry))
+                        }
+                    }
+                }
             }
             
             if ((isPreparing || isBuffering) && !hasError && !isPlayingState) {
@@ -1453,7 +1640,7 @@ fun MediaViewerItem(
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = "Buffering video...",
+                        text = stringResource(R.string.buffering_video),
                         color = Color.White,
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = FontWeight.Medium
@@ -1559,7 +1746,7 @@ fun MediaViewerItem(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .pointerInput(Unit) {
+                    .pointerInput(media.id, media.isLivePhoto, isLivePhotoPlaying) {
                         detectTapGestures(
                             onDoubleTap = {
                                 if (scale > 1f) {
@@ -1571,7 +1758,18 @@ fun MediaViewerItem(
                                     shouldLoadFullImage = true
                                 }
                             },
-                            onTap = { onToggleBars() }
+                            onLongPress = {
+                                if (media.isLivePhoto && !media.isVideo) {
+                                    onLivePhotoPlayingChange(!isLivePhotoPlaying)
+                                }
+                            },
+                            onTap = {
+                                if (isLivePhotoPlaying) {
+                                    onLivePhotoPlayingChange(false)
+                                } else {
+                                    onToggleBars()
+                                }
+                            }
                         )
                     }
                     .pointerInput(intrinsicSize) {
@@ -1768,12 +1966,160 @@ fun MediaViewerItem(
                     )
                 }
 
+                // 4. Apple Live Photo companion motion video overlay
+                if (media.isLivePhoto && isLivePhotoPlaying && isCurrentPage) {
+                    val liveVideoUrl = remember(media.id, media.parentPath, media.name, media.metadata?.liveVideoPath) {
+                        viewModel.getLiveVideoUrl(media)
+                    }
+                    if (!liveVideoUrl.isNullOrBlank()) {
+                        LivePhotoVideoOverlay(
+                            videoUrl = liveVideoUrl,
+                            cookies = cookies,
+                            okHttpClient = viewModel.api.client,
+                            context = context,
+                            onPlaybackFinished = { onLivePhotoPlayingChange(false) },
+                            onPlaybackError = {
+                                onLivePhotoPlayingChange(false)
+                                Toast.makeText(context, context.getString(R.string.live_photo_unavailable), Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                    } else {
+                        LaunchedEffect(Unit) {
+                            onLivePhotoPlayingChange(false)
+                        }
+                    }
+                }
+
                 // Initial loading indicator before thumbnail arrives
                 if (!isThumbnailLoaded && !isPreloadLoaded && !isFullImageLoaded) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(36.dp),
                         color = Color.White.copy(alpha = 0.6f),
                         strokeWidth = 3.dp
+                    )
+                }
+            }
+        }
+    }
+}
+
+@androidx.annotation.OptIn(UnstableApi::class)
+@Composable
+private fun LivePhotoVideoOverlay(
+    videoUrl: String,
+    cookies: String,
+    okHttpClient: OkHttpClient,
+    context: Context,
+    onPlaybackFinished: () -> Unit,
+    onPlaybackError: () -> Unit
+) {
+    var firstFrameRendered by remember(videoUrl) { mutableStateOf(false) }
+
+    val exoPlayer = remember(videoUrl, cookies, okHttpClient) {
+        val callFactory = okHttpClient.newBuilder()
+            .cache(null)
+            .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+
+        val dataSourceFactory = OkHttpDataSource.Factory(callFactory)
+            .apply {
+                if (cookies.isNotEmpty()) {
+                    setDefaultRequestProperties(mapOf("Cookie" to cookies))
+                }
+            }
+
+        val mediaSource = ProgressiveMediaSource.Factory(dataSourceFactory)
+            .createMediaSource(MediaItem.fromUri(videoUrl))
+
+        ExoPlayer.Builder(context)
+            .setAudioAttributes(
+                androidx.media3.common.AudioAttributes.Builder()
+                    .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .setUsage(androidx.media3.common.C.USAGE_MEDIA)
+                    .build(),
+                true
+            )
+            .build().apply {
+                setMediaSource(mediaSource)
+                playWhenReady = true
+                prepare()
+            }
+    }
+
+    DisposableEffect(exoPlayer) {
+        val listener = object : Player.Listener {
+            override fun onRenderedFirstFrame() {
+                firstFrameRendered = true
+            }
+
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_ENDED) {
+                    onPlaybackFinished()
+                }
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                onPlaybackError()
+            }
+        }
+        exoPlayer.addListener(listener)
+        onDispose {
+            exoPlayer.removeListener(listener)
+            exoPlayer.stop()
+            exoPlayer.release()
+        }
+    }
+
+    val overlayAlpha by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (firstFrameRendered) 1f else 0f,
+        label = "live_photo_alpha"
+    )
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        AndroidView(
+            factory = { ctx ->
+                PlayerView(ctx).apply {
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                    useController = false
+                    resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    player = exoPlayer
+                }
+            },
+            update = { view ->
+                view.player = exoPlayer
+            },
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { alpha = overlayAlpha }
+        )
+
+        if (!firstFrameRendered) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color.Black.copy(alpha = 0.65f),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        color = Color.White,
+                        strokeWidth = 2.dp
+                    )
+                    Text(
+                        text = stringResource(R.string.loading_live),
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelMedium
                     )
                 }
             }
@@ -1811,16 +2157,11 @@ fun MetadataRow(icon: androidx.compose.ui.graphics.vector.ImageVector, label: St
     }
 }
 
-@Composable
-fun MetadataBlock(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, value: String) {
-    MetadataRow(icon = icon, label = label, value = value)
-}
-
 private fun downloadFile(context: Context, url: String, fileName: String, cookies: String) {
     try {
-        val request = DownloadManager.Request(Uri.parse(url))
+        val request = DownloadManager.Request(url.toUri())
             .setTitle(fileName)
-            .setDescription("Downloading file from PiGallery2")
+            .setDescription(context.getString(R.string.download_description))
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
             .apply {
@@ -1831,9 +2172,9 @@ private fun downloadFile(context: Context, url: String, fileName: String, cookie
 
         val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         downloadManager.enqueue(request)
-        Toast.makeText(context, "Download started: $fileName", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, context.getString(R.string.download_started_single, fileName), Toast.LENGTH_SHORT).show()
     } catch (e: Exception) {
-        Toast.makeText(context, "Download failed: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+        Toast.makeText(context, context.getString(R.string.download_failed_single, e.localizedMessage ?: ""), Toast.LENGTH_LONG).show()
     }
 }
 

@@ -2,6 +2,7 @@ package com.example.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.core.content.edit
 
 class PreferencesManager(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("pigallery_prefs", Context.MODE_PRIVATE)
@@ -34,15 +35,12 @@ class PreferencesManager(context: Context) {
         private const val KEY_CORNER_RADIUS = "corner_radius"
         private const val KEY_SPACING = "spacing"
         private const val KEY_ASPECT_RATIO = "aspect_ratio"
-        private const val KEY_SORT_BY = "sort_by"
-        private const val KEY_SORT_DIRECTION = "sort_direction"
         private const val KEY_THEME_COLOR = "theme_color"
         private const val KEY_THEME_MODE = "theme_mode"
         private const val KEY_PEOPLE_FALLBACK_TO_KEYWORDS = "people_fallback_to_keywords"
         private const val KEY_DEFAULT_ROOT_PATH = "default_root_path"
         private const val KEY_AUTO_CHECK_UPDATES = "auto_check_updates"
         private const val KEY_LAST_UPDATE_CHECK = "last_update_check"
-        private const val KEY_MAX_BRIGHTNESS = "max_brightness"
         private const val KEY_MAX_BRIGHTNESS_ENABLED = "max_brightness_enabled"
         private const val KEY_GALLERY_VIEW_MODE = "gallery_view_mode"
         private const val KEY_DISMISS_GESTURE_ENABLED = "dismiss_gesture_enabled"
@@ -54,67 +52,85 @@ class PreferencesManager(context: Context) {
 
     var galleryViewMode: String
         get() = prefs.getString(KEY_GALLERY_VIEW_MODE, "FOLDER") ?: "FOLDER"
-        set(value) = prefs.edit().putString(KEY_GALLERY_VIEW_MODE, value).apply()
+        set(value) = prefs.edit { putString(KEY_GALLERY_VIEW_MODE, value) }
 
     var autoCheckUpdates: Boolean
         get() = prefs.getBoolean(KEY_AUTO_CHECK_UPDATES, true)
-        set(value) = prefs.edit().putBoolean(KEY_AUTO_CHECK_UPDATES, value).apply()
+        set(value) = prefs.edit { putBoolean(KEY_AUTO_CHECK_UPDATES, value) }
 
     var lastUpdateCheck: Long
         get() = prefs.getLong(KEY_LAST_UPDATE_CHECK, 0L)
-        set(value) = prefs.edit().putLong(KEY_LAST_UPDATE_CHECK, value).apply()
+        set(value) = prefs.edit { putLong(KEY_LAST_UPDATE_CHECK, value) }
 
     var maxBrightnessEnabled: Boolean
         get() = prefs.getBoolean(KEY_MAX_BRIGHTNESS_ENABLED, false)
-        set(value) = prefs.edit().putBoolean(KEY_MAX_BRIGHTNESS_ENABLED, value).apply()
-
-    var maxBrightness: Float
-        get() = prefs.getFloat(KEY_MAX_BRIGHTNESS, 1.0f)
-        set(value) = prefs.edit().putFloat(KEY_MAX_BRIGHTNESS, value).apply()
+        set(value) = prefs.edit { putBoolean(KEY_MAX_BRIGHTNESS_ENABLED, value) }
 
     var defaultRootPath: String
         get() = prefs.getString(KEY_DEFAULT_ROOT_PATH, "") ?: ""
-        set(value) = prefs.edit().putString(KEY_DEFAULT_ROOT_PATH, value).apply()
+        set(value) = prefs.edit { putString(KEY_DEFAULT_ROOT_PATH, value) }
 
     var serverUrl: String
         get() = prefs.getString(KEY_SERVER_URL, "") ?: ""
-        set(value) = prefs.edit().putString(KEY_SERVER_URL, value).apply()
+        set(value) = prefs.edit { putString(KEY_SERVER_URL, value) }
 
     var localServerUrl: String
         get() = prefs.getString(KEY_LOCAL_SERVER_URL, "") ?: ""
-        set(value) = prefs.edit().putString(KEY_LOCAL_SERVER_URL, value).apply()
+        set(value) = prefs.edit { putString(KEY_LOCAL_SERVER_URL, value) }
 
     var allowInsecureSsl: Boolean
         get() = prefs.getBoolean(KEY_ALLOW_INSECURE_SSL, false)
-        set(value) = prefs.edit().putBoolean(KEY_ALLOW_INSECURE_SSL, value).apply()
+        set(value) = prefs.edit { putBoolean(KEY_ALLOW_INSECURE_SSL, value) }
 
     var username: String
         get() = prefs.getString(KEY_USERNAME, "") ?: ""
-        set(value) = prefs.edit().putString(KEY_USERNAME, value).apply()
+        set(value) = prefs.edit { putString(KEY_USERNAME, value) }
+
+    private fun getSecureString(key: String): String {
+        val raw = prefs.getString(key, null) ?: return ""
+        val (plain, needsMigration) = com.example.util.SecurePrefsCipher.decrypt(raw)
+        if (needsMigration && plain.isNotEmpty()) {
+            val encrypted = com.example.util.SecurePrefsCipher.encrypt(plain)
+            if (encrypted.isNotEmpty()) {
+                prefs.edit { putString(key, encrypted) }
+            }
+        }
+        return plain
+    }
+
+    private fun setSecureString(key: String, value: String) {
+        prefs.edit {
+            if (value.isEmpty()) {
+                remove(key)
+            } else {
+                putString(key, com.example.util.SecurePrefsCipher.encrypt(value))
+            }
+        }
+    }
 
     var password: String
-        get() = prefs.getString(KEY_PASSWORD, "") ?: ""
-        set(value) = prefs.edit().putString(KEY_PASSWORD, value).apply()
+        get() = getSecureString(KEY_PASSWORD)
+        set(value) = setSecureString(KEY_PASSWORD, value)
 
     var cookies: String
-        get() = prefs.getString(KEY_COOKIES, "") ?: ""
-        set(value) = prefs.edit().putString(KEY_COOKIES, value).apply()
+        get() = getSecureString(KEY_COOKIES)
+        set(value) = setSecureString(KEY_COOKIES, value)
 
     var csrfToken: String
-        get() = prefs.getString(KEY_CSRF_TOKEN, "") ?: ""
-        set(value) = prefs.edit().putString(KEY_CSRF_TOKEN, value).apply()
+        get() = getSecureString(KEY_CSRF_TOKEN)
+        set(value) = setSecureString(KEY_CSRF_TOKEN, value)
 
     var userRole: Int
         get() = prefs.getInt(KEY_USER_ROLE, -1)
-        set(value) = prefs.edit().putInt(KEY_USER_ROLE, value).apply()
+        set(value) = prefs.edit { putInt(KEY_USER_ROLE, value) }
 
     var albumWriteMinRole: Int
         get() = prefs.getInt(KEY_ALBUM_WRITE_MIN_ROLE, UserRoles.ADMIN)
-        set(value) = prefs.edit().putInt(KEY_ALBUM_WRITE_MIN_ROLE, value).apply()
+        set(value) = prefs.edit { putInt(KEY_ALBUM_WRITE_MIN_ROLE, value) }
 
     var albumFeatureEnabled: Boolean
         get() = prefs.getBoolean(KEY_ALBUM_FEATURE_ENABLED, true)
-        set(value) = prefs.edit().putBoolean(KEY_ALBUM_FEATURE_ENABLED, value).apply()
+        set(value) = prefs.edit { putBoolean(KEY_ALBUM_FEATURE_ENABLED, value) }
 
     /**
      * Tri-state per-user album creation override from server user payload:
@@ -122,76 +138,76 @@ class PreferencesManager(context: Context) {
      */
     var userCanCreateAlbumsOverride: Int
         get() = prefs.getInt(KEY_USER_CAN_CREATE_ALBUMS, -1)
-        set(value) = prefs.edit().putInt(KEY_USER_CAN_CREATE_ALBUMS, value).apply()
+        set(value) = prefs.edit { putInt(KEY_USER_CAN_CREATE_ALBUMS, value) }
 
     var isLoggedIn: Boolean
         get() = prefs.getBoolean(KEY_IS_LOGGED_IN, false)
-        set(value) = prefs.edit().putBoolean(KEY_IS_LOGGED_IN, value).apply()
+        set(value) = prefs.edit { putBoolean(KEY_IS_LOGGED_IN, value) }
 
     var apiPrefix: String
         get() = prefs.getString(KEY_API_PREFIX, "/pgapi") ?: "/pgapi"
-        set(value) = prefs.edit().putString(KEY_API_PREFIX, value).apply()
+        set(value) = prefs.edit { putString(KEY_API_PREFIX, value) }
 
     var rediscoverDays: Int
         get() = prefs.getInt(KEY_REDISCOVER_DAYS, 1)
-        set(value) = prefs.edit().putInt(KEY_REDISCOVER_DAYS, value).apply()
+        set(value) = prefs.edit { putInt(KEY_REDISCOVER_DAYS, value) }
 
     var slideshowDuration: Int
         get() = prefs.getInt(KEY_SLIDESHOW_DURATION, 3)
-        set(value) = prefs.edit().putInt(KEY_SLIDESHOW_DURATION, value).apply()
+        set(value) = prefs.edit { putInt(KEY_SLIDESHOW_DURATION, value) }
 
     var thumbnailPathSuffix: String
         get() = prefs.getString(KEY_THUMBNAIL_PATH_SUFFIX, "320") ?: "320"
-        set(value) = prefs.edit().putString(KEY_THUMBNAIL_PATH_SUFFIX, value).apply()
+        set(value) = prefs.edit { putString(KEY_THUMBNAIL_PATH_SUFFIX, value) }
 
     var preloadPathSuffix: String
         get() = prefs.getString(KEY_PRELOAD_PATH_SUFFIX, "720") ?: "720"
-        set(value) = prefs.edit().putString(KEY_PRELOAD_PATH_SUFFIX, value).apply()
+        set(value) = prefs.edit { putString(KEY_PRELOAD_PATH_SUFFIX, value) }
 
     var videoPathSuffix: String
         get() = prefs.getString(KEY_VIDEO_PATH_SUFFIX, "") ?: ""
-        set(value) = prefs.edit().putString(KEY_VIDEO_PATH_SUFFIX, value).apply()
+        set(value) = prefs.edit { putString(KEY_VIDEO_PATH_SUFFIX, value) }
 
     var showDirectoryItemCount: Boolean
         get() = prefs.getBoolean(KEY_SHOW_DIR_ITEM_COUNT, true)
-        set(value) = prefs.edit().putBoolean(KEY_SHOW_DIR_ITEM_COUNT, value).apply()
+        set(value) = prefs.edit { putBoolean(KEY_SHOW_DIR_ITEM_COUNT, value) }
 
     var itemsPerRow: Int
         get() = prefs.getInt(KEY_ITEMS_PER_ROW, 3)
-        set(value) = prefs.edit().putInt(KEY_ITEMS_PER_ROW, value).apply()
+        set(value) = prefs.edit { putInt(KEY_ITEMS_PER_ROW, value) }
 
     var itemsPerRowPortrait: Int
         get() = prefs.getInt(KEY_ITEMS_PER_ROW_PORTRAIT, 3)
-        set(value) = prefs.edit().putInt(KEY_ITEMS_PER_ROW_PORTRAIT, value).apply()
+        set(value) = prefs.edit { putInt(KEY_ITEMS_PER_ROW_PORTRAIT, value) }
 
     var itemsPerRowLandscape: Int
         get() = prefs.getInt(KEY_ITEMS_PER_ROW_LANDSCAPE, 6)
-        set(value) = prefs.edit().putInt(KEY_ITEMS_PER_ROW_LANDSCAPE, value).apply()
+        set(value) = prefs.edit { putInt(KEY_ITEMS_PER_ROW_LANDSCAPE, value) }
 
     var cornerRadius: Int
         get() = prefs.getInt(KEY_CORNER_RADIUS, 5)
-        set(value) = prefs.edit().putInt(KEY_CORNER_RADIUS, value).apply()
+        set(value) = prefs.edit { putInt(KEY_CORNER_RADIUS, value) }
 
     var spacing: Int
         get() = prefs.getInt(KEY_SPACING, 5)
-        set(value) = prefs.edit().putInt(KEY_SPACING, value).apply()
+        set(value) = prefs.edit { putInt(KEY_SPACING, value) }
 
     var aspectRatio: Float
         get() = prefs.getFloat(KEY_ASPECT_RATIO, 1.0f)
-        set(value) = prefs.edit().putFloat(KEY_ASPECT_RATIO, value).apply()
+        set(value) = prefs.edit { putFloat(KEY_ASPECT_RATIO, value) }
 
     fun getFolderSortBy(path: String = "global", fallback: String = "name"): String {
         return prefs.getString("folder_sort_by_$path", null) ?: fallback
     }
     fun setFolderSortBy(path: String = "global", value: String) {
-        prefs.edit().putString("folder_sort_by_$path", value).apply()
+        prefs.edit { putString("folder_sort_by_$path", value) }
     }
 
     fun getFolderSortDirection(path: String = "global", fallback: String = "asc"): String {
         return prefs.getString("folder_sort_direction_$path", null) ?: fallback
     }
     fun setFolderSortDirection(path: String = "global", value: String) {
-        prefs.edit().putString("folder_sort_direction_$path", value).apply()
+        prefs.edit { putString("folder_sort_direction_$path", value) }
     }
 
     fun hasFolderSort(path: String): Boolean {
@@ -199,21 +215,24 @@ class PreferencesManager(context: Context) {
     }
 
     fun removeFolderSort(path: String) {
-        prefs.edit().remove("folder_sort_by_$path").remove("folder_sort_direction_$path").apply()
+        prefs.edit {
+            remove("folder_sort_by_$path")
+            remove("folder_sort_direction_$path")
+        }
     }
 
     fun getMediaSortBy(path: String = "global", fallback: String = "date"): String {
         return prefs.getString("media_sort_by_$path", null) ?: fallback
     }
     fun setMediaSortBy(path: String = "global", value: String) {
-        prefs.edit().putString("media_sort_by_$path", value).apply()
+        prefs.edit { putString("media_sort_by_$path", value) }
     }
 
     fun getMediaSortDirection(path: String = "global", fallback: String = "asc"): String {
         return prefs.getString("media_sort_direction_$path", null) ?: fallback
     }
     fun setMediaSortDirection(path: String = "global", value: String) {
-        prefs.edit().putString("media_sort_direction_$path", value).apply()
+        prefs.edit { putString("media_sort_direction_$path", value) }
     }
 
     fun hasMediaSort(path: String): Boolean {
@@ -221,7 +240,10 @@ class PreferencesManager(context: Context) {
     }
 
     fun removeMediaSort(path: String) {
-        prefs.edit().remove("media_sort_by_$path").remove("media_sort_direction_$path").apply()
+        prefs.edit {
+            remove("media_sort_by_$path")
+            remove("media_sort_direction_$path")
+        }
     }
 
     // Dedicated Album Sorting (completely independent from folder sort)
@@ -229,14 +251,14 @@ class PreferencesManager(context: Context) {
         return prefs.getString("album_sort_by", null) ?: fallback
     }
     fun setAlbumSortBy(value: String) {
-        prefs.edit().putString("album_sort_by", value).apply()
+        prefs.edit { putString("album_sort_by", value) }
     }
 
     fun getAlbumSortDirection(fallback: String = "asc"): String {
         return prefs.getString("album_sort_direction", null) ?: fallback
     }
     fun setAlbumSortDirection(value: String) {
-        prefs.edit().putString("album_sort_direction", value).apply()
+        prefs.edit { putString("album_sort_direction", value) }
     }
 
     // Dedicated Person Sorting (completely independent from folder sort)
@@ -244,31 +266,27 @@ class PreferencesManager(context: Context) {
         return prefs.getString("person_sort_by", null) ?: fallback
     }
     fun setPersonSortBy(value: String) {
-        prefs.edit().putString("person_sort_by", value).apply()
+        prefs.edit { putString("person_sort_by", value) }
     }
 
     fun getPersonSortDirection(fallback: String = "asc"): String {
         return prefs.getString("person_sort_direction", null) ?: fallback
     }
     fun setPersonSortDirection(value: String) {
-        prefs.edit().putString("person_sort_direction", value).apply()
+        prefs.edit { putString("person_sort_direction", value) }
     }
-
-    var sortDirection: String
-        get() = prefs.getString(KEY_SORT_DIRECTION, "asc") ?: "asc"
-        set(value) = prefs.edit().putString(KEY_SORT_DIRECTION, value).apply()
 
     var themeColor: String
         get() = prefs.getString(KEY_THEME_COLOR, "Purple") ?: "Purple"
-        set(value) = prefs.edit().putString(KEY_THEME_COLOR, value).apply()
+        set(value) = prefs.edit { putString(KEY_THEME_COLOR, value) }
 
     var themeMode: String
         get() = prefs.getString(KEY_THEME_MODE, "Auto") ?: "Auto"
-        set(value) = prefs.edit().putString(KEY_THEME_MODE, value).apply()
+        set(value) = prefs.edit { putString(KEY_THEME_MODE, value) }
 
     var peopleFallbackToKeywords: Boolean
         get() = prefs.getBoolean(KEY_PEOPLE_FALLBACK_TO_KEYWORDS, false)
-        set(value) = prefs.edit().putBoolean(KEY_PEOPLE_FALLBACK_TO_KEYWORDS, value).apply()
+        set(value) = prefs.edit { putBoolean(KEY_PEOPLE_FALLBACK_TO_KEYWORDS, value) }
 
     fun getFavoritePersons(): Set<String> {
         val set = prefs.getStringSet("favorite_persons", emptySet()) ?: emptySet()
@@ -282,24 +300,24 @@ class PreferencesManager(context: Context) {
         } else {
             current.remove(name)
         }
-        prefs.edit().putStringSet("favorite_persons", current).apply()
+        prefs.edit { putStringSet("favorite_persons", current) }
     }
 
     var dismissGestureEnabled: Boolean
         get() = prefs.getBoolean(KEY_DISMISS_GESTURE_ENABLED, true)
-        set(value) = prefs.edit().putBoolean(KEY_DISMISS_GESTURE_ENABLED, value).apply()
+        set(value) = prefs.edit { putBoolean(KEY_DISMISS_GESTURE_ENABLED, value) }
 
     var showMetadataGestureEnabled: Boolean
         get() = prefs.getBoolean(KEY_SHOW_METADATA_GESTURE_ENABLED, true)
-        set(value) = prefs.edit().putBoolean(KEY_SHOW_METADATA_GESTURE_ENABLED, value).apply()
+        set(value) = prefs.edit { putBoolean(KEY_SHOW_METADATA_GESTURE_ENABLED, value) }
 
     var biometricLockEnabled: Boolean
         get() = prefs.getBoolean(KEY_BIOMETRIC_LOCK_ENABLED, false)
-        set(value) = prefs.edit().putBoolean(KEY_BIOMETRIC_LOCK_ENABLED, value).apply()
+        set(value) = prefs.edit { putBoolean(KEY_BIOMETRIC_LOCK_ENABLED, value) }
 
     var hideProtectedItems: Boolean
         get() = prefs.getBoolean(KEY_HIDE_PROTECTED_ITEMS, false)
-        set(value) = prefs.edit().putBoolean(KEY_HIDE_PROTECTED_ITEMS, value).apply()
+        set(value) = prefs.edit { putBoolean(KEY_HIDE_PROTECTED_ITEMS, value) }
 
     fun getProtectedFolders(): Set<String> {
         val set = prefs.getStringSet(KEY_PROTECTED_FOLDERS, emptySet()) ?: emptySet()
@@ -322,7 +340,7 @@ class PreferencesManager(context: Context) {
         } else {
             current.add(clean)
         }
-        prefs.edit().putStringSet(KEY_PROTECTED_FOLDERS, current).apply()
+        prefs.edit { putStringSet(KEY_PROTECTED_FOLDERS, current) }
     }
 
     fun isFolderDirectlyProtected(path: String): Boolean {
@@ -364,19 +382,19 @@ class PreferencesManager(context: Context) {
     }
 
     fun clearSession() {
-        prefs.edit()
-            .remove(KEY_IS_LOGGED_IN)
-            .remove(KEY_COOKIES)
-            .remove(KEY_CSRF_TOKEN)
-            .remove(KEY_PASSWORD)
-            .remove(KEY_USER_ROLE)
-            .remove(KEY_ALBUM_WRITE_MIN_ROLE)
-            .remove(KEY_ALBUM_FEATURE_ENABLED)
-            .remove(KEY_USER_CAN_CREATE_ALBUMS)
-            .apply()
+        prefs.edit {
+            remove(KEY_IS_LOGGED_IN)
+            remove(KEY_COOKIES)
+            remove(KEY_CSRF_TOKEN)
+            remove(KEY_PASSWORD)
+            remove(KEY_USER_ROLE)
+            remove(KEY_ALBUM_WRITE_MIN_ROLE)
+            remove(KEY_ALBUM_FEATURE_ENABLED)
+            remove(KEY_USER_CAN_CREATE_ALBUMS)
+        }
     }
 
     fun clear() {
-        prefs.edit().clear().apply()
+        prefs.edit { clear() }
     }
 }

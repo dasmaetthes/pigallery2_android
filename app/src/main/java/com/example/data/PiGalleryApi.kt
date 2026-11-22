@@ -1,52 +1,70 @@
 @file:Suppress("UNCHECKED_CAST")
 package com.example.data
 
-import android.content.Context
-import okhttp3.Cache
-import java.io.File
-
-import com.squareup.moshi.JsonClass
+import android.util.Log
+import com.example.util.AppImageLoaderFactory
 import com.squareup.moshi.Moshi
+import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import okhttp3.Cache
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.File
 import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
-import android.util.Log
-import java.security.cert.X509Certificate
-import javax.net.ssl.SSLContext
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
-import javax.net.ssl.HostnameVerifier
+
+class UnauthorizedSessionException(
+    message: String = "Unauthorized. Session might have expired."
+) : IOException(message)
 
 // Moshi Models
-data class PersonsResponse(
-    val error: String?,
-    val result: List<ApiPerson>?
-)
-
-data class LoginResponse(
-    val error: String?,
-    val result: LoginResult?
-)
-
 data class LoginResult(
     val username: String?,
     val role: Int?,
     val csrfToken: String?
 )
 
-data class GalleryResponse(
-    val error: String?,
-    val result: GalleryResult?
-)
+object UserRoles {
+    const val LIMITED_GUEST = 1
+    const val GUEST = 2
+    const val USER = 3
+    const val ADMIN = 4
+    const val DEVELOPER = 5
 
-data class GalleryResult(
-    val directory: ApiDirectory?
-)
+    fun fromValue(value: Any?): Int? {
+        return when (value) {
+            is Number -> value.toInt()
+            is String -> when (value.trim().lowercase()) {
+                "limitedguest", "limited_guest", "limited guest" -> LIMITED_GUEST
+                "guest" -> GUEST
+                "user" -> USER
+                "admin" -> ADMIN
+                "developer", "dev" -> DEVELOPER
+                else -> value.trim().toIntOrNull()
+            }
+            else -> null
+        }
+    }
+
+    fun canManageAlbums(
+        role: Int,
+        albumWriteMinRole: Int = ADMIN,
+        albumFeatureEnabled: Boolean = true,
+        userCanCreateAlbumsOverride: Int = -1
+    ): Boolean {
+        if (!albumFeatureEnabled) return false
+        if (role < LIMITED_GUEST) return false
+        if (role >= ADMIN) return true
+        return when (userCanCreateAlbumsOverride) {
+            1 -> true
+            0 -> false
+            else -> role >= albumWriteMinRole
+        }
+    }
+}
 
 data class ApiDirectory(
     val id: Int?,
@@ -90,6 +108,13 @@ data class ApiMedia(
                 name.endsWith(".webm", ignoreCase = true) ||
                 name.endsWith(".avi", ignoreCase = true) ||
                 name.endsWith(".mkv", ignoreCase = true)
+
+    val isLivePhoto: Boolean
+        get() = !isVideo && (
+            metadata?.isLivePhoto == true ||
+            !metadata?.liveVideoPath.isNullOrBlank() ||
+            name.endsWith(".live", ignoreCase = true)
+        )
 }
 
 // Album DTO Classes
@@ -137,7 +162,9 @@ data class ApiMediaMetadata(
     val faces: List<ApiFace>? = null,
     val duration: Double? = null,
     val gps: ApiGPSData? = null,
-    val fileSize: Long? = null
+    val fileSize: Long? = null,
+    val isLivePhoto: Boolean? = null,
+    val liveVideoPath: String? = null
 )
 
 data class ApiCameraData(
@@ -168,6 +195,19 @@ data class ApiSize(
 )
 
 class PiGalleryApi(private val context: android.content.Context) {
+    companion object {
+        fun ensureHttpUrl(url: String): String {
+            return url.let { if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it }.trimEnd('/')
+        }
+
+        fun cleanServerPath(path: String?): String {
+            if (path.isNullOrBlank()) return ""
+            return path.replace('\\', '/').trim().trim('/').let {
+                if (it == "." || it == "./") "" else it.removePrefix("./").trim('/')
+            }
+        }
+    }
+
     private fun parseMetadata(metaMap: Map<*, *>, cwMap: Map<String, Any?>?): ApiMediaMetadata {
         val sizeMap = metaMap["size"] as? Map<*, *>
         val sizeList = metaMap["d"] as? List<*>
@@ -285,7 +325,19 @@ class PiGalleryApi(private val context: android.content.Context) {
 
         val fileSize = (metaMap["fileSize"] as? Number ?: metaMap["file_size"] as? Number ?: metaMap["s"] as? Number ?: metaMap["fs"] as? Number)?.toLong()
 
-        return ApiMediaMetadata(size, creationDate, creationDateOffset, cameraData, keywords, faces, duration, gps, fileSize)
+        val isLivePhoto = (metaMap["isLivePhoto"] as? Boolean)
+            ?: (metaMap["livePhoto"] as? Boolean)
+            ?: (metaMap["lp"] as? Boolean)
+            ?: (metaMap["live"] as? Boolean)
+            ?: (metaMap["motionPhoto"] as? Boolean)
+        val liveVideoPath = (metaMap["liveVideoPath"] as? String)
+            ?: (metaMap["livePhotoVideo"] as? String)
+            ?: (metaMap["liveVideo"] as? String)
+            ?: (metaMap["pairedVideo"] as? String)
+            ?: (metaMap["companion"] as? String)
+            ?: (metaMap["contentIdentifier"] as? String)
+
+        return ApiMediaMetadata(size, creationDate, creationDateOffset, cameraData, keywords, faces, duration, gps, fileSize, isLivePhoto, liveVideoPath)
     }
 
     private val prefs = PreferencesManager(context)
@@ -310,30 +362,16 @@ class PiGalleryApi(private val context: android.content.Context) {
         }
             
         if (allowInsecure) {
-            try {
-                val trustAllCerts = arrayOf<TrustManager>(
-                    object : X509TrustManager {
-                        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-                        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
-                        override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-                    }
-                )
-                val sslContext = SSLContext.getInstance("TLS")
-                sslContext.init(null, trustAllCerts, java.security.SecureRandom())
-                builder.sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
-                builder.hostnameVerifier { _, _ -> true }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+            AppImageLoaderFactory.applyInsecureSsl(builder)
         }
-        
+
         return builder.build()
     }
 
     fun updateClientSsl(allowInsecure: Boolean) {
         client = buildHttpClient(allowInsecure)
     }
-        
+
     fun clearCache() {
         try {
             client.cache?.evictAll()
@@ -342,13 +380,12 @@ class PiGalleryApi(private val context: android.content.Context) {
         }
     }
 
-
     private val moshi = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
         .build()
 
-    private val loginAdapter = moshi.adapter(LoginResponse::class.java)
-    private val galleryAdapter = moshi.adapter(GalleryResponse::class.java)
+    private val mapType = Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
+    private val mapAdapter = moshi.adapter<Map<String, Any?>>(mapType)
 
     private fun extractSessionCookies(cookieHeaders: List<String>): String {
         val pairs = cookieHeaders.mapNotNull { header ->
@@ -366,13 +403,6 @@ class PiGalleryApi(private val context: android.content.Context) {
         return (if (preferred.isNotEmpty()) preferred else pairs).joinToString("; ")
     }
 
-    private fun cleanServerPath(path: String?): String {
-        if (path.isNullOrBlank()) return ""
-        return path.replace('\\', '/').trim().trim('/').let {
-            if (it == "." || it == "./") "" else it.removePrefix("./").trim('/')
-        }
-    }
-
     private fun encodeUrlPath(path: String): String {
         val cleaned = cleanServerPath(path)
         if (cleaned.isEmpty()) return ""
@@ -386,6 +416,14 @@ class PiGalleryApi(private val context: android.content.Context) {
         return trimmed.startsWith("<")
     }
 
+    private fun extractErrorMessage(bodyString: String): String? {
+        return try {
+            mapAdapter.fromJson(bodyString)?.get("error")?.toString()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     /**
      * Performs a login request on the PiGallery2 server.
      * Returns the cookie string and detected prefix if successful, throws exception on failure.
@@ -395,9 +433,6 @@ class PiGalleryApi(private val context: android.content.Context) {
         // Modern PiGallery2 (v2/v3+) uses "/pgapi" by default; keep "/api" as fallback
         val prefixes = listOf("/pgapi", "/api")
         var lastException: Exception? = null
-
-        val mapType = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
-        val mapAdapter = moshi.adapter<Map<String, Any?>>(mapType)
 
         // 1. Try normal POST login for each prefix (if username is not blank)
         if (username.isNotBlank()) {
@@ -434,20 +469,36 @@ class PiGalleryApi(private val context: android.content.Context) {
                             throw IOException("Server returned HTML instead of JSON on $prefix/user/login")
                         }
 
-                        val loginResponse = loginAdapter.fromJson(bodyString)
-                            ?: throw IOException("Invalid JSON response from server")
-                        if (loginResponse.error != null) {
-                            throw IOException(loginResponse.error)
-                        }
-                        if (loginResponse.result == null) {
-                            throw IOException("Login response missing result object")
-                        }
+                        val responseMap = try {
+                            mapAdapter.fromJson(bodyString)
+                        } catch (e: Exception) {
+                            throw IOException("Invalid JSON response from server")
+                        } ?: throw IOException("Invalid JSON response from server")
 
-                        prefs.csrfToken = loginResponse.result.csrfToken.orEmpty()
+                        val errorObj = responseMap["error"]
+                        if (errorObj != null) {
+                            val errMsg = (errorObj as? Map<*, *>)?.get("message")?.toString() ?: errorObj.toString()
+                            throw IOException(errMsg)
+                        }
+                        val resultMap = responseMap["result"] as? Map<*, *>
+                            ?: throw IOException("Login response missing result object")
+
+                        prefs.csrfToken = ""
+                        prefs.userRole = -1
+                        prefs.userCanCreateAlbumsOverride = -1
+                        applyUserSessionMap(resultMap)
 
                         val filteredCookies = extractSessionCookies(response.headers("Set-Cookie"))
                         if (filteredCookies.isEmpty()) {
                             throw IOException("No session cookie returned by the server. Check your configuration.")
+                        }
+
+                        if (prefs.userRole == -1 || prefs.csrfToken.isBlank()) {
+                            try {
+                                fetchCurrentUserSession(sanitizedUrl, filteredCookies, prefix)
+                            } catch (_: Exception) {
+                                // Best-effort session role/CSRF refresh
+                            }
                         }
 
                         return Pair(filteredCookies, prefix)
@@ -483,7 +534,14 @@ class PiGalleryApi(private val context: android.content.Context) {
 
                         if (directory != null) {
                             prefs.csrfToken = ""
+                            prefs.userRole = -1
+                            prefs.userCanCreateAlbumsOverride = -1
                             val filteredCookies = extractSessionCookies(response.headers("Set-Cookie"))
+                            try {
+                                fetchCurrentUserSession(sanitizedUrl, filteredCookies, prefix)
+                            } catch (_: Exception) {
+                                // Keep role unknown if /user/me cannot be fetched
+                            }
                             return Pair(filteredCookies, prefix)
                         }
                     }
@@ -496,31 +554,343 @@ class PiGalleryApi(private val context: android.content.Context) {
         throw lastException ?: IOException("Failed to login or access public gallery. Check connection and credentials.")
     }
 
+    private fun applyUserSessionMap(resultMap: Map<*, *>): LoginResult {
+        val nestedUser = resultMap["user"] as? Map<*, *>
+        val userObj = nestedUser ?: resultMap
+
+        val username = (userObj["username"] as? String) ?: (userObj["name"] as? String)
+        val role = UserRoles.fromValue(userObj["role"])
+            ?: UserRoles.fromValue(resultMap["role"])
+        val csrfToken = (resultMap["csrfToken"] as? String)
+            ?: (userObj["csrfToken"] as? String)
+
+        if (role != null) {
+            prefs.userRole = role
+        }
+        if (!csrfToken.isNullOrBlank()) {
+            prefs.csrfToken = csrfToken
+        }
+
+        var overrideFound: Int? = null
+        for (map in listOfNotNull(nestedUser, resultMap)) {
+            for ((k, v) in map) {
+                val key = k?.toString()?.lowercase() ?: continue
+                if ((key.contains("album") || key.contains("savedsearch") || key.contains("savesearch")) &&
+                    (key.contains("allow") || key.contains("create") || key.contains("save") ||
+                        key.contains("write") || key.contains("manage") || key.contains("edit") || key.contains("can")) &&
+                    v is Boolean
+                ) {
+                    overrideFound = if (v) 1 else 0
+                    break
+                }
+            }
+            if (overrideFound != null) break
+        }
+        if (overrideFound != null) {
+            prefs.userCanCreateAlbumsOverride = overrideFound
+        }
+
+        return LoginResult(username = username, role = role, csrfToken = csrfToken)
+    }
+
+    /**
+     * Fetches the current authenticated/unauthenticated session info from /user/me
+     * and client album permissions from /settings or HTML ServerInject.
+     */
+    fun fetchCurrentUserSession(
+        serverUrl: String,
+        cookies: String,
+        apiPrefix: String,
+        throwOnUnauthorized: Boolean = false
+    ): LoginResult? {
+        val sanitizedUrl = serverUrl.trimEnd('/')
+        if (sanitizedUrl.isEmpty()) return null
+        val endpoint = "$sanitizedUrl$apiPrefix/user/me"
+
+        val builder = Request.Builder()
+            .url(endpoint)
+            .get()
+        if (cookies.isNotEmpty()) {
+            builder.addHeader("Cookie", cookies)
+        }
+
+        var loginResult: LoginResult? = null
+        client.newCall(builder.build()).execute().use { response ->
+            if (response.code == 401) {
+                prefs.userRole = -1
+                prefs.userCanCreateAlbumsOverride = -1
+                if (throwOnUnauthorized) {
+                    throw UnauthorizedSessionException("Unauthorized. Session expired.")
+                }
+                return null
+            }
+            if (response.code == 403) {
+                prefs.userRole = -1
+                prefs.userCanCreateAlbumsOverride = -1
+                return null
+            }
+            if (response.isSuccessful) {
+                val bodyString = response.body?.string() ?: ""
+                if (bodyString.isNotBlank() && !isHtmlResponse(bodyString)) {
+                    val responseMap = try {
+                        mapAdapter.fromJson(bodyString)
+                    } catch (_: Exception) {
+                        null
+                    }
+                    if (responseMap != null && responseMap["error"] == null) {
+                        val resultMap = responseMap["result"] as? Map<*, *>
+                        if (resultMap != null) {
+                            loginResult = applyUserSessionMap(resultMap)
+                        }
+                    }
+                }
+            }
+        }
+
+        try {
+            fetchClientAlbumConfig(sanitizedUrl, cookies, apiPrefix)
+        } catch (_: Exception) {
+            // Keep existing config defaults if settings endpoint is unavailable
+        }
+        return loginResult
+    }
+
+    /**
+     * Fetches PiGallery2 ClientConfig from /$apiPrefix/settings or index.html ServerInject
+     * to determine whether the Admin enabled album creation / saved searches for normal users (PR #1400).
+     */
+    fun fetchClientAlbumConfig(serverUrl: String, cookies: String, apiPrefix: String): Boolean {
+        val sanitizedUrl = serverUrl.trimEnd('/')
+        if (sanitizedUrl.isEmpty()) return false
+
+        // 1. Try JSON ClientConfig endpoint: GET $apiPrefix/settings
+        try {
+            val settingsBuilder = Request.Builder()
+                .url("$sanitizedUrl$apiPrefix/settings")
+                .get()
+            if (cookies.isNotEmpty()) {
+                settingsBuilder.addHeader("Cookie", cookies)
+            }
+            client.newCall(settingsBuilder.build()).execute().use { response ->
+                if (response.isSuccessful) {
+                    val bodyString = response.body?.string() ?: ""
+                    if (bodyString.isNotBlank() && !isHtmlResponse(bodyString)) {
+                        val responseMap = try {
+                            mapAdapter.fromJson(bodyString)
+                        } catch (_: Exception) {
+                            null
+                        }
+                        if (responseMap != null && responseMap["error"] == null) {
+                            val candidate = (responseMap["result"] as? Map<*, *>) ?: responseMap
+                            if (applyClientConfigMap(candidate)) {
+                                return true
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            // Fall through to HTML ServerInject lookup
+        }
+
+        // 2. Fallback: extract ServerInject.ConfigInject (and user if needed) from index.html
+        try {
+            val htmlBuilder = Request.Builder()
+                .url("$sanitizedUrl/")
+                .get()
+            if (cookies.isNotEmpty()) {
+                htmlBuilder.addHeader("Cookie", cookies)
+            }
+            client.newCall(htmlBuilder.build()).execute().use { response ->
+                if (!response.isSuccessful) return false
+                val htmlBody = response.body?.string() ?: return false
+
+                extractEmbeddedJsonObject(htmlBody, "user")?.let { userJson ->
+                    val userMap = try {
+                        mapAdapter.fromJson(userJson)
+                    } catch (_: Exception) {
+                        null
+                    }
+                    if (userMap != null) {
+                        applyUserSessionMap(userMap)
+                    }
+                }
+
+                val configJson = extractEmbeddedJsonObject(htmlBody, "ConfigInject") ?: return false
+                val configMap = try {
+                    mapAdapter.fromJson(configJson)
+                } catch (_: Exception) {
+                    null
+                } ?: return false
+
+                return applyClientConfigMap(configMap)
+            }
+        } catch (_: Exception) {
+            return false
+        }
+    }
+
+    private fun extractEmbeddedJsonObject(html: String, keyName: String): String? {
+        val pattern = Regex("""\b${Regex.escape(keyName)}\s*[:=]\s*""")
+        val match = pattern.find(html) ?: return null
+        var idx = match.range.last + 1
+        while (idx < html.length && html[idx].isWhitespace()) {
+            idx++
+        }
+        if (idx >= html.length || html[idx] != '{') return null
+
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for (i in idx until html.length) {
+            val ch = html[i]
+            if (escaped) {
+                escaped = false
+                continue
+            }
+            if (inString) {
+                if (ch == '\\') {
+                    escaped = true
+                } else if (ch == '"') {
+                    inString = false
+                }
+                continue
+            }
+            when (ch) {
+                '"' -> inString = true
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) {
+                        return html.substring(idx, i + 1)
+                    }
+                }
+            }
+        }
+        return null
+    }
+
+    private fun applyClientConfigMap(configMap: Map<*, *>): Boolean {
+        val recognizedConfigKeys = setOf(
+            "album", "albums", "savedsearch", "savedsearches",
+            "search", "users", "user", "faces", "sharing",
+            "gallery", "server", "client", "metafile", "media"
+        )
+        val hasKnownSection = configMap.keys.any { k ->
+            val lower = k?.toString()?.lowercase() ?: ""
+            lower in recognizedConfigKeys || lower.contains("album")
+        }
+        if (!hasKnownSection) return false
+
+        var parsedMinRole = UserRoles.ADMIN
+        var albumEnabled = true
+        var foundExplicitMinRole = false
+
+        fun parseAlbumSection(section: Map<*, *>) {
+            for ((k, v) in section) {
+                val kLower = k?.toString()?.lowercase() ?: continue
+                when {
+                    kLower == "enabled" && v is Boolean -> {
+                        albumEnabled = v
+                    }
+                    (kLower == "readonly" || kLower == "read_only") && v is Boolean -> {
+                        if (v) parsedMinRole = maxOf(parsedMinRole, UserRoles.ADMIN)
+                    }
+                    kLower.contains("role") && !kLower.contains("read") -> {
+                        UserRoles.fromValue(v)?.let { roleVal ->
+                            parsedMinRole = roleVal
+                            foundExplicitMinRole = true
+                        }
+                    }
+                    v is Boolean && (
+                        kLower.contains("user") ||
+                            kLower.contains("nonadmin") ||
+                            kLower.contains("savedsearch") ||
+                            (kLower.contains("allow") && (
+                                kLower.contains("create") ||
+                                    kLower.contains("save") ||
+                                    kLower.contains("write") ||
+                                    kLower.contains("edit") ||
+                                    kLower.contains("add") ||
+                                    kLower.contains("manage") ||
+                                    kLower.contains("album")
+                                ))
+                        ) -> {
+                        foundExplicitMinRole = true
+                        parsedMinRole = if (v) UserRoles.USER else UserRoles.ADMIN
+                    }
+                }
+            }
+        }
+
+        for ((rawKey, rawValue) in configMap) {
+            val key = rawKey?.toString()?.lowercase() ?: continue
+            val section = rawValue as? Map<*, *>
+            when {
+                section != null && (key == "album" || key == "albums" || key == "savedsearch" || key == "savedsearches") -> {
+                    parseAlbumSection(section)
+                }
+                section != null && (key == "users" || key == "user" || key == "search") -> {
+                    for ((subKeyRaw, subVal) in section) {
+                        val subKey = subKeyRaw?.toString()?.lowercase() ?: continue
+                        if (!subKey.contains("album") && !subKey.contains("savedsearch") && !subKey.contains("savesearch")) {
+                            continue
+                        }
+                        if (subKey.contains("role") && !subKey.contains("read")) {
+                            UserRoles.fromValue(subVal)?.let { roleVal ->
+                                if (!foundExplicitMinRole) {
+                                    parsedMinRole = roleVal
+                                    foundExplicitMinRole = true
+                                }
+                            }
+                        } else if (subVal is Boolean && (
+                                subKey.contains("allow") ||
+                                    subKey.contains("create") ||
+                                    subKey.contains("save") ||
+                                    subKey.contains("write") ||
+                                    subKey.contains("manage") ||
+                                    subKey.contains("edit")
+                                )
+                        ) {
+                            if (!foundExplicitMinRole) {
+                                parsedMinRole = if (subVal) UserRoles.USER else UserRoles.ADMIN
+                                foundExplicitMinRole = true
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        prefs.albumFeatureEnabled = albumEnabled
+        prefs.albumWriteMinRole = parsedMinRole
+        return true
+    }
+
+    private fun cleanJsonValue(value: Any?): Any? {
+        return when (value) {
+            is Double -> if (value % 1.0 == 0.0) value.toLong() else value
+            is Map<*, *> -> {
+                val result = mutableMapOf<String, Any?>()
+                for ((k, v) in value) {
+                    if (k != null) {
+                        result[k.toString()] = cleanJsonValue(v)
+                    }
+                }
+                result
+            }
+            is List<*> -> value.map { cleanJsonValue(it) }
+            else -> value
+        }
+    }
+
     /**
      * Serializes search query map to JSON string.
      */
     fun serializeQuery(query: Map<String, Any?>): String {
-        fun cleanValue(value: Any?): Any? {
-            return when (value) {
-                is Double -> if (value % 1.0 == 0.0) value.toLong() else value
-                is Map<*, *> -> {
-                    val result = mutableMapOf<String, Any?>()
-                    for ((k, v) in value) {
-                        if (k != null) {
-                            result[k.toString()] = cleanValue(v)
-                        }
-                    }
-                    result
-                }
-                is List<*> -> value.map { cleanValue(it) }
-                else -> value
-            }
-        }
         @Suppress("UNCHECKED_CAST")
-        val cleanedQuery = cleanValue(query) as Map<String, Any?>
-        val mapType = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
-        val adapter = moshi.adapter<Map<String, Any?>>(mapType)
-        return adapter.toJson(cleanedQuery)
+        val cleanedQuery = cleanJsonValue(query) as Map<String, Any?>
+        return mapAdapter.toJson(cleanedQuery)
     }
 
     /**
@@ -544,7 +914,7 @@ class PiGalleryApi(private val context: android.content.Context) {
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
                 if (response.code == 401) {
-                    throw IOException("Unauthorized. Session might have expired.")
+                    throw UnauthorizedSessionException("Unauthorized. Session might have expired.")
                 }
                 throw IOException("Server returned error code: ${response.code}")
             }
@@ -553,8 +923,6 @@ class PiGalleryApi(private val context: android.content.Context) {
                 throw IOException("Server returned HTML instead of JSON. Check your API prefix or session.")
             }
 
-            val mapType = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
-            val mapAdapter = moshi.adapter<Map<String, Any?>>(mapType)
             val responseMap = try {
                 mapAdapter.fromJson(bodyString)
             } catch (e: Exception) {
@@ -592,26 +960,7 @@ class PiGalleryApi(private val context: android.content.Context) {
         val directoriesList = map["directories"] as? List<*>
         val directories = directoriesList?.mapNotNull { item ->
             val dirMap = item as? Map<*, *> ?: return@mapNotNull null
-            val subId = (dirMap["id"] as? Number)?.toInt()
-            val subName = (dirMap["name"] as? String) ?: (dirMap["n"] as? String) ?: ""
-            val subPath = (dirMap["path"] as? String) ?: (dirMap["p"] as? String) ?: ""
-
-            val cache = dirMap["cache"] as? Map<*, *>
-            val mediaCount = (dirMap["mediaCount"] as? Number)?.toInt()
-                ?: (cache?.get("recursiveMediaCount") as? Number)?.toInt()
-                ?: (cache?.get("mediaCount") as? Number)?.toInt()
-                ?: 0
-
-            val cleanSub = cleanServerPath(subPath)
-            val cleanSubName = cleanServerPath(subName)
-
-            val subFullPath = when {
-                directoryFullPath.isNotEmpty() -> if (cleanSubName.isNotEmpty()) "$directoryFullPath/$cleanSubName" else directoryFullPath
-                cleanSub.isNotEmpty() -> if (cleanSubName.isNotEmpty()) "$cleanSub/$cleanSubName" else cleanSub
-                else -> cleanSubName
-            }
-
-            ApiSubFolder(subId, subName, subFullPath, mediaCount, parseSubFolderCache(cache))
+            parseSubFolder(dirMap, directoryFullPath)
         } ?: emptyList()
 
         val mediaList = map["media"] as? List<*>
@@ -634,7 +983,8 @@ class PiGalleryApi(private val context: android.content.Context) {
             ApiMedia(medId, medName, metadata, directoryFullPath)
         } ?: emptyList()
 
-        return ApiDirectory(id, name, directoryFullPath, directories, media)
+        val pairedMedia = LivePhotoHelper.pairLivePhotos(media)
+        return ApiDirectory(id, name, directoryFullPath, directories, pairedMedia)
     }
 
     /**
@@ -664,7 +1014,7 @@ class PiGalleryApi(private val context: android.content.Context) {
             }
             if (!response.isSuccessful) {
                 if (response.code == 401) {
-                    throw IOException("Unauthorized. Session might have expired.")
+                    throw UnauthorizedSessionException("Unauthorized. Session might have expired.")
                 }
                 throw IOException("Server returned error code: ${response.code}")
             }
@@ -673,8 +1023,6 @@ class PiGalleryApi(private val context: android.content.Context) {
                 throw IOException("Server returned HTML instead of JSON. Check your API prefix or session.")
             }
 
-            val mapType = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
-            val mapAdapter = moshi.adapter<Map<String, Any?>>(mapType)
             val responseMap = try {
                 mapAdapter.fromJson(bodyString)
             } catch (e: Exception) {
@@ -774,28 +1122,33 @@ class PiGalleryApi(private val context: android.content.Context) {
         val directoriesList = searchResult["directories"] as? List<*>
         val directories = directoriesList?.mapNotNull { item ->
             val dirMap = item as? Map<*, *> ?: return@mapNotNull null
-            val subId = (dirMap["id"] as? Number)?.toInt()
-            val subName = (dirMap["name"] as? String) ?: (dirMap["n"] as? String) ?: ""
-            val subPath = (dirMap["path"] as? String) ?: (dirMap["p"] as? String) ?: ""
-
-            val cache = dirMap["cache"] as? Map<*, *>
-            val mediaCount = (dirMap["mediaCount"] as? Number)?.toInt()
-                ?: (cache?.get("recursiveMediaCount") as? Number)?.toInt()
-                ?: (cache?.get("mediaCount") as? Number)?.toInt()
-                ?: 0
-
-            val cleanSubParent = cleanServerPath(subPath)
-            val cleanSubName = cleanServerPath(subName)
-            val subFullPath = when {
-                cleanSubParent.isEmpty() -> cleanSubName
-                cleanSubName.isEmpty() -> cleanSubParent
-                else -> "$cleanSubParent/$cleanSubName"
-            }
-
-            ApiSubFolder(subId, subName, subFullPath, mediaCount, parseSubFolderCache(cache))
+            parseSubFolder(dirMap, parentDirectoryPath = null)
         } ?: emptyList()
 
-        return ApiDirectory(-1, "Search Results", "", directories, media)
+        val pairedMedia = LivePhotoHelper.pairLivePhotos(media)
+        return ApiDirectory(-1, "Search Results", "", directories, pairedMedia)
+    }
+
+    private fun parseSubFolder(dirMap: Map<*, *>, parentDirectoryPath: String?): ApiSubFolder {
+        val subId = (dirMap["id"] as? Number)?.toInt()
+        val subName = (dirMap["name"] as? String) ?: (dirMap["n"] as? String) ?: ""
+        val subPath = (dirMap["path"] as? String) ?: (dirMap["p"] as? String) ?: ""
+
+        val cache = dirMap["cache"] as? Map<*, *>
+        val mediaCount = (dirMap["mediaCount"] as? Number)?.toInt()
+            ?: (cache?.get("recursiveMediaCount") as? Number)?.toInt()
+            ?: (cache?.get("mediaCount") as? Number)?.toInt()
+            ?: 0
+
+        val cleanSub = cleanServerPath(subPath)
+        val cleanSubName = cleanServerPath(subName)
+        val subFullPath = when {
+            !parentDirectoryPath.isNullOrEmpty() -> if (cleanSubName.isNotEmpty()) "$parentDirectoryPath/$cleanSubName" else parentDirectoryPath
+            cleanSub.isNotEmpty() -> if (cleanSubName.isNotEmpty()) "$cleanSub/$cleanSubName" else cleanSub
+            else -> cleanSubName
+        }
+
+        return ApiSubFolder(subId, subName, subFullPath, mediaCount, parseSubFolderCache(cache))
     }
 
     private fun parseSubFolderCache(cacheMap: Map<*, *>?): ApiSubFolderCache? {
@@ -839,8 +1192,6 @@ class PiGalleryApi(private val context: android.content.Context) {
                 if (!response.isSuccessful) return emptyList()
                 val bodyString = response.body?.string() ?: return emptyList()
 
-                val mapType = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
-                val mapAdapter = moshi.adapter<Map<String, Any?>>(mapType)
                 val responseMap = mapAdapter.fromJson(bodyString)
                 val result = responseMap?.get("result")
 
@@ -899,7 +1250,7 @@ class PiGalleryApi(private val context: android.content.Context) {
             }
             if (!response.isSuccessful) {
                 if (response.code == 401) {
-                    throw IOException("Unauthorized. Session might have expired.")
+                    throw UnauthorizedSessionException("Unauthorized. Session might have expired.")
                 }
                 throw IOException("Server returned error code: ${response.code}")
             }
@@ -909,8 +1260,6 @@ class PiGalleryApi(private val context: android.content.Context) {
                 throw IOException("Server returned HTML instead of JSON. Check your API prefix or session.")
             }
 
-            val mapType = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
-            val mapAdapter = moshi.adapter<Map<String, Any?>>(mapType)
             val responseMap = try {
                 mapAdapter.fromJson(bodyString)
             } catch (e: Exception) {
@@ -967,7 +1316,7 @@ class PiGalleryApi(private val context: android.content.Context) {
             }
             if (!response.isSuccessful) {
                 if (response.code == 401) {
-                    throw IOException("Unauthorized. Session might have expired.")
+                    throw UnauthorizedSessionException("Unauthorized. Session might have expired.")
                 }
                 throw IOException("Server returned error code: ${response.code}")
             }
@@ -977,8 +1326,6 @@ class PiGalleryApi(private val context: android.content.Context) {
                 throw IOException("Server returned HTML instead of JSON. Check your API prefix or session.")
             }
 
-            val mapType = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
-            val mapAdapter = moshi.adapter<Map<String, Any?>>(mapType)
             val responseMap = try {
                 mapAdapter.fromJson(bodyString)
             } catch (e: Exception) {
@@ -1028,6 +1375,190 @@ class PiGalleryApi(private val context: android.content.Context) {
     }
 
     /**
+     * Saves a search query as an album on the PiGallery2 server.
+     * Requires Admin role (UserRoles.ADMIN) on the server.
+     */
+    fun createSavedSearchAlbum(
+        serverUrl: String,
+        name: String,
+        searchQuery: Map<String, Any?>,
+        cookies: String,
+        apiPrefix: String
+    ): ApiAlbum? {
+        val trimmedName = name.trim()
+        if (trimmedName.isEmpty()) {
+            throw IOException("Album name cannot be empty.")
+        }
+        if (searchQuery.isEmpty()) {
+            throw IOException("Search query cannot be empty.")
+        }
+
+        val sanitizedUrl = serverUrl.trimEnd('/')
+        if (prefs.csrfToken.isBlank() && sanitizedUrl.isNotEmpty()) {
+            try {
+                fetchCurrentUserSession(sanitizedUrl, cookies, apiPrefix)
+            } catch (_: Exception) {
+                // Continue even if /user/me fails
+            }
+        }
+        val csrfToken = prefs.csrfToken
+
+        @Suppress("UNCHECKED_CAST")
+        val cleanedQuery = cleanJsonValue(searchQuery) as Map<String, Any?>
+        val jsonBody = mapAdapter.toJson(
+            mapOf(
+                "name" to trimmedName,
+                "searchQuery" to cleanedQuery
+            )
+        )
+        val requestBody = jsonBody.toRequestBody("application/json; charset=utf-8".toMediaType())
+
+        val attempts = listOf(
+            "PUT" to "$sanitizedUrl$apiPrefix/albums/saved-searches",
+            "PUT" to "$sanitizedUrl$apiPrefix/albums",
+            "POST" to "$sanitizedUrl$apiPrefix/albums/saved-searches",
+            "POST" to "$sanitizedUrl$apiPrefix/albums"
+        )
+
+        var lastError: IOException? = null
+        for ((method, endpoint) in attempts) {
+            val builder = Request.Builder().url(endpoint)
+            if (cookies.isNotEmpty()) builder.addHeader("Cookie", cookies)
+            if (csrfToken.isNotEmpty()) builder.addHeader("CSRF-Token", csrfToken)
+            if (method == "PUT") builder.put(requestBody) else builder.post(requestBody)
+
+            client.newCall(builder.build()).execute().use { response ->
+                val bodyString = response.body?.string().orEmpty()
+
+                if (response.code == 401) {
+                    throw UnauthorizedSessionException(extractErrorMessage(bodyString) ?: "Unauthorized. Session might have expired.")
+                }
+
+                if (response.code == 403) {
+                    throw IOException(extractErrorMessage(bodyString) ?: "Not authorized to save albums (Admin role required).")
+                }
+
+                if (response.code == 404 || response.code == 405) {
+                    lastError = IOException("Endpoint $method $endpoint not available (${response.code})")
+                    return@use
+                }
+
+                if (!response.isSuccessful) {
+                    throw IOException(extractErrorMessage(bodyString) ?: "Server returned error code: ${response.code}")
+                }
+
+                if (bodyString.isBlank() || response.code == 204) {
+                    return null
+                }
+
+                if (isHtmlResponse(bodyString)) {
+                    throw IOException("Server returned HTML instead of JSON. Check your API prefix or session.")
+                }
+
+                val responseMap = try {
+                    mapAdapter.fromJson(bodyString)
+                } catch (e: Exception) {
+                    throw IOException("Failed to parse server response as JSON: ${e.message}")
+                }
+
+                val errorObj = responseMap?.get("error")
+                if (errorObj != null) {
+                    val msg = (errorObj as? Map<*, *>)?.get("message")?.toString() ?: errorObj.toString()
+                    throw IOException(msg)
+                }
+
+                val albumMap = responseMap?.get("result") as? Map<*, *> ?: return null
+                val id = (albumMap["id"] as? Number)?.toInt() ?: return null
+                val albumName = (albumMap["name"] as? String) ?: trimmedName
+                val locked = (albumMap["locked"] as? Boolean) ?: false
+                @Suppress("UNCHECKED_CAST")
+                val returnedQuery = albumMap["searchQuery"] as? Map<String, Any?>
+                return ApiAlbum(id, albumName, locked, returnedQuery, null)
+            }
+        }
+
+        throw lastError ?: IOException("Failed to save search as album.")
+    }
+
+    /**
+     * Deletes a saved-search album by ID on the PiGallery2 server.
+     * Requires permission to manage albums on the server.
+     */
+    fun deleteAlbum(
+        serverUrl: String,
+        albumId: Int,
+        cookies: String,
+        apiPrefix: String
+    ) {
+        val sanitizedUrl = serverUrl.trimEnd('/')
+        if (prefs.csrfToken.isBlank() && sanitizedUrl.isNotEmpty()) {
+            try {
+                fetchCurrentUserSession(sanitizedUrl, cookies, apiPrefix)
+            } catch (_: Exception) {
+                // Continue even if /user/me fails
+            }
+        }
+        val csrfToken = prefs.csrfToken
+
+        val attempts = listOf(
+            "$sanitizedUrl$apiPrefix/albums/$albumId",
+            "$sanitizedUrl$apiPrefix/albums/saved-searches/$albumId"
+        )
+
+        var lastError: IOException? = null
+        for (endpoint in attempts) {
+            val builder = Request.Builder()
+                .url(endpoint)
+                .delete()
+            if (cookies.isNotEmpty()) builder.addHeader("Cookie", cookies)
+            if (csrfToken.isNotEmpty()) builder.addHeader("CSRF-Token", csrfToken)
+
+            client.newCall(builder.build()).execute().use { response ->
+                val bodyString = response.body?.string().orEmpty()
+
+                if (response.code == 401) {
+                    throw UnauthorizedSessionException(extractErrorMessage(bodyString) ?: "Unauthorized. Session might have expired.")
+                }
+
+                if (response.code == 403) {
+                    throw IOException(extractErrorMessage(bodyString) ?: "Not authorized to delete albums.")
+                }
+
+                if (response.code == 404 || response.code == 405) {
+                    lastError = IOException("Endpoint DELETE $endpoint not available (${response.code})")
+                    return@use
+                }
+
+                if (!response.isSuccessful) {
+                    throw IOException(extractErrorMessage(bodyString) ?: "Server returned error code: ${response.code}")
+                }
+
+                if (bodyString.isBlank() || response.code == 204) {
+                    return
+                }
+
+                if (isHtmlResponse(bodyString)) {
+                    throw IOException("Server returned HTML instead of JSON. Check your API prefix or session.")
+                }
+
+                val responseMap = try {
+                    mapAdapter.fromJson(bodyString)
+                } catch (_: Exception) {
+                    null
+                }
+                val errorObj = responseMap?.get("error")
+                if (errorObj != null) {
+                    val msg = (errorObj as? Map<*, *>)?.get("message")?.toString() ?: errorObj.toString()
+                    throw IOException(msg)
+                }
+                return
+            }
+        }
+
+        throw lastError ?: IOException("Failed to delete album.")
+    }
+
+    /**
      * Attempts to update a person's favourite status on the PiGallery2 server.
      * Uses a multi-tiered fallback strategy (PATCH, POST, PUT) across different path forms
      * to guarantee synchronization compatibility.
@@ -1036,127 +1567,33 @@ class PiGalleryApi(private val context: android.content.Context) {
         val sanitizedUrl = serverUrl.trimEnd('/')
         val encodedName = URLEncoder.encode(personName, "UTF-8").replace("+", "%20")
         val csrfToken = prefs.csrfToken
+        val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
-        val mapType = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
-        val mapAdapter = moshi.adapter<Map<String, Any?>>(mapType)
+        val nameBody = mapAdapter.toJson(mapOf("isFavourite" to isFavourite)).toRequestBody(jsonMediaType)
+        val rootBody = mapAdapter.toJson(mapOf("name" to personName, "isFavourite" to isFavourite)).toRequestBody(jsonMediaType)
 
-        val jsonBody = mapAdapter.toJson(mapOf("isFavourite" to isFavourite))
-        val requestBody = jsonBody.toRequestBody("application/json; charset=utf-8".toMediaType())
+        val targets = listOf(
+            "$sanitizedUrl$apiPrefix/person/$encodedName" to nameBody,
+            "$sanitizedUrl$apiPrefix/person" to rootBody
+        )
+        val methods = listOf("PATCH", "POST", "PUT")
 
-        fun Request.Builder.withAuthHeaders(): Request.Builder {
-            if (cookies.isNotEmpty()) addHeader("Cookie", cookies)
-            if (csrfToken.isNotEmpty()) addHeader("CSRF-Token", csrfToken)
-            return this
-        }
-
-        // 1. Path variant: api/person/{name}
-        val urlWithName = "$sanitizedUrl$apiPrefix/person/$encodedName"
-
-        // Try PATCH on api/person/{name}
-        val patchReq1 = Request.Builder()
-            .url(urlWithName)
-            .patch(requestBody)
-            .withAuthHeaders()
-            .build()
-        try {
-            client.newCall(patchReq1).execute().use { response ->
-                if (response.isSuccessful) {
-                    Log.d("PiGalleryApi", "Successfully synced favorite status via PATCH on api/person/{name}")
-                    return true
+        for ((url, body) in targets) {
+            for (method in methods) {
+                val reqBuilder = Request.Builder().url(url).method(method, body)
+                if (cookies.isNotEmpty()) reqBuilder.addHeader("Cookie", cookies)
+                if (csrfToken.isNotEmpty()) reqBuilder.addHeader("CSRF-Token", csrfToken)
+                try {
+                    client.newCall(reqBuilder.build()).execute().use { response ->
+                        if (response.isSuccessful) {
+                            Log.d("PiGalleryApi", "Successfully synced favorite status via $method on $url")
+                            return true
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.d("PiGalleryApi", "$method $url failed: ${e.message}")
                 }
             }
-        } catch (e: Exception) {
-            Log.d("PiGalleryApi", "PATCH api/person/{name} failed: ${e.message}")
-        }
-
-        // Try POST on api/person/{name}
-        val postReq1 = Request.Builder()
-            .url(urlWithName)
-            .post(requestBody)
-            .withAuthHeaders()
-            .build()
-        try {
-            client.newCall(postReq1).execute().use { response ->
-                if (response.isSuccessful) {
-                    Log.d("PiGalleryApi", "Successfully synced favorite status via POST on api/person/{name}")
-                    return true
-                }
-            }
-        } catch (e: Exception) {
-            Log.d("PiGalleryApi", "POST api/person/{name} failed: ${e.message}")
-        }
-
-        // Try PUT on api/person/{name}
-        val putReq1 = Request.Builder()
-            .url(urlWithName)
-            .put(requestBody)
-            .withAuthHeaders()
-            .build()
-        try {
-            client.newCall(putReq1).execute().use { response ->
-                if (response.isSuccessful) {
-                    Log.d("PiGalleryApi", "Successfully synced favorite status via PUT on api/person/{name}")
-                    return true
-                }
-            }
-        } catch (e: Exception) {
-            Log.d("PiGalleryApi", "PUT api/person/{name} failed: ${e.message}")
-        }
-
-        // 2. Path variant: api/person
-        val urlRoot = "$sanitizedUrl$apiPrefix/person"
-        val rootJsonBody = mapAdapter.toJson(mapOf("name" to personName, "isFavourite" to isFavourite))
-        val rootRequestBody = rootJsonBody.toRequestBody("application/json; charset=utf-8".toMediaType())
-
-        // Try PATCH on api/person
-        val patchReq2 = Request.Builder()
-            .url(urlRoot)
-            .patch(rootRequestBody)
-            .withAuthHeaders()
-            .build()
-        try {
-            client.newCall(patchReq2).execute().use { response ->
-                if (response.isSuccessful) {
-                    Log.d("PiGalleryApi", "Successfully synced favorite status via PATCH on api/person")
-                    return true
-                }
-            }
-        } catch (e: Exception) {
-            Log.d("PiGalleryApi", "PATCH api/person failed: ${e.message}")
-        }
-
-        // Try POST on api/person
-        val postReq2 = Request.Builder()
-            .url(urlRoot)
-            .post(rootRequestBody)
-            .withAuthHeaders()
-            .build()
-        try {
-            client.newCall(postReq2).execute().use { response ->
-                if (response.isSuccessful) {
-                    Log.d("PiGalleryApi", "Successfully synced favorite status via POST on api/person")
-                    return true
-                }
-            }
-        } catch (e: Exception) {
-            Log.d("PiGalleryApi", "POST api/person failed: ${e.message}")
-        }
-
-        // Try PUT on api/person
-        val putReq2 = Request.Builder()
-            .url(urlRoot)
-            .put(rootRequestBody)
-            .withAuthHeaders()
-            .build()
-        try {
-            client.newCall(putReq2).execute().use { response ->
-                if (response.isSuccessful) {
-                    Log.d("PiGalleryApi", "Successfully synced favorite status via PUT on api/person")
-                    return true
-                }
-            }
-        } catch (e: Exception) {
-            Log.d("PiGalleryApi", "PUT api/person failed: ${e.message}")
         }
 
         Log.e("PiGalleryApi", "All attempts to sync favorite status with backend failed.")

@@ -4,8 +4,11 @@ import coil.imageLoader
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import androidx.annotation.StringRes
+import androidx.core.net.toUri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.R
 import com.example.data.ApiAlbum
 import com.example.data.ApiAlbumCache
 import com.example.data.ApiCoverPhoto
@@ -24,7 +27,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import java.io.IOException
 
@@ -95,6 +100,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val database = com.example.data.database.DatabaseProvider.getDatabase(application)
     val repo = com.example.data.GalleryRepository(database)
     val searchHistoryManager = com.example.data.SearchHistoryManager(application)
+
+    private fun str(@StringRes resId: Int, vararg args: Any): String =
+        getApplication<Application>().getString(resId, *args)
 
     val localSearchHistory = searchHistoryManager.searchHistory
 
@@ -235,13 +243,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val galleryViewMode = MutableStateFlow(try { GalleryViewMode.valueOf(prefs.galleryViewMode) } catch (e: Exception) { GalleryViewMode.FOLDER })
     val networkConnectionInfo = MutableStateFlow(NetworkConnectionInfo())
 
-    private val directoryCache = java.util.concurrent.ConcurrentHashMap<String, ApiDirectory>()
-    private val cachedFlattenedMedia = java.util.concurrent.ConcurrentHashMap<String, List<ApiMedia>>()
-    private val cachedYearMedia = java.util.concurrent.ConcurrentHashMap<Int, List<ApiMedia>>()
+    private val cachedFlattenedMedia = android.util.LruCache<String, List<ApiMedia>>(4)
+    private val cachedYearMedia = android.util.LruCache<Int, List<ApiMedia>>(8)
     private val lastBackgroundSyncTime = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val fetchSemaphore = Semaphore(4)
+    private val reauthMutex = Mutex()
     private var backgroundSyncJob: kotlinx.coroutines.Job? = null
     private var directoryLoadJob: kotlinx.coroutines.Job? = null
+    private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
+    private var urlProbeJob: kotlinx.coroutines.Job? = null
 
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
@@ -752,7 +762,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 else -> dirs
             }
 
-            val media = directory.media.orEmpty()
+            val media = com.example.data.LivePhotoHelper.pairLivePhotos(directory.media.orEmpty())
             val sortedMedia = when (mSort.lowercase()) {
                 "name" -> {
                     if (mAsc) media.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
@@ -792,6 +802,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     init {
+        registerNetworkCallback()
         try {
             checkForUpdates()
         } catch (e: Exception) {
@@ -806,6 +817,45 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             } catch (e: Exception) {
                 // Safe fallback
             }
+        }
+    }
+
+    private fun registerNetworkCallback() {
+        try {
+            val cm = getApplication<Application>().getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+                ?: return
+            val callback = object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: android.net.Network) {
+                    invalidateActiveServerUrl(triggerProbe = true)
+                }
+
+                override fun onLost(network: android.net.Network) {
+                    invalidateActiveServerUrl(triggerProbe = true)
+                }
+
+                override fun onCapabilitiesChanged(
+                    network: android.net.Network,
+                    networkCapabilities: android.net.NetworkCapabilities
+                ) {
+                    invalidateActiveServerUrl(triggerProbe = true)
+                }
+            }
+            cm.registerDefaultNetworkCallback(callback)
+            networkCallback = callback
+        } catch (_: Exception) {
+            // Safely ignore on restricted/test environments
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        networkCallback?.let { cb ->
+            try {
+                val cm = getApplication<Application>().getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+                cm?.unregisterNetworkCallback(cb)
+            } catch (_: Exception) {
+            }
+            networkCallback = null
         }
     }
 
@@ -824,7 +874,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         lastPermissionsSyncMs = now
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                api.fetchCurrentUserSession(server, cookies, apiPrefix)
+                val requiresAuth = prefs.username.isNotBlank()
+                executeAuthenticated { activeCookies, activePrefix ->
+                    api.fetchCurrentUserSession(
+                        serverUrl = server,
+                        cookies = activeCookies,
+                        apiPrefix = activePrefix,
+                        throwOnUnauthorized = requiresAuth
+                    )
+                }
                 _userRole.value = prefs.userRole
                 _canManageAlbums.value = computeCanManageAlbums()
             } catch (_: Exception) {
@@ -875,6 +933,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
                 prefs.allowInsecureSsl = allowInsecureSsl
                 api.updateClientSsl(allowInsecureSsl)
+                com.example.util.AppImageLoaderFactory.install(getApplication(), allowInsecureSsl)
 
                 val (cookies, apiPrefix) = api.login(formattedUrl, user, pass)
                 
@@ -891,9 +950,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 savedUsername.value = user
                 savedPassword.value = pass
                 isLoggedIn.value = true
+                invalidateActiveServerUrl(triggerProbe = true)
                 refreshUserPermissions(force = true)
 
-                _loginState.value = LoginUiState.Success("Connected successfully!")
+                _loginState.value = LoginUiState.Success(str(R.string.connected_successfully))
                 _pathHistory.value = buildInitialPathStack(prefs.defaultRootPath) // Reset path history
                 _activeTab.value = ActiveTab.GALLERY
 
@@ -901,7 +961,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 loadAlbums()
                 loadRediscover()
             } catch (e: Exception) {
-                _loginState.value = LoginUiState.Error(e.localizedMessage ?: "Connection failed")
+                _loginState.value = LoginUiState.Error(e.localizedMessage ?: str(R.string.connection_failed))
             }
         }
     }
@@ -913,7 +973,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     suspend fun fetchMediaForYear(year: Int): List<ApiMedia> {
-        val cached = cachedYearMedia[year]
+        val cached = cachedYearMedia.get(year)
         if (cached != null) return cached
 
         val server = prefs.serverUrl
@@ -934,10 +994,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 "max" to maxMs
             )
             val queryJson = api.serializeQuery(queryYear)
-            val result = api.search(server, queryJson, cookies, apiPrefix)
+            val result = executeAuthenticated { activeCookies, activePrefix ->
+                api.search(server, queryJson, activeCookies, activePrefix)
+            }
             val mediaList = deduplicateMedia(result.media.orEmpty())
             if (mediaList.isNotEmpty()) {
-                cachedYearMedia[year] = mediaList
+                cachedYearMedia.put(year, mediaList)
             }
             mediaList
         } catch (e: Exception) {
@@ -972,7 +1034,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     }
                     ApiSubFolder(
                         id = year,
-                        name = if (year > 0) "$year" else "Undated",
+                        name = if (year > 0) "$year" else str(R.string.undated),
                         path = "year:$year",
                         mediaCount = mediaList.size,
                         cache = ApiSubFolderCache(cover = cover)
@@ -980,7 +1042,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
                 ApiDirectory(
                     id = -1,
-                    name = "Gallery",
+                    name = str(R.string.gallery),
                     path = currentPathStr,
                     directories = yearSubFolders,
                     media = emptyList()
@@ -1011,7 +1073,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     }
                     ApiSubFolder(
                         id = year * 100 + month,
-                        name = if (month > 0) getMonthName(month) else "Undated",
+                        name = if (month > 0) getMonthName(month) else str(R.string.undated),
                         path = "year:$year/month:$month",
                         mediaCount = mediaList.size,
                         cache = ApiSubFolderCache(cover = cover)
@@ -1019,7 +1081,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
                 ApiDirectory(
                     id = -1,
-                    name = if (year > 0) "$year" else "Undated",
+                    name = if (year > 0) "$year" else str(R.string.undated),
                     path = currentPathStr,
                     directories = monthSubFolders,
                     media = emptyList()
@@ -1035,7 +1097,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
                 ApiDirectory(
                     id = -1,
-                    name = if (month > 0) "${getMonthName(month)} $year" else "Undated",
+                    name = if (month > 0) "${getMonthName(month)} $year" else str(R.string.undated),
                     path = currentPathStr,
                     directories = emptyList(),
                     media = monthMedia
@@ -1043,7 +1105,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             } else {
                 ApiDirectory(
                     id = -1,
-                    name = "Gallery",
+                    name = str(R.string.gallery),
                     path = currentPathStr,
                     directories = emptyList(),
                     media = uniqueMedia
@@ -1052,7 +1114,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         } catch (e: Exception) {
             ApiDirectory(
                 id = -1,
-                name = "Gallery",
+                name = str(R.string.gallery),
                 path = currentPathStr,
                 directories = emptyList(),
                 media = uniqueMedia
@@ -1081,8 +1143,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun refreshCurrentDirectory() {
-        directoryCache.clear()
-        cachedYearMedia.clear()
+        cachedYearMedia.evictAll()
         _isRefreshing.value = true
         // Safety timeout so refresh indicator is guaranteed to dismiss within 12 seconds max
         viewModelScope.launch {
@@ -1100,9 +1161,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     private suspend fun fetchAllMediaSilently(
         serverUrl: String,
-        rootPath: String,
-        cookies: String,
-        apiPrefix: String
+        rootPath: String
     ): List<ApiMedia> {
         val accumulatedMedia = java.util.concurrent.ConcurrentLinkedQueue<ApiMedia>()
         val visitedDirs = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
@@ -1111,8 +1170,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             if (!visitedDirs.add(path)) return
             val directory = try {
                 fetchSemaphore.withPermit {
-                    api.getGalleryContent(serverUrl, path, cookies, apiPrefix)
+                    executeAuthenticated { activeCookies, activePrefix ->
+                        api.getGalleryContent(serverUrl, path, activeCookies, activePrefix)
+                    }
                 }
+            } catch (e: com.example.data.UnauthorizedSessionException) {
+                throw e
             } catch (e: Exception) {
                 null
             } ?: return
@@ -1153,8 +1216,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun triggerSilentBackgroundSync(force: Boolean = false) {
         val server = prefs.serverUrl
-        val cookies = prefs.cookies
-        val apiPrefix = prefs.apiPrefix
         if (server.isEmpty()) return
 
         val rootPath = prefs.defaultRootPath
@@ -1172,9 +1233,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 if (force) {
                     _isRefreshing.value = true
                 }
-                val freshMediaList = fetchAllMediaSilently(server, cleanRoot, cookies, apiPrefix)
+                val freshMediaList = fetchAllMediaSilently(server, cleanRoot)
                 if (freshMediaList.isNotEmpty()) {
-                    cachedFlattenedMedia[cacheKey] = freshMediaList
+                    cachedFlattenedMedia.put(cacheKey, freshMediaList)
                     try {
                         repo.saveAllMedia(freshMediaList)
                     } catch (e: Exception) {
@@ -1189,7 +1250,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                             val filtered = filterFlattenedMedia(activePath, freshMediaList)
                             ApiDirectory(
                                 id = -1,
-                                name = if (activePath.isEmpty() || activePath == prefs.defaultRootPath) "Flattened Gallery" else activePath.substringAfterLast('/'),
+                                name = if (activePath.isEmpty() || activePath == prefs.defaultRootPath) str(R.string.flattened_gallery) else activePath.substringAfterLast('/'),
                                 path = activePath,
                                 directories = emptyList(),
                                 media = filtered
@@ -1217,7 +1278,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val path = currentPath
 
         if (server.isEmpty()) {
-            _galleryState.value = GalleryUiState.Error("No server configured.")
+            _galleryState.value = GalleryUiState.Error(str(R.string.no_server_configured))
             return
         }
 
@@ -1234,7 +1295,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     if (galleryViewMode.value == GalleryViewMode.DATE && (currentPath.startsWith("year:") || currentPath.contains("month:"))) {
                         val year = currentPath.substringAfter("year:").substringBefore("/").toIntOrNull() ?: 0
                         if (year > 0) {
-                            var yearMedia = cachedYearMedia[year]
+                            var yearMedia = cachedYearMedia.get(year)
                             if (yearMedia == null || yearMedia.isEmpty()) {
                                 // Try getting from Room DB or fast server query
                                 val dbMedia = repo.getAllMedia()
@@ -1247,7 +1308,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                             }
 
                             if (yearMedia != null && yearMedia.isNotEmpty()) {
-                                cachedYearMedia[year] = yearMedia
+                                cachedYearMedia.put(year, yearMedia)
                                 val dir = buildDateViewDirectory(currentPath, yearMedia)
                                 _galleryState.value = GalleryUiState.Success(sortDirectory(dir))
                             } else {
@@ -1274,7 +1335,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     val cacheKey = cleanRoot.ifEmpty { "ROOT" }
 
                     // 1. Lade sofort den letzten Stand (aus Speicher oder Room DB)
-                    var mediaList = cachedFlattenedMedia[cacheKey]
+                    var mediaList = cachedFlattenedMedia.get(cacheKey)
                     if (mediaList == null || mediaList.isEmpty()) {
                         val dbMedia = repo.getAllMedia()
                         if (dbMedia != null && dbMedia.isNotEmpty()) {
@@ -1288,7 +1349,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                             }
                             if (filteredDb.isNotEmpty()) {
                                 mediaList = deduplicateMedia(filteredDb)
-                                cachedFlattenedMedia[cacheKey] = mediaList
+                                cachedFlattenedMedia.put(cacheKey, mediaList)
                             }
                         }
                     }
@@ -1299,7 +1360,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                             val filteredMedia = filterFlattenedMedia(currentPath, mediaList)
                             ApiDirectory(
                                 id = -1,
-                                name = if (currentPath.isEmpty() || currentPath == prefs.defaultRootPath) "Flattened Gallery" else currentPath.substringAfterLast('/'),
+                                name = if (currentPath.isEmpty() || currentPath == prefs.defaultRootPath) str(R.string.flattened_gallery) else currentPath.substringAfterLast('/'),
                                 path = currentPath,
                                 directories = emptyList(),
                                 media = filteredMedia
@@ -1339,13 +1400,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 if (searchQuery.value.isNotEmpty()) {
                     val query = parseSearchStringToQuery(searchQuery.value)
                     val queryJson = api.serializeQuery(query)
-                    val searchResult = api.search(server, queryJson, cookies, apiPrefix)
+                    val searchResult = executeAuthenticated { activeCookies, activePrefix ->
+                        api.search(server, queryJson, activeCookies, activePrefix)
+                    }
                     val filteredMedia = searchResult.media.orEmpty().filter { !isMediaProtected(it) }
                     val sortedDirectory = sortDirectory(searchResult.copy(media = filteredMedia))
                     _galleryState.value = GalleryUiState.Success(sortedDirectory)
                 } else {
                     // Normal folder view
-                    val freshDirectory = api.getGalleryContent(server, path, cookies, apiPrefix)
+                    val freshDirectory = executeAuthenticated { activeCookies, activePrefix ->
+                        api.getGalleryContent(server, path, activeCookies, activePrefix)
+                    }
                     if (freshDirectory.media != null && searchQuery.value.isEmpty() && !isFlattened.value && galleryViewMode.value == GalleryViewMode.FOLDER) {
                         repo.saveDirectory(path, freshDirectory.media)
                     }
@@ -1355,8 +1420,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (_galleryState.value !is GalleryUiState.Success) {
-                    _galleryState.value = GalleryUiState.Error(e.localizedMessage ?: "Failed to fetch gallery content")
+                handleApiError(e) { msg ->
+                    if (_galleryState.value !is GalleryUiState.Success) {
+                        _galleryState.value = GalleryUiState.Error(msg.ifEmpty { str(R.string.failed_fetch_gallery) })
+                    }
                 }
             } finally {
                 if (!isDateOrFlattened) {
@@ -1430,7 +1497,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     // --- Persons Functionality ---
     fun loadPersons() {
         val server = prefs.serverUrl ?: run {
-            _personsState.value = PersonsUiState.Error("No server configured.")
+            _personsState.value = PersonsUiState.Error(str(R.string.no_server_configured))
             return
         }
         val cookies = prefs.cookies
@@ -1438,7 +1505,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         _personsState.value = PersonsUiState.Loading
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val backendPersons = api.getPersons(server, cookies, apiPrefix)
+                val backendPersons = executeAuthenticated { activeCookies, activePrefix ->
+                    api.getPersons(server, activeCookies, activePrefix)
+                }
                 val localFavs = prefs.getFavoritePersons()
                 
                 // Synchronize and construct the final person list
@@ -1456,7 +1525,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
                 _personsState.value = PersonsUiState.Success(sortPersons(persons))
             } catch (e: Exception) {
-                _personsState.value = PersonsUiState.Error(e.localizedMessage ?: "Failed to fetch persons")
+                handleApiError(e) { msg ->
+                    _personsState.value = PersonsUiState.Error(msg.ifEmpty { str(R.string.failed_fetch_persons) })
+                }
             }
         }
     }
@@ -1532,12 +1603,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     mapOf("type" to 105, "value" to person.name, "matchType" to 1)
                 }
                 val searchQueryJson = api.serializeQuery(searchQuery)
-                val dummyDir = api.search(server, searchQueryJson, cookies, apiPrefix)
+                val dummyDir = executeAuthenticated { activeCookies, activePrefix ->
+                    api.search(server, searchQueryJson, activeCookies, activePrefix)
+                }
                 val filteredMedia = dummyDir.media.orEmpty().filter { !isMediaFromProtectedFolder(it) }
                 val sortedDirectory = sortDirectory(dummyDir.copy(media = filteredMedia))
                 _personContentState.value = GalleryUiState.Success(sortedDirectory)
             } catch (e: Exception) {
-                _personContentState.value = GalleryUiState.Error(e.localizedMessage ?: "Failed to fetch person content")
+                handleApiError(e) { msg ->
+                    _personContentState.value = GalleryUiState.Error(msg.ifEmpty { str(R.string.failed_fetch_person_content) })
+                }
             }
         }
     }
@@ -1553,9 +1628,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val server = prefs.serverUrl ?: return@launch
-                val cookies = prefs.cookies
-                val apiPrefix = prefs.apiPrefix
-                val backendPersons = api.getPersons(server, cookies, apiPrefix)
+                val backendPersons = executeAuthenticated { activeCookies, activePrefix ->
+                    api.getPersons(server, activeCookies, activePrefix)
+                }
                 val localFavs = prefs.getFavoritePersons()
                 val persons = backendPersons.map { person ->
                     val isLocalFav = localFavs.contains(person.name)
@@ -1567,7 +1642,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
                 _personsState.value = PersonsUiState.Success(sortPersons(persons))
             } catch (e: Exception) {
-                // Keep showing existing data
+                handleApiError(e)
             } finally {
                 _isPersonsRefreshing.value = false
             }
@@ -1585,8 +1660,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val server = prefs.serverUrl ?: return@launch
-                val cookies = prefs.cookies
-                val apiPrefix = prefs.apiPrefix
                 val searchQuery: Map<String, Any?> = if (prefs.peopleFallbackToKeywords) {
                     mapOf(
                         "type" to 2,
@@ -1599,12 +1672,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     mapOf("type" to 105, "value" to person.name, "matchType" to 1)
                 }
                 val searchQueryJson = api.serializeQuery(searchQuery)
-                val dummyDir = api.search(server, searchQueryJson, cookies, apiPrefix)
+                val dummyDir = executeAuthenticated { activeCookies, activePrefix ->
+                    api.search(server, searchQueryJson, activeCookies, activePrefix)
+                }
                 val filteredMedia = dummyDir.media.orEmpty().filter { !isMediaFromProtectedFolder(it) }
                 val sortedDirectory = sortDirectory(dummyDir.copy(media = filteredMedia))
                 _personContentState.value = GalleryUiState.Success(sortedDirectory)
             } catch (e: Exception) {
-                // Keep showing existing data
+                handleApiError(e)
             } finally {
                 _isPersonContentRefreshing.value = false
             }
@@ -1613,21 +1688,23 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun loadAlbums() {
         val server = prefs.serverUrl
-        val cookies = prefs.cookies
-        val apiPrefix = prefs.apiPrefix
 
         if (server.isEmpty()) {
-            _albumsState.value = AlbumsUiState.Error("No server configured.")
+            _albumsState.value = AlbumsUiState.Error(str(R.string.no_server_configured))
             return
         }
 
         _albumsState.value = AlbumsUiState.Loading
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val albums = api.getAlbums(server, cookies, apiPrefix)
+                val albums = executeAuthenticated { activeCookies, activePrefix ->
+                    api.getAlbums(server, activeCookies, activePrefix)
+                }
                 _albumsState.value = AlbumsUiState.Success(sortAlbums(albums))
             } catch (e: Exception) {
-                _albumsState.value = AlbumsUiState.Error(e.localizedMessage ?: "Failed to fetch albums")
+                handleApiError(e) { msg ->
+                    _albumsState.value = AlbumsUiState.Error(msg.ifEmpty { str(R.string.failed_fetch_albums) })
+                }
             }
         }
     }
@@ -1638,44 +1715,48 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun saveSearchAsAlbum(name: String, rawQuery: String = searchQuery.value) {
         if (!_canManageAlbums.value) {
-            _saveAlbumState.value = SaveAlbumUiState.Error("You are not authorized to save searches as albums.")
+            _saveAlbumState.value = SaveAlbumUiState.Error(str(R.string.not_authorized_save_album))
             return
         }
         val trimmedName = name.trim()
         if (trimmedName.isEmpty()) {
-            _saveAlbumState.value = SaveAlbumUiState.Error("Album name cannot be empty.")
+            _saveAlbumState.value = SaveAlbumUiState.Error(str(R.string.album_name_empty))
             return
         }
         val parsedQuery = parseSearchStringToQuery(rawQuery)
         if (parsedQuery.isEmpty()) {
-            _saveAlbumState.value = SaveAlbumUiState.Error("Search query cannot be empty.")
+            _saveAlbumState.value = SaveAlbumUiState.Error(str(R.string.search_query_empty))
             return
         }
         val server = prefs.serverUrl
         val cookies = prefs.cookies
         val apiPrefix = prefs.apiPrefix
         if (server.isEmpty()) {
-            _saveAlbumState.value = SaveAlbumUiState.Error("No server configured.")
+            _saveAlbumState.value = SaveAlbumUiState.Error(str(R.string.no_server_configured))
             return
         }
 
         _saveAlbumState.value = SaveAlbumUiState.Saving
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                api.createSavedSearchAlbum(
-                    serverUrl = server,
-                    name = trimmedName,
-                    searchQuery = parsedQuery,
-                    cookies = cookies,
-                    apiPrefix = apiPrefix
-                )
+                executeAuthenticated { activeCookies, activePrefix ->
+                    api.createSavedSearchAlbum(
+                        serverUrl = server,
+                        name = trimmedName,
+                        searchQuery = parsedQuery,
+                        cookies = activeCookies,
+                        apiPrefix = activePrefix
+                    )
+                }
                 _saveAlbumState.value = SaveAlbumUiState.Success(trimmedName)
                 loadAlbums()
             } catch (e: Exception) {
-                _saveAlbumState.value = SaveAlbumUiState.Error(
-                    e.localizedMessage ?: "Failed to save search as album"
-                )
-                refreshUserPermissions(force = true)
+                handleApiError(e) { msg ->
+                    _saveAlbumState.value = SaveAlbumUiState.Error(
+                        msg.ifEmpty { str(R.string.failed_save_album) }
+                    )
+                    refreshUserPermissions(force = true)
+                }
             }
         }
     }
@@ -1686,30 +1767,30 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun deleteAlbum(album: ApiAlbum) {
         if (!_canManageAlbums.value) {
-            _deleteAlbumState.value = DeleteAlbumUiState.Error("You are not authorized to delete albums.")
+            _deleteAlbumState.value = DeleteAlbumUiState.Error(str(R.string.not_authorized_delete_album))
             return
         }
         if (album.locked) {
-            _deleteAlbumState.value = DeleteAlbumUiState.Error("Locked albums cannot be deleted.")
+            _deleteAlbumState.value = DeleteAlbumUiState.Error(str(R.string.locked_album_cannot_delete))
             return
         }
         val server = prefs.serverUrl
-        val cookies = prefs.cookies
-        val apiPrefix = prefs.apiPrefix
         if (server.isEmpty()) {
-            _deleteAlbumState.value = DeleteAlbumUiState.Error("No server configured.")
+            _deleteAlbumState.value = DeleteAlbumUiState.Error(str(R.string.no_server_configured))
             return
         }
 
         _deleteAlbumState.value = DeleteAlbumUiState.Deleting
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                api.deleteAlbum(
-                    serverUrl = server,
-                    albumId = album.id,
-                    cookies = cookies,
-                    apiPrefix = apiPrefix
-                )
+                executeAuthenticated { activeCookies, activePrefix ->
+                    api.deleteAlbum(
+                        serverUrl = server,
+                        albumId = album.id,
+                        cookies = activeCookies,
+                        apiPrefix = activePrefix
+                    )
+                }
                 if (_selectedAlbum.value?.id == album.id) {
                     _selectedAlbum.value = null
                     _albumContentState.value = null
@@ -1723,10 +1804,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 _deleteAlbumState.value = DeleteAlbumUiState.Success(album.name)
                 loadAlbums()
             } catch (e: Exception) {
-                _deleteAlbumState.value = DeleteAlbumUiState.Error(
-                    e.localizedMessage ?: "Failed to delete album"
-                )
-                refreshUserPermissions(force = true)
+                handleApiError(e) { msg ->
+                    _deleteAlbumState.value = DeleteAlbumUiState.Error(
+                        msg.ifEmpty { str(R.string.failed_delete_album) }
+                    )
+                    refreshUserPermissions(force = true)
+                }
             }
         }
     }
@@ -1742,20 +1825,22 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     private fun loadAlbumContent(album: ApiAlbum) {
         val server = prefs.serverUrl
-        val cookies = prefs.cookies
-        val apiPrefix = prefs.apiPrefix
         val query = album.searchQuery ?: return
 
         _albumContentState.value = GalleryUiState.Loading
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val queryJson = api.serializeQuery(query)
-                val directory = api.search(server, queryJson, cookies, apiPrefix)
+                val directory = executeAuthenticated { activeCookies, activePrefix ->
+                    api.search(server, queryJson, activeCookies, activePrefix)
+                }
                 val filteredMedia = directory.media.orEmpty().filter { !isMediaFromProtectedFolder(it) }
                 val sortedDirectory = sortDirectory(directory.copy(media = filteredMedia))
                 _albumContentState.value = GalleryUiState.Success(sortedDirectory)
             } catch (e: Exception) {
-                _albumContentState.value = GalleryUiState.Error(e.localizedMessage ?: "Failed to load album content")
+                handleApiError(e) { msg ->
+                    _albumContentState.value = GalleryUiState.Error(msg.ifEmpty { str(R.string.failed_load_album_content) })
+                }
             }
         }
     }
@@ -1771,14 +1856,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val server = prefs.serverUrl
-                val cookies = prefs.cookies
-                val apiPrefix = prefs.apiPrefix
                 if (server.isNotEmpty()) {
-                    val albums = api.getAlbums(server, cookies, apiPrefix)
+                    val albums = executeAuthenticated { activeCookies, activePrefix ->
+                        api.getAlbums(server, activeCookies, activePrefix)
+                    }
                     _albumsState.value = AlbumsUiState.Success(sortAlbums(albums))
                 }
             } catch (e: Exception) {
-                // Keep showing existing albums
+                handleApiError(e)
             } finally {
                 _isAlbumsRefreshing.value = false
             }
@@ -1797,17 +1882,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val server = prefs.serverUrl
-                val cookies = prefs.cookies
-                val apiPrefix = prefs.apiPrefix
                 if (server.isNotEmpty()) {
                     val queryJson = api.serializeQuery(query)
-                    val directory = api.search(server, queryJson, cookies, apiPrefix)
+                    val directory = executeAuthenticated { activeCookies, activePrefix ->
+                        api.search(server, queryJson, activeCookies, activePrefix)
+                    }
                     val filteredMedia = directory.media.orEmpty().filter { !isMediaFromProtectedFolder(it) }
                     val sortedDirectory = sortDirectory(directory.copy(media = filteredMedia))
                     _albumContentState.value = GalleryUiState.Success(sortedDirectory)
                 }
             } catch (e: Exception) {
-                // Keep showing existing content
+                handleApiError(e)
             } finally {
                 _isAlbumContentRefreshing.value = false
             }
@@ -1817,12 +1902,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     // --- Rediscover (Top Picks) Functionality ---
     fun loadRediscover() {
         val server = prefs.serverUrl
-        val cookies = prefs.cookies
-        val apiPrefix = prefs.apiPrefix
         val days = rediscoverDays.value
 
         if (server.isEmpty()) {
-            _rediscoverState.value = RediscoverUiState.Error("No server configured.")
+            _rediscoverState.value = RediscoverUiState.Error(str(R.string.no_server_configured))
             return
         }
 
@@ -1835,18 +1918,18 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     "daysLength" to days,
                     "frequency" to 3
                 )
-                val everyYearDir = try {
-                    api.search(server, api.serializeQuery(queryEveryYear), cookies, apiPrefix)
-                } catch (e: Exception) {
-                    null
+                val everyYearDir = executeAuthenticated { activeCookies, activePrefix ->
+                    api.search(server, api.serializeQuery(queryEveryYear), activeCookies, activePrefix)
                 }
 
                 // Combine results
                 val allMedia = mutableListOf<ApiMedia>()
-                everyYearDir?.media?.let { allMedia.addAll(it) }
+                everyYearDir.media?.let { allMedia.addAll(it) }
 
                 // Deduplicate by name and parent path and filter out protected media
-                val uniqueMedia = allMedia.distinctBy { getMediaFullPath(it) }.filter { !isMediaProtected(it) }
+                val uniqueMedia = com.example.data.LivePhotoHelper.pairLivePhotos(
+                    allMedia.distinctBy { getMediaFullPath(it) }
+                ).filter { !isMediaProtected(it) }
 
                 // Group by year, excluding the current year and media with invalid creationDate
                 val currentYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
@@ -1863,7 +1946,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
                 _rediscoverState.value = RediscoverUiState.Success(grouped)
             } catch (e: Exception) {
-                _rediscoverState.value = RediscoverUiState.Error(e.localizedMessage ?: "Failed to load rediscover content")
+                handleApiError(e) { msg ->
+                    _rediscoverState.value = RediscoverUiState.Error(msg.ifEmpty { str(R.string.failed_load_rediscover) })
+                }
             }
         }
     }
@@ -2100,17 +2185,28 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     "${context.packageName}.provider",
                     file
                 )
-                
-                _shareProgress.value = -1f // Reset
+
+                _shareProgress.value = -1f
                 val intent = Intent(Intent.ACTION_SEND).apply {
                     type = if (media.isVideo) "video/*" else "image/*"
                     putExtra(Intent.EXTRA_STREAM, uri)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
-                context.startActivity(Intent.createChooser(intent, "Share Media via"))
-            } catch (e: Exception) {
-                // Handle download error
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    context.startActivity(Intent.createChooser(intent, str(R.string.share_media_via)))
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
                 _shareProgress.value = -1f
+                throw e
+            } catch (e: Exception) {
+                _shareProgress.value = -1f
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(
+                        context,
+                        context.getString(R.string.download_failed_single, e.localizedMessage ?: ""),
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
             }
         }
     }
@@ -2125,22 +2221,27 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         selected.forEach { media ->
             try {
                 val url = getOriginalMediaUrl(media)
-                val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))
-                    .setTitle(media.name)
-                    .setDescription("Downloading file from PiGallery2")
+                val safeFileName = media.name.substringAfterLast('/').ifBlank { "media_${media.id ?: 0}" }
+                val request = android.app.DownloadManager.Request(url.toUri())
+                    .setTitle(safeFileName)
+                    .setDescription(context.getString(R.string.download_description))
                     .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                    .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, media.name)
+                    .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, safeFileName)
                     .apply {
                         if (cookies.isNotEmpty()) {
                             addRequestHeader("Cookie", cookies)
                         }
                     }
                 downloadManager.enqueue(request)
-            } catch (e: Exception) {
-                // Handle error
+            } catch (_: Exception) {
+                // Continue with remaining items
             }
         }
-        android.widget.Toast.makeText(context, "Download started for ${selected.size} items", android.widget.Toast.LENGTH_SHORT).show()
+        android.widget.Toast.makeText(
+            context,
+            context.getString(R.string.download_started_multiple, selected.size),
+            android.widget.Toast.LENGTH_SHORT
+        ).show()
         exitSelectMode()
     }
 
@@ -2152,11 +2253,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         shareJob = viewModelScope.launch(Dispatchers.IO) {
             _shareProgress.value = 0f
             val uris = mutableListOf<android.net.Uri>()
-            
+            var lastError: Exception? = null
+
             selected.forEachIndexed { index, media ->
                 try {
                     val file = downloadMediaToCache(context, media) { fileProgress ->
-                        // Combine single file download progress with overall selection index
                         val overallProgress = (index.toFloat() + fileProgress) / selected.size
                         _shareProgress.value = overallProgress
                     }
@@ -2166,21 +2267,33 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         file
                     )
                     uris.add(uri)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    _shareProgress.value = -1f
+                    throw e
                 } catch (e: Exception) {
-                    // Handle download error
+                    lastError = e
                 }
             }
-            
-            _shareProgress.value = -1f // Reset
 
-            val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
-                type = "image/*"
-                putParcelableArrayListExtra(Intent.EXTRA_STREAM, java.util.ArrayList(uris))
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            _shareProgress.value = -1f
+
+            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                if (uris.isEmpty()) {
+                    android.widget.Toast.makeText(
+                        context,
+                        context.getString(R.string.download_failed_single, lastError?.localizedMessage ?: ""),
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                } else {
+                    val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                        type = if (selected.all { it.isVideo }) "video/*" else if (selected.none { it.isVideo }) "image/*" else "*/*"
+                        putParcelableArrayListExtra(Intent.EXTRA_STREAM, java.util.ArrayList(uris))
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    context.startActivity(Intent.createChooser(intent, str(R.string.share_photos_via)))
+                    exitSelectMode()
+                }
             }
-            context.startActivity(Intent.createChooser(intent, "Share Photos via"))
-            
-            exitSelectMode()
         }
     }
 
@@ -2190,32 +2303,46 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         onProgress: ((Float) -> Unit)? = null
     ): java.io.File {
         val url = getOriginalMediaUrl(media)
-        val file = java.io.File(context.cacheDir, media.name)
-        
-        val response = api.download(url, prefs.cookies)
+        val safeName = media.name.substringAfterLast('/').ifBlank { "media_${media.id ?: 0}" }
+        val file = java.io.File(context.cacheDir, safeName)
+
+        val response = executeAuthenticated { activeCookies, _ ->
+            api.download(url, activeCookies).also { resp ->
+                if (resp.code == 401) {
+                    resp.close()
+                    throw com.example.data.UnauthorizedSessionException("Unauthorized. Session might have expired.")
+                }
+            }
+        }
         response.use { resp ->
-            resp.body?.let { body ->
-                val totalBytes = body.contentLength()
+            if (!resp.isSuccessful) {
+                throw IOException("Server returned error code: ${resp.code}")
+            }
+            val body = resp.body ?: throw IOException("Empty download response")
+            val totalBytes = body.contentLength()
+            try {
                 body.byteStream().use { inputStream ->
                     java.io.FileOutputStream(file).use { outputStream ->
                         val buffer = ByteArray(8192)
                         var bytesRead: Int
                         var totalBytesRead = 0L
-                        
+
                         while (inputStream.read(buffer).also { bytesRead = it } != -1) {
                             outputStream.write(buffer, 0, bytesRead)
                             totalBytesRead += bytesRead
                             if (totalBytes > 0) {
-                                val progress = totalBytesRead.toFloat() / totalBytes
-                                onProgress?.invoke(progress)
+                                onProgress?.invoke(totalBytesRead.toFloat() / totalBytes)
                             }
                         }
                         outputStream.flush()
                     }
                 }
+            } catch (e: Exception) {
+                file.delete()
+                throw e
             }
         }
-        
+
         return file
     }
 
@@ -2224,10 +2351,41 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     @Volatile
     private var lastUrlCheckTime: Long = 0L
 
+    fun invalidateActiveServerUrl(triggerProbe: Boolean = false) {
+        cachedActiveUrl = null
+        lastUrlCheckTime = 0L
+        if (triggerProbe) {
+            val primary = PiGalleryApi.ensureHttpUrl(prefs.serverUrl)
+            val local = PiGalleryApi.ensureHttpUrl(prefs.localServerUrl)
+            if (local.isNotEmpty()) {
+                triggerUrlProbeAsync(local, primary)
+            }
+        }
+    }
+
+    private fun triggerUrlProbeAsync(local: String, primary: String) {
+        if (urlProbeJob?.isActive == true) return
+        lastUrlCheckTime = System.currentTimeMillis()
+        urlProbeJob = viewModelScope.launch(Dispatchers.IO) {
+            val resolved = try {
+                val uri = java.net.URI(local)
+                val host = uri.host ?: ""
+                val port = if (uri.port != -1) uri.port else 80
+                java.net.Socket().use { socket ->
+                    socket.connect(java.net.InetSocketAddress(host, port), 250)
+                }
+                local
+            } catch (_: Exception) {
+                primary
+            }
+            cachedActiveUrl = resolved
+        }
+    }
+
     // --- URL Construction and Media Resolution ---
     fun getActiveServerUrl(): String {
-        val primary = prefs.serverUrl.let { if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it }.trimEnd('/')
-        val local = prefs.localServerUrl.let { if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it }.trimEnd('/')
+        val primary = PiGalleryApi.ensureHttpUrl(prefs.serverUrl)
+        val local = PiGalleryApi.ensureHttpUrl(prefs.localServerUrl)
         if (local.isEmpty()) return primary
 
         val now = System.currentTimeMillis()
@@ -2238,22 +2396,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
         // Trigger asynchronous background check so the UI thread is never blocked during scrolling
         if (now - lastUrlCheckTime >= 20_000L) {
-            lastUrlCheckTime = now
-            viewModelScope.launch(Dispatchers.IO) {
-                val resolved = try {
-                    val uri = java.net.URI(local)
-                    val host = uri.host ?: ""
-                    val port = if (uri.port != -1) uri.port else 80
-                    val socket = java.net.Socket()
-                    socket.use {
-                        it.connect(java.net.InetSocketAddress(host, port), 250)
-                    }
-                    local
-                } catch (e: Exception) {
-                    primary
-                }
-                cachedActiveUrl = resolved
-            }
+            triggerUrlProbeAsync(local, primary)
         }
 
         return cached ?: primary
@@ -2294,6 +2437,105 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
         } else {
             "$sanitizedBase$apiPrefix/gallery/content/$relativePath"
+        }
+    }
+
+    fun getLiveVideoUrl(media: ApiMedia): String? {
+        val companionPath = com.example.data.LivePhotoHelper.resolveCompanionVideoPath(media, currentPath)
+            ?: return null
+        val sanitizedBase = getActiveServerUrl()
+        val apiPrefix = prefs.apiPrefix
+        val relativePath = encodePath(companionPath)
+        return "$sanitizedBase$apiPrefix/gallery/content/$relativePath"
+    }
+
+    private fun isSessionUnauthorizedError(e: Exception): Boolean {
+        if (e is com.example.data.UnauthorizedSessionException) return true
+        val msg = e.localizedMessage ?: e.message ?: ""
+        return msg.contains("Unauthorized", ignoreCase = true) ||
+            msg.contains("Session might have expired", ignoreCase = true) ||
+            msg.contains("error code: 401", ignoreCase = true)
+    }
+
+    /**
+     * Executes an authenticated PiGallery2 API call.
+     * On HTTP 401 (UnauthorizedSessionException), attempts one serialized silent re-login
+     * using stored credentials before falling back to a clean logout (preserving settings).
+     */
+    internal suspend fun <T> executeAuthenticated(
+        block: suspend (cookies: String, apiPrefix: String) -> T
+    ): T {
+        val initialCookies = prefs.cookies
+        val initialPrefix = prefs.apiPrefix
+        return try {
+            block(initialCookies, initialPrefix)
+        } catch (e: Exception) {
+            if (!isSessionUnauthorizedError(e)) throw e
+
+            val refreshed = trySilentReauth(failedCookies = initialCookies)
+            if (refreshed) {
+                try {
+                    block(prefs.cookies, prefs.apiPrefix)
+                } catch (retryErr: Exception) {
+                    if (isSessionUnauthorizedError(retryErr)) {
+                        handleSessionExpired()
+                    }
+                    throw retryErr
+                }
+            } else {
+                handleSessionExpired()
+                throw e
+            }
+        }
+    }
+
+    private suspend fun trySilentReauth(failedCookies: String): Boolean {
+        return reauthMutex.withLock {
+            if (!prefs.isLoggedIn) return@withLock false
+            // Another coroutine may have already refreshed the session while we waited
+            val currentCookies = prefs.cookies
+            if (currentCookies.isNotBlank() && currentCookies != failedCookies) {
+                return@withLock true
+            }
+            val server = prefs.serverUrl
+            val user = prefs.username
+            val pass = prefs.password
+            if (server.isBlank() || user.isBlank() || pass.isBlank()) {
+                return@withLock false
+            }
+            try {
+                val (newCookies, newPrefix) = api.login(server, user, pass)
+                if (newCookies.isNotBlank()) {
+                    prefs.cookies = newCookies
+                    prefs.apiPrefix = newPrefix
+                    prefs.isLoggedIn = true
+                    _userRole.value = prefs.userRole
+                    _canManageAlbums.value = computeCanManageAlbums()
+                    true
+                } else {
+                    false
+                }
+            } catch (_: Exception) {
+                false
+            }
+        }
+    }
+
+    private fun handleSessionExpired() {
+        if (isLoggedIn.value || prefs.isLoggedIn) {
+            logout()
+            _loginState.value = LoginUiState.Error(str(R.string.session_expired))
+        }
+    }
+
+    private fun handleApiError(e: Exception, onNonAuthError: ((String) -> Unit)? = null) {
+        val msg = e.localizedMessage ?: e.message ?: ""
+        if (isSessionUnauthorizedError(e)) {
+            handleSessionExpired()
+        } else if (onNonAuthError != null) {
+            onNonAuthError(msg)
+        } else if (_galleryState.value !is GalleryUiState.Success) {
+            _galleryState.value = GalleryUiState.Error(msg.ifEmpty { str(R.string.failed_fetch_content) })
         }
     }
 
@@ -2340,9 +2582,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun logout() {
-        directoryCache.clear()
-        cachedFlattenedMedia.clear()
-        cachedYearMedia.clear()
+        cachedFlattenedMedia.evictAll()
+        cachedYearMedia.evictAll()
         prefs.clearSession()
         isLoggedIn.value = false
         savedServerUrl.value = prefs.serverUrl
@@ -2390,8 +2631,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private fun formatSize(size: Long): String {
         if (size <= 0) return "0 B"
         val units = arrayOf("B", "KB", "MB", "GB", "TB")
-        val digitGroups = (kotlin.math.log10(size.toDouble()) / kotlin.math.log10(1024.0)).toInt()
-        return String.format("%.2f %s", size / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
+        val digitGroups = (kotlin.math.log10(size.toDouble()) / kotlin.math.log10(1024.0))
+            .toInt()
+            .coerceIn(0, units.lastIndex)
+        return String.format(
+            java.util.Locale.getDefault(),
+            "%.2f %s",
+            size / Math.pow(1024.0, digitGroups.toDouble()),
+            units[digitGroups]
+        )
     }
 
     @OptIn(coil.annotation.ExperimentalCoilApi::class)
@@ -2434,8 +2682,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 e.printStackTrace()
             }
 
-            directoryCache.clear()
-            cachedFlattenedMedia.clear()
+            cachedFlattenedMedia.evictAll()
+            cachedYearMedia.evictAll()
+            lastBackgroundSyncTime.clear()
 
             updateCacheSize()
         }
@@ -2458,7 +2707,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch(Dispatchers.IO) {
             _updateState.value = UpdateState.Checking
             try {
-                val client = okhttp3.OkHttpClient.Builder()
+                val client = api.client.newBuilder()
+                    .cache(null)
                     .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
                     .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
                     .build()
@@ -2469,16 +2719,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
-                        _updateState.value = UpdateState.Error("Failed to check for updates (${response.code})")
+                        _updateState.value = UpdateState.Error(str(R.string.failed_check_updates, response.code))
                         return@launch
                     }
                     val bodyString = response.body?.string() ?: ""
                     val json = org.json.JSONObject(bodyString)
                     val tagName = json.optString("tag_name", json.optString("tagName", "v1.0.0"))
                     val htmlUrl = json.optString("html_url", "https://github.com/dasmaetthes/pigallery2_android/releases")
-                    val releaseNotes = json.optString("body", "No release notes provided.")
+                    val releaseNotes = json.optString("body").ifBlank { str(R.string.no_release_notes) }
 
-                    val currentVersion = try { com.example.BuildConfig.VERSION_NAME } catch (e: Exception) { "2.7" } ?: "2.7"
+                    val currentVersion = com.example.BuildConfig.VERSION_NAME.ifBlank { "2.7" }
                     val cleanRemote = tagName.removePrefix("v").trim()
                     val cleanCurrent = currentVersion.removePrefix("v").trim()
 
@@ -2491,25 +2741,25 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
             } catch (e: Exception) {
-                _updateState.value = UpdateState.Error(e.localizedMessage ?: "Network error checking for updates")
+                _updateState.value = UpdateState.Error(e.localizedMessage ?: str(R.string.network_error_updates))
             }
         }
     }
 
     fun getMonthName(month: Int): String {
         return when (month) {
-            1 -> "Januar"
-            2 -> "Februar"
-            3 -> "März"
-            4 -> "April"
-            5 -> "Mai"
-            6 -> "Juni"
-            7 -> "Juli"
-            8 -> "August"
-            9 -> "September"
-            10 -> "Oktober"
-            11 -> "November"
-            12 -> "Dezember"
+            1 -> str(R.string.month_1)
+            2 -> str(R.string.month_2)
+            3 -> str(R.string.month_3)
+            4 -> str(R.string.month_4)
+            5 -> str(R.string.month_5)
+            6 -> str(R.string.month_6)
+            7 -> str(R.string.month_7)
+            8 -> str(R.string.month_8)
+            9 -> str(R.string.month_9)
+            10 -> str(R.string.month_10)
+            11 -> str(R.string.month_11)
+            12 -> str(R.string.month_12)
             else -> "$month"
         }
     }
@@ -2518,8 +2768,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch(Dispatchers.IO) {
             networkConnectionInfo.value = networkConnectionInfo.value.copy(isTesting = true)
 
-            val primaryUrl = prefs.serverUrl.let { if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it }.trimEnd('/')
-            val localUrl = prefs.localServerUrl.let { if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it }.trimEnd('/')
+            val primaryUrl = PiGalleryApi.ensureHttpUrl(prefs.serverUrl)
+            val localUrl = PiGalleryApi.ensureHttpUrl(prefs.localServerUrl)
 
             var localStatus = ServerRouteState.NOT_CONFIGURED
             var localLatency: Long? = null
