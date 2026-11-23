@@ -48,6 +48,8 @@ This application leverages modern Android and open-source libraries:
 - **Leaflet** (*BSD-2-Clause*) — Interactive map rendering for geotagged photos and videos.
 - **Leaflet.markercluster & Leaflet.PolylineDecorator** (*MIT*) — Marker clustering and path visualization in the interactive map browser.
 
+Apache 2.0-licensed libraries are subject to the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0).
+
 ---
 
 ## 💡 Inspiration & Credits
