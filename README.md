@@ -36,13 +36,17 @@ This client delivers a fluid and beautifully designed user interface, allowing y
 
 ## 🛠️ Built with Open Source Software
 
-This application leverages modern Android libraries:
+This application leverages modern Android and open-source libraries:
 
-- **Jetpack Compose & Material 3** — Modern declarative UI toolkit with adaptive components and dynamic theming.
-- **Kotlin & Kotlin Coroutines** — Type-safe, expressive programming language with robust asynchronous state management.
-- **Retrofit & OkHttp** — Fast, type-safe REST client for efficient, cookie-persistent communications with the PiGallery2 API.
-- **Moshi** — Modern JSON library for Kotlin and Java to parse complex API metadata.
-- **Coil Image Loader** — Fast, memory-efficient image loading library designed specifically for Jetpack Compose.
+- **Android Jetpack, Compose, Material 3, DataStore & Biometric** (*Apache 2.0*) — Modern declarative UI toolkit with adaptive components, dynamic theming, preferences storage, and biometric app lock.
+- **AndroidX Media3 / ExoPlayer** (*Apache 2.0*) — Flexible media playback for videos and Live Photos, backed by OkHttp networking.
+- **Room Database** (*Apache 2.0*) — Local SQLite persistence for offline metadata caching and faster gallery browsing.
+- **Kotlin & Kotlin Coroutines** (*Apache 2.0*) — Type-safe, expressive programming language with structured asynchronous state management.
+- **Coil Image Loader** (*Apache 2.0*) — Fast, memory- and disk-cached image loading library designed for Jetpack Compose.
+- **OkHttp** (*Apache 2.0*) — Efficient HTTP client for cookie-persistent communication with the PiGallery2 API and media streaming.
+- **Moshi** (*Apache 2.0*) — Modern JSON library for Kotlin to parse API responses and media metadata.
+- **Leaflet** (*BSD-2-Clause*) — Interactive map rendering for geotagged photos and videos.
+- **Leaflet.markercluster & Leaflet.PolylineDecorator** (*MIT*) — Marker clustering and path visualization in the interactive map browser.
 
 ---
 
