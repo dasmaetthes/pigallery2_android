@@ -56,6 +56,24 @@ class SearchHistoryManager(private val context: Context) {
         }
     }
     
+    suspend fun removeSearchQuery(query: String) {
+        context.dataStore.edit { preferences ->
+            val jsonStr = preferences[HISTORY_KEY] ?: "[]"
+            val array = JSONArray(jsonStr)
+            val list = mutableListOf<String>()
+            for (i in 0 until array.length()) {
+                list.add(array.getString(i))
+            }
+            if (list.remove(query)) {
+                if (list.isEmpty()) {
+                    preferences.remove(HISTORY_KEY)
+                } else {
+                    preferences[HISTORY_KEY] = JSONArray(list).toString()
+                }
+            }
+        }
+    }
+
     suspend fun clearHistory() {
         context.dataStore.edit { preferences ->
             preferences.remove(HISTORY_KEY)

@@ -125,7 +125,7 @@ fun GalleryContentGrid(
     }
 
     LaunchedEffect(subfolders, mediaList) {
-        if (isTv && (subfolders.isNotEmpty() || mediaList.isNotEmpty())) {
+        if (isTv && (subfolders.isNotEmpty() || mediaList.isNotEmpty()) && state.firstVisibleItemIndex == 0) {
             try {
                 delay(100)
                 firstItemFocusRequester.requestFocus()

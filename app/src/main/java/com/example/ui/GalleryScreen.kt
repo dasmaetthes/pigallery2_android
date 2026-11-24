@@ -10,7 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
@@ -63,6 +64,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
 import androidx.compose.ui.res.stringResource
@@ -862,7 +864,6 @@ fun GalleryTabContent(
     val showSearchSuggestions by viewModel.showSearchSuggestions.collectAsState()
     val localSearchHistory by viewModel.localSearchHistory.collectAsState(initial = emptyList())
     val canManageAlbums by viewModel.canManageAlbums.collectAsState()
-    val gridState = rememberLazyGridState()
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (isSearchActive && showSearchSuggestions) {
@@ -881,6 +882,12 @@ fun GalleryTabContent(
                 onHistoryClick = { query ->
                     viewModel.updateSearchQueryText(query)
                     viewModel.executeSearch()
+                },
+                onRemoveHistoryItem = { query ->
+                    viewModel.removeSearchHistoryItem(query)
+                },
+                onClearHistory = {
+                    viewModel.clearSearchHistory()
                 },
                 onExecuteSearch = { viewModel.executeSearch() },
                 onSaveAsAlbum = onSaveSearchAsAlbum,
@@ -940,15 +947,28 @@ fun GalleryTabContent(
                                     if (isSearchActive) stringResource(R.string.no_search_results_subtitle) else stringResource(R.string.folder_empty_subtitle)
                                 )
                             } else {
-                                GalleryContentGrid(
-                                    subfolders = subfolders,
-                                    mediaList = mediaList,
-                                    viewModel = viewModel,
-                                    onFolderClick = { folder -> viewModel.enterFolder(folder.path) },
-                                    onMediaClick = { media -> viewModel.selectMedia(media, mediaList) },
-                                    state = gridState,
-                                    firstItemFocusRequester = galleryGridFirstItemFocusRequester
-                                )
+                                val scrollKey = state.contextKey.ifEmpty { viewModel.buildGalleryContextKey() }
+                                key(scrollKey) {
+                                    val gridState = remember(scrollKey) {
+                                        val saved = viewModel.getScrollPosition(scrollKey)
+                                        LazyGridState(saved.index, saved.offset)
+                                    }
+                                    LaunchedEffect(gridState, scrollKey) {
+                                        snapshotFlow { gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset }
+                                            .collect { (index, offset) ->
+                                                viewModel.saveScrollPosition(scrollKey, index, offset)
+                                            }
+                                    }
+                                    GalleryContentGrid(
+                                        subfolders = subfolders,
+                                        mediaList = mediaList,
+                                        viewModel = viewModel,
+                                        onFolderClick = { folder -> viewModel.enterFolder(folder.path) },
+                                        onMediaClick = { media -> viewModel.selectMedia(media, mediaList) },
+                                        state = gridState,
+                                        firstItemFocusRequester = galleryGridFirstItemFocusRequester
+                                    )
+                                }
                             }
                         }
                     }
@@ -958,7 +978,7 @@ fun GalleryTabContent(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun SearchSuggestionsOverlay(
     searchQuery: String,
@@ -969,6 +989,8 @@ fun SearchSuggestionsOverlay(
     firstItemFocusRequester: FocusRequester = remember { FocusRequester() },
     onSuggestionClick: (String) -> Unit,
     onHistoryClick: (String) -> Unit,
+    onRemoveHistoryItem: (String) -> Unit = {},
+    onClearHistory: () -> Unit = {},
     onExecuteSearch: () -> Unit = {},
     onSaveAsAlbum: () -> Unit = {},
     onRemoveToken: (String) -> Unit
@@ -1070,49 +1092,129 @@ fun SearchSuggestionsOverlay(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 if (searchSuggestions.isEmpty() && localSearchHistory.isNotEmpty()) {
-                    item {
-                        Text(
-                            text = stringResource(R.string.recent_searches),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(bottom = 4.dp, start = 4.dp)
-                        )
+                    item(key = "recent_searches_header") {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 4.dp, start = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = stringResource(R.string.recent_searches),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            TextButton(
+                                onClick = onClearHistory,
+                                modifier = Modifier
+                                    .defaultMinSize(minHeight = 48.dp)
+                                    .testTag("clear_search_history_button")
+                                    .tvFocus(shape = RoundedCornerShape(12.dp)),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.DeleteSweep,
+                                    contentDescription = stringResource(R.string.clear_search_history_cd),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(text = stringResource(R.string.clear_history))
+                            }
+                        }
                     }
-                    itemsIndexed(localSearchHistory) { index, historyItem ->
+                    itemsIndexed(localSearchHistory, key = { _, item -> "history_$item" }) { index, historyItem ->
                         val focusMod = if (index == 0) {
                             Modifier.focusRequester(firstItemFocusRequester)
                         } else {
                             Modifier
                         }
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .then(focusMod)
-                                .tvFocus(shape = RoundedCornerShape(12.dp))
-                                .clickable { onHistoryClick(historyItem) },
-                            shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-                            )
+                        val dismissState = rememberSwipeToDismissBoxState(
+                            confirmValueChange = { value ->
+                                if (value == SwipeToDismissBoxValue.EndToStart) {
+                                    onRemoveHistoryItem(historyItem)
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                        )
+                        SwipeToDismissBox(
+                            state = dismissState,
+                            enableDismissFromStartToEnd = false,
+                            enableDismissFromEndToStart = true,
+                            modifier = Modifier.animateItem(),
+                            backgroundContent = {
+                                val isSwiping = dismissState.dismissDirection == SwipeToDismissBoxValue.EndToStart
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(
+                                            if (isSwiping) MaterialTheme.colorScheme.errorContainer
+                                            else Color.Transparent
+                                        )
+                                        .padding(horizontal = 20.dp),
+                                    contentAlignment = Alignment.CenterEnd
+                                ) {
+                                    if (isSwiping) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = stringResource(R.string.delete),
+                                            tint = MaterialTheme.colorScheme.onErrorContainer
+                                        )
+                                    }
+                                }
+                            }
                         ) {
-                            Row(
+                            Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(16.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .then(focusMod)
+                                    .tvFocus(shape = RoundedCornerShape(12.dp))
+                                    .clickable { onHistoryClick(historyItem) }
+                                    .testTag("search_history_item_$index"),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                )
                             ) {
-                                Icon(
-                                    Icons.Default.History,
-                                    contentDescription = stringResource(R.string.history_cd),
-                                    modifier = Modifier.padding(end = 16.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = historyItem,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.History,
+                                        contentDescription = stringResource(R.string.history_cd),
+                                        modifier = Modifier.padding(end = 16.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = historyItem,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    IconButton(
+                                        onClick = { onRemoveHistoryItem(historyItem) },
+                                        modifier = Modifier
+                                            .size(48.dp)
+                                            .testTag("remove_search_history_item_$index")
+                                            .tvFocus(shape = RoundedCornerShape(24.dp))
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = stringResource(R.string.remove_search_history_item_cd, historyItem),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

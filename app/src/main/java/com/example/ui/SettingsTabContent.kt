@@ -8,6 +8,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -91,7 +92,7 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
     )
     val ratioValues = listOf(1.0f, 1.5f, 1.3333333f, 1.7777778f, 0.0f)
 
-    var selectedSettingsTab by remember { mutableIntStateOf(0) }
+    val selectedSettingsTab by viewModel.selectedSettingsTab.collectAsState()
     val tabTitles = listOf(
         stringResource(R.string.settings_tab_appearance),
         stringResource(R.string.settings_tab_features),
@@ -108,7 +109,7 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
             tabTitles.forEachIndexed { index, title ->
                 Tab(
                     selected = selectedSettingsTab == index,
-                    onClick = { selectedSettingsTab = index },
+                    onClick = { viewModel.setSelectedSettingsTab(index) },
                     icon = { Icon(imageVector = tabIcons[index], contentDescription = title) },
                     text = {
                         Text(
@@ -121,10 +122,21 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
             }
         }
 
+        val settingsScrollKey = "settings_tab_$selectedSettingsTab"
+        val scrollState = remember(settingsScrollKey) {
+            ScrollState(viewModel.getScrollPosition(settingsScrollKey).offset)
+        }
+        LaunchedEffect(scrollState, settingsScrollKey) {
+            snapshotFlow { scrollState.value }
+                .collect { offset ->
+                    viewModel.saveScrollPosition(settingsScrollKey, 0, offset)
+                }
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scrollState)
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -1362,8 +1374,10 @@ fun AboutScreen(viewModel: GalleryViewModel, onBack: () -> Unit) {
                     val introPrefix = stringResource(R.string.open_source_intro_prefix)
                     val licenseName = stringResource(R.string.license_name)
                     val openSourceMiddle = stringResource(R.string.open_source_middle)
+                    val apacheLicenseName = stringResource(R.string.apache_license_name)
                     val annotatedString = buildAnnotatedString {
                         append(introPrefix)
+                        append(" ")
 
                         val licenseStartIndex = length
                         append(licenseName)
@@ -1389,9 +1403,10 @@ fun AboutScreen(viewModel: GalleryViewModel, onBack: () -> Unit) {
                         )
 
                         append(openSourceMiddle)
+                        append(" ")
 
                         val startIndex = length
-                        append("http://www.apache.org/licenses/LICENSE-2.0")
+                        append(apacheLicenseName)
                         val endIndex = length
 
                         addStyle(
@@ -1404,14 +1419,15 @@ fun AboutScreen(viewModel: GalleryViewModel, onBack: () -> Unit) {
                         )
                         addLink(
                             LinkAnnotation.Url(
-                                url = "http://www.apache.org/licenses/LICENSE-2.0",
+                                url = "https://www.apache.org/licenses/LICENSE-2.0",
                                 linkInteractionListener = LinkInteractionListener {
-                                    uriHandler.openUri("http://www.apache.org/licenses/LICENSE-2.0")
+                                    uriHandler.openUri("https://www.apache.org/licenses/LICENSE-2.0")
                                 }
                             ),
                             start = startIndex,
                             end = endIndex
                         )
+                        append(".")
                     }
 
                     Text(

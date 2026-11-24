@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -53,7 +54,7 @@ import kotlinx.coroutines.delay
 @Composable
 fun AlbumsTabContent(viewModel: GalleryViewModel) {
     val albumsState by viewModel.albumsState.collectAsState()
-    var searchQuery by remember { mutableStateOf("") }
+    val searchQuery by viewModel.albumsFilterQuery.collectAsState()
     val selectedAlbum by viewModel.selectedAlbum.collectAsState()
     val albumContentState by viewModel.albumContentState.collectAsState()
 
@@ -89,15 +90,30 @@ fun AlbumsTabContent(viewModel: GalleryViewModel) {
                         if (mediaList.isEmpty()) {
                             EmptyStateView(stringResource(R.string.no_items_in_album), stringResource(R.string.no_items_in_album_subtitle))
                         } else {
-                            GalleryContentGrid(
-                                subfolders = emptyList(),
-                                mediaList = mediaList,
-                                viewModel = viewModel,
-                                onFolderClick = {},
-                                onMediaClick = { media ->
-                                    viewModel.selectMedia(media, mediaList)
+                            val activeAlbum = selectedAlbum
+                            val detailScrollKey = "album_detail:${activeAlbum?.id}_${activeAlbum?.name}"
+                            key(detailScrollKey) {
+                                val detailGridState = remember(detailScrollKey) {
+                                    val saved = viewModel.getScrollPosition(detailScrollKey)
+                                    LazyGridState(saved.index, saved.offset)
                                 }
-                            )
+                                LaunchedEffect(detailGridState, detailScrollKey) {
+                                    snapshotFlow { detailGridState.firstVisibleItemIndex to detailGridState.firstVisibleItemScrollOffset }
+                                        .collect { (index, offset) ->
+                                            viewModel.saveScrollPosition(detailScrollKey, index, offset)
+                                        }
+                                }
+                                GalleryContentGrid(
+                                    subfolders = emptyList(),
+                                    mediaList = mediaList,
+                                    viewModel = viewModel,
+                                    onFolderClick = {},
+                                    onMediaClick = { media ->
+                                        viewModel.selectMedia(media, mediaList)
+                                    },
+                                    state = detailGridState
+                                )
+                            }
                         }
                     }
                     else -> {}
@@ -140,12 +156,12 @@ fun AlbumsTabContent(viewModel: GalleryViewModel) {
                     Column(modifier = Modifier.fillMaxSize()) {
                         TextField(
                             value = searchQuery,
-                            onValueChange = { searchQuery = it },
+                            onValueChange = { viewModel.setAlbumsFilterQuery(it) },
                             placeholder = { Text(stringResource(R.string.search_albums_hint)) },
                             leadingIcon = { Icon(Icons.Default.Search, contentDescription = stringResource(R.string.search)) },
                             trailingIcon = {
                                 if (searchQuery.isNotEmpty()) {
-                                    IconButton(onClick = { searchQuery = "" }) {
+                                    IconButton(onClick = { viewModel.setAlbumsFilterQuery("") }) {
                                         Icon(Icons.Default.Clear, contentDescription = stringResource(R.string.clear_search))
                                     }
                                 }
@@ -195,35 +211,50 @@ fun AlbumsTabContent(viewModel: GalleryViewModel) {
                         } else {
                             val spacingDp = spacing.dp
                             val cornerRadiusDp = cornerRadius.dp
+                            val listScrollKey = "albums_list:$searchQuery"
 
-                            LaunchedEffect(albums.isNotEmpty()) {
-                                if (isTv && albums.isNotEmpty() && !hasInitialTvFocus) {
-                                    hasInitialTvFocus = true
-                                    try {
-                                        delay(100)
-                                        firstItemFocusRequester.requestFocus()
-                                    } catch (_: Exception) {}
+                            key(listScrollKey) {
+                                val listGridState = remember(listScrollKey) {
+                                    val saved = viewModel.getScrollPosition(listScrollKey)
+                                    LazyGridState(saved.index, saved.offset)
                                 }
-                            }
+                                LaunchedEffect(listGridState, listScrollKey) {
+                                    snapshotFlow { listGridState.firstVisibleItemIndex to listGridState.firstVisibleItemScrollOffset }
+                                        .collect { (index, offset) ->
+                                            viewModel.saveScrollPosition(listScrollKey, index, offset)
+                                        }
+                                }
 
-                            LazyVerticalGrid(
-                                columns = GridCells.Fixed(itemsPerRow),
-                                contentPadding = PaddingValues(16.dp),
-                                verticalArrangement = Arrangement.spacedBy(spacingDp),
-                                horizontalArrangement = Arrangement.spacedBy(spacingDp),
-                                modifier = Modifier.weight(1f).fillMaxWidth()
-                            ) {
-                                items(count = albums.size, key = { index -> "album_${albums[index].name}_${albums[index].id}" }) { index ->
-                                    val album = albums[index]
-                                    val focusModifier = if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
-                                    AlbumCard(
-                                        modifier = focusModifier,
-                                        album = album,
-                                        viewModel = viewModel,
-                                        cornerRadius = cornerRadiusDp,
-                                        aspectRatio = aspectRatio
-                                    ) {
-                                        viewModel.selectAlbum(album)
+                                LaunchedEffect(albums.isNotEmpty()) {
+                                    if (isTv && albums.isNotEmpty() && !hasInitialTvFocus && listGridState.firstVisibleItemIndex == 0) {
+                                        hasInitialTvFocus = true
+                                        try {
+                                            delay(100)
+                                            firstItemFocusRequester.requestFocus()
+                                        } catch (_: Exception) {}
+                                    }
+                                }
+
+                                LazyVerticalGrid(
+                                    state = listGridState,
+                                    columns = GridCells.Fixed(itemsPerRow),
+                                    contentPadding = PaddingValues(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(spacingDp),
+                                    horizontalArrangement = Arrangement.spacedBy(spacingDp),
+                                    modifier = Modifier.weight(1f).fillMaxWidth()
+                                ) {
+                                    items(count = albums.size, key = { index -> "album_${albums[index].name}_${albums[index].id}" }) { index ->
+                                        val album = albums[index]
+                                        val focusModifier = if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
+                                        AlbumCard(
+                                            modifier = focusModifier,
+                                            album = album,
+                                            viewModel = viewModel,
+                                            cornerRadius = cornerRadiusDp,
+                                            aspectRatio = aspectRatio
+                                        ) {
+                                            viewModel.selectAlbum(album)
+                                        }
                                     }
                                 }
                             }
@@ -324,7 +355,7 @@ fun AlbumCard(
 @Composable
 fun PersonsTabContent(viewModel: GalleryViewModel) {
     val personsState by viewModel.personsState.collectAsState()
-    var searchQuery by remember { mutableStateOf("") }
+    val searchQuery by viewModel.personsFilterQuery.collectAsState()
     val selectedPerson by viewModel.selectedPerson.collectAsState()
     val personContentState by viewModel.personContentState.collectAsState()
     val itemsPerRowPortrait by viewModel.itemsPerRowPortrait.collectAsState()
@@ -356,15 +387,30 @@ fun PersonsTabContent(viewModel: GalleryViewModel) {
                     if (mediaList.isEmpty()) {
                         EmptyStateView(stringResource(R.string.no_items_for_person), stringResource(R.string.no_items_for_person_subtitle))
                     } else {
-                        GalleryContentGrid(
-                            subfolders = emptyList(),
-                            mediaList = mediaList,
-                            viewModel = viewModel,
-                            onFolderClick = {},
-                            onMediaClick = { media ->
-                                viewModel.selectMedia(media, mediaList)
+                        val activePerson = selectedPerson
+                        val detailScrollKey = "person_detail:${activePerson?.name}"
+                        key(detailScrollKey) {
+                            val detailGridState = remember(detailScrollKey) {
+                                val saved = viewModel.getScrollPosition(detailScrollKey)
+                                LazyGridState(saved.index, saved.offset)
                             }
-                        )
+                            LaunchedEffect(detailGridState, detailScrollKey) {
+                                snapshotFlow { detailGridState.firstVisibleItemIndex to detailGridState.firstVisibleItemScrollOffset }
+                                    .collect { (index, offset) ->
+                                        viewModel.saveScrollPosition(detailScrollKey, index, offset)
+                                    }
+                            }
+                            GalleryContentGrid(
+                                subfolders = emptyList(),
+                                mediaList = mediaList,
+                                viewModel = viewModel,
+                                onFolderClick = {},
+                                onMediaClick = { media ->
+                                    viewModel.selectMedia(media, mediaList)
+                                },
+                                state = detailGridState
+                            )
+                        }
                     }
                 }
                 else -> {}
@@ -406,12 +452,12 @@ fun PersonsTabContent(viewModel: GalleryViewModel) {
                     Column(modifier = Modifier.fillMaxSize()) {
                         TextField(
                             value = searchQuery,
-                            onValueChange = { searchQuery = it },
+                            onValueChange = { viewModel.setPersonsFilterQuery(it) },
                             placeholder = { Text(stringResource(R.string.search_persons_hint)) },
                             leadingIcon = { Icon(Icons.Default.Search, contentDescription = stringResource(R.string.search)) },
                             trailingIcon = {
                                 if (searchQuery.isNotEmpty()) {
-                                    IconButton(onClick = { searchQuery = "" }) {
+                                    IconButton(onClick = { viewModel.setPersonsFilterQuery("") }) {
                                         Icon(Icons.Default.Clear, contentDescription = stringResource(R.string.clear_search))
                                     }
                                 }
@@ -460,33 +506,48 @@ fun PersonsTabContent(viewModel: GalleryViewModel) {
                             }
                         } else {
                             val spacingDp = spacing.dp
+                            val listScrollKey = "persons_list:$searchQuery"
 
-                            LaunchedEffect(persons.isNotEmpty()) {
-                                if (isTv && persons.isNotEmpty() && !hasInitialTvFocus) {
-                                    hasInitialTvFocus = true
-                                    try {
-                                        delay(100)
-                                        firstItemFocusRequester.requestFocus()
-                                    } catch (_: Exception) {}
+                            key(listScrollKey) {
+                                val listGridState = remember(listScrollKey) {
+                                    val saved = viewModel.getScrollPosition(listScrollKey)
+                                    LazyGridState(saved.index, saved.offset)
                                 }
-                            }
+                                LaunchedEffect(listGridState, listScrollKey) {
+                                    snapshotFlow { listGridState.firstVisibleItemIndex to listGridState.firstVisibleItemScrollOffset }
+                                        .collect { (index, offset) ->
+                                            viewModel.saveScrollPosition(listScrollKey, index, offset)
+                                        }
+                                }
 
-                            LazyVerticalGrid(
-                                columns = GridCells.Fixed(itemsPerRow),
-                                modifier = Modifier.weight(1f).fillMaxWidth(),
-                                contentPadding = PaddingValues(16.dp),
-                                horizontalArrangement = Arrangement.spacedBy(spacingDp),
-                                verticalArrangement = Arrangement.spacedBy(spacingDp)
-                            ) {
-                                items(count = persons.size, key = { index -> persons[index].name }) { index ->
-                                    val person = persons[index]
-                                    val focusModifier = if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
-                                    PersonItem(
-                                        modifier = focusModifier,
-                                        person = person,
-                                        viewModel = viewModel,
-                                        onClick = { viewModel.selectPerson(person) }
-                                    )
+                                LaunchedEffect(persons.isNotEmpty()) {
+                                    if (isTv && persons.isNotEmpty() && !hasInitialTvFocus && listGridState.firstVisibleItemIndex == 0) {
+                                        hasInitialTvFocus = true
+                                        try {
+                                            delay(100)
+                                            firstItemFocusRequester.requestFocus()
+                                        } catch (_: Exception) {}
+                                    }
+                                }
+
+                                LazyVerticalGrid(
+                                    state = listGridState,
+                                    columns = GridCells.Fixed(itemsPerRow),
+                                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                                    contentPadding = PaddingValues(16.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(spacingDp),
+                                    verticalArrangement = Arrangement.spacedBy(spacingDp)
+                                ) {
+                                    items(count = persons.size, key = { index -> persons[index].name }) { index ->
+                                        val person = persons[index]
+                                        val focusModifier = if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
+                                        PersonItem(
+                                            modifier = focusModifier,
+                                            person = person,
+                                            viewModel = viewModel,
+                                            onClick = { viewModel.selectPerson(person) }
+                                        )
+                                    }
                                 }
                             }
                         }

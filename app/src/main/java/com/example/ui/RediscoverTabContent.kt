@@ -11,6 +11,7 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
@@ -73,13 +74,24 @@ fun RediscoverTabContent(viewModel: GalleryViewModel) {
                 if (grouped.isEmpty()) {
                     EmptyStateView(stringResource(R.string.nothing_to_rediscover), stringResource(R.string.nothing_to_rediscover_subtitle))
                 } else {
-                    val expandedYears = remember { mutableStateMapOf<Int, Boolean>() }
+                    val expandedYears by viewModel.rediscoverExpandedYears.collectAsState()
 
                     val isTv = LocalContext.current.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
                     val firstItemFocusRequester = remember { FocusRequester() }
+                    val scrollKey = "rediscover"
+                    val gridState = remember(scrollKey) {
+                        val saved = viewModel.getScrollPosition(scrollKey)
+                        LazyGridState(saved.index, saved.offset)
+                    }
+                    LaunchedEffect(gridState, scrollKey) {
+                        snapshotFlow { gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset }
+                            .collect { (index, offset) ->
+                                viewModel.saveScrollPosition(scrollKey, index, offset)
+                            }
+                    }
 
                     LaunchedEffect(grouped) {
-                        if (isTv && grouped.isNotEmpty()) {
+                        if (isTv && grouped.isNotEmpty() && gridState.firstVisibleItemIndex == 0) {
                             try {
                                 delay(100)
                                 firstItemFocusRequester.requestFocus()
@@ -88,6 +100,7 @@ fun RediscoverTabContent(viewModel: GalleryViewModel) {
                     }
 
                     LazyVerticalGrid(
+                        state = gridState,
                         columns = GridCells.Fixed(itemsPerRow),
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(16.dp),
@@ -95,7 +108,7 @@ fun RediscoverTabContent(viewModel: GalleryViewModel) {
                         horizontalArrangement = Arrangement.spacedBy(spacing.dp)
                     ) {
                         grouped.forEach { (year, mediaList) ->
-                            val isExpanded = expandedYears[year] ?: false
+                            val isExpanded = year in expandedYears
                             val currentYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
                             val diff = currentYear - year
                             val isFirstYear = year == grouped.keys.first()
@@ -113,7 +126,7 @@ fun RediscoverTabContent(viewModel: GalleryViewModel) {
                                             .onFocusChanged { isFocused = it.isFocused }
                                             .clip(RoundedCornerShape(8.dp))
                                             .tvFocus(shape = RoundedCornerShape(8.dp), showBorder = true)
-                                            .then(if (hasMore) Modifier.clickable { expandedYears[year] = !isExpanded } else Modifier.focusable())
+                                            .then(if (hasMore) Modifier.clickable { viewModel.toggleRediscoverYear(year) } else Modifier.focusable())
                                             .background(
                                                 color = if (isFocused) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
                                             )

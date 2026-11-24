@@ -101,6 +101,9 @@
     <string name="save_album">Album speichern</string>
     <string name="no_suggestions">Keine Vorschläge</string>
     <string name="recent_searches">Letzte Suchen</string>
+    <string name="clear_history">Verlauf leeren</string>
+    <string name="clear_search_history_cd">Suchverlauf leeren</string>
+    <string name="remove_search_history_item_cd">\"%1$s\" aus Suchverlauf entfernen</string>
     <string name="album_saved_toast">Album \"%1$s\" gespeichert</string>
     <string name="album_deleted_toast">Album \"%1$s\" gelöscht</string>
     <string name="save_album_description">Dynamisches Such-Album für diese Abfrage erstellen:</string>
@@ -366,9 +369,10 @@
     <string name="view_source_github">Quellcode auf GitHub ansehen</string>
     <string name="report_issue_feedback">Problem melden / Feedback geben</string>
     <string name="open_source_licenses">Open-Source-Lizenzen</string>
-    <string name="open_source_intro_prefix">PiGallery2 Android Client ist Open-Source-Software unter der </string>
+    <string name="open_source_intro_prefix">PiGallery2 Android Client ist Open-Source-Software unter der</string>
     <string name="license_name">MIT-Lizenz</string>
-    <string name="open_source_middle">.\n\nErstellt mit Open-Source-Software:\n• Android Jetpack, Compose, DataStore &amp; Biometric (Apache 2.0)\n• AndroidX Media3 / ExoPlayer (Apache 2.0)\n• Room Database (Apache 2.0)\n• Kotlin &amp; Coroutines (Apache 2.0)\n• Coil Image Loader (Apache 2.0)\n• OkHttp (Apache 2.0)\n• Moshi (Apache 2.0)\n• Leaflet (BSD-2-Clause)\n• Leaflet.markercluster &amp; PolylineDecorator (MIT)\n\nFür Bibliotheken unter Apache 2.0 gilt die Apache License, Version 2.0: </string>
+    <string name="apache_license_name">Apache License 2.0</string>
+    <string name="open_source_middle">.\n\nErstellt mit Open-Source-Software:\n• Android Jetpack, Compose, DataStore &amp; Biometric (Apache 2.0)\n• AndroidX Media3 / ExoPlayer (Apache 2.0)\n• Room Database (Apache 2.0)\n• Kotlin &amp; Coroutines (Apache 2.0)\n• Coil Image Loader (Apache 2.0)\n• OkHttp (Apache 2.0)\n• Moshi (Apache 2.0)\n• Leaflet (BSD-2-Clause)\n• Leaflet.markercluster &amp; PolylineDecorator (MIT)\n\nFür Bibliotheken unter Apache 2.0 gilt die</string>
     <string name="new_update_available">Neues Update verfügbar</string>
     <string name="new_update_message">Eine neue Version von PiGallery2 (%1$s) ist verfügbar!</string>
     <string name="release_notes_label">Versionshinweise:</string>

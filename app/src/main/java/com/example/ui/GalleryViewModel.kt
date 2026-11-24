@@ -45,7 +45,7 @@ sealed interface LoginUiState {
 
 sealed interface GalleryUiState {
     object Loading : GalleryUiState
-    data class Success(val directory: ApiDirectory) : GalleryUiState
+    data class Success(val directory: ApiDirectory, val contextKey: String = "") : GalleryUiState
     data class Error(val message: String) : GalleryUiState
 }
 
@@ -164,6 +164,46 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     // Rediscover State (Grouped photos by Year)
     private val _rediscoverState = MutableStateFlow<RediscoverUiState>(RediscoverUiState.Loading)
     val rediscoverState: StateFlow<RediscoverUiState> = _rediscoverState.asStateFlow()
+
+    // Preserved per-tab UI filter & expansion states across tab switches and detail navigation
+    data class SavedScrollPosition(val index: Int = 0, val offset: Int = 0)
+    private val scrollPositions = android.util.LruCache<String, SavedScrollPosition>(64)
+
+    fun getScrollPosition(key: String): SavedScrollPosition =
+        scrollPositions.get(key) ?: SavedScrollPosition()
+
+    fun saveScrollPosition(key: String, index: Int, offset: Int) {
+        scrollPositions.put(key, SavedScrollPosition(index, offset))
+    }
+
+    private val _albumsFilterQuery = MutableStateFlow("")
+    val albumsFilterQuery: StateFlow<String> = _albumsFilterQuery.asStateFlow()
+
+    fun setAlbumsFilterQuery(query: String) {
+        _albumsFilterQuery.value = query
+    }
+
+    private val _personsFilterQuery = MutableStateFlow("")
+    val personsFilterQuery: StateFlow<String> = _personsFilterQuery.asStateFlow()
+
+    fun setPersonsFilterQuery(query: String) {
+        _personsFilterQuery.value = query
+    }
+
+    private val _rediscoverExpandedYears = MutableStateFlow<Set<Int>>(emptySet())
+    val rediscoverExpandedYears: StateFlow<Set<Int>> = _rediscoverExpandedYears.asStateFlow()
+
+    fun toggleRediscoverYear(year: Int) {
+        val current = _rediscoverExpandedYears.value
+        _rediscoverExpandedYears.value = if (year in current) current - year else current + year
+    }
+
+    private val _selectedSettingsTab = MutableStateFlow(0)
+    val selectedSettingsTab: StateFlow<Int> = _selectedSettingsTab.asStateFlow()
+
+    fun setSelectedSettingsTab(tabIndex: Int) {
+        _selectedSettingsTab.value = tabIndex
+    }
 
     val rediscoverDays = MutableStateFlow(prefs.rediscoverDays)
     val slideshowDuration = MutableStateFlow(prefs.slideshowDuration)
@@ -305,6 +345,18 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun setSearchQuery(query: String) {
         searchQuery.value = query
         loadCurrentDirectory()
+    }
+
+    fun removeSearchHistoryItem(query: String) {
+        viewModelScope.launch {
+            searchHistoryManager.removeSearchQuery(query)
+        }
+    }
+
+    fun clearSearchHistory() {
+        viewModelScope.launch {
+            searchHistoryManager.clearHistory()
+        }
     }
 
     fun setSearchQueryFromSuggestion(suggestion: String) {
@@ -602,7 +654,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         } else {
             val currentContent = _galleryState.value
             if (currentContent is GalleryUiState.Success) {
-                _galleryState.value = GalleryUiState.Success(sortDirectory(currentContent.directory))
+                _galleryState.value = GalleryUiState.Success(
+                    sortDirectory(currentContent.directory),
+                    currentContent.contextKey
+                )
             } else {
                 loadCurrentDirectory()
             }
@@ -892,29 +947,46 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun setActiveTab(tab: ActiveTab) {
+        val previousTab = _activeTab.value
         _activeTab.value = tab
         // Clear multi-select mode when switching tabs to avoid stray states
         exitSelectMode()
-        
-        // Refresh contents if needed when switching
+
+        // Tapping an already-active tab returns from detail view to its overview list
+        if (previousTab == tab) {
+            when (tab) {
+                ActiveTab.ALBUMS -> if (_selectedAlbum.value != null) selectAlbum(null)
+                ActiveTab.PERSONS -> if (_selectedPerson.value != null) clearSelectedPerson()
+                else -> {}
+            }
+            return
+        }
+
+        // Preserve tab context (open album/person, scroll state, loaded data); only load if needed
         if (prefs.isLoggedIn && prefs.serverUrl.isNotEmpty()) {
             when (tab) {
                 ActiveTab.GALLERY -> {
                     refreshUserPermissions(force = false)
-                    loadCurrentDirectory()
+                    if (_galleryState.value !is GalleryUiState.Success) {
+                        loadCurrentDirectory()
+                    }
                 }
                 ActiveTab.ALBUMS -> {
                     refreshUserPermissions(force = false)
-                    _selectedAlbum.value = null
-                    _albumContentState.value = null
-                    loadAlbums()
+                    if (_albumsState.value !is AlbumsUiState.Success) {
+                        loadAlbums()
+                    }
                 }
                 ActiveTab.PERSONS -> {
-                    _selectedPerson.value = null
-                    _personContentState.value = null
-                    loadPersons()
+                    if (_personsState.value !is PersonsUiState.Success) {
+                        loadPersons()
+                    }
                 }
-                ActiveTab.REDISCOVER -> loadRediscover()
+                ActiveTab.REDISCOVER -> {
+                    if (_rediscoverState.value !is RediscoverUiState.Success) {
+                        loadRediscover()
+                    }
+                }
                 ActiveTab.SETTINGS -> { /* no-op */ }
             }
         }
@@ -1258,7 +1330,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         } else {
                             buildDateViewDirectory(activePath, freshMediaList)
                         }
-                        _galleryState.value = GalleryUiState.Success(sortDirectory(updatedDir))
+                        _galleryState.value = GalleryUiState.Success(
+                            sortDirectory(updatedDir),
+                            buildGalleryContextKey(path = activePath)
+                        )
                     }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -1271,11 +1346,25 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun buildGalleryContextKey(
+        path: String = currentPath,
+        viewMode: GalleryViewMode = galleryViewMode.value,
+        flattened: Boolean = isFlattened.value,
+        query: String = searchQuery.value
+    ): String {
+        return if (query.isNotEmpty()) {
+            "gallery:search:$query"
+        } else {
+            "gallery:${viewMode.name}:$flattened:$path"
+        }
+    }
+
     fun loadCurrentDirectory(forceRefresh: Boolean = false) {
         val server = prefs.serverUrl
         val cookies = prefs.cookies
         val apiPrefix = prefs.apiPrefix
         val path = currentPath
+        val requestContextKey = buildGalleryContextKey(path = path)
 
         if (server.isEmpty()) {
             _galleryState.value = GalleryUiState.Error(str(R.string.no_server_configured))
@@ -1310,7 +1399,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                             if (yearMedia != null && yearMedia.isNotEmpty()) {
                                 cachedYearMedia.put(year, yearMedia)
                                 val dir = buildDateViewDirectory(currentPath, yearMedia)
-                                _galleryState.value = GalleryUiState.Success(sortDirectory(dir))
+                                _galleryState.value = GalleryUiState.Success(sortDirectory(dir), requestContextKey)
                             } else {
                                 _galleryState.value = GalleryUiState.Loading
                             }
@@ -1319,7 +1408,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                             val freshYearMedia = fetchMediaForYear(year)
                             if (freshYearMedia.isNotEmpty()) {
                                 val dir = buildDateViewDirectory(currentPath, freshYearMedia)
-                                _galleryState.value = GalleryUiState.Success(sortDirectory(dir))
+                                _galleryState.value = GalleryUiState.Success(sortDirectory(dir), requestContextKey)
                             }
                             _isRefreshing.value = false
                             return@launch
@@ -1368,7 +1457,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         } else {
                             buildDateViewDirectory(currentPath, mediaList)
                         }
-                        _galleryState.value = GalleryUiState.Success(sortDirectory(cachedDirectory))
+                        _galleryState.value = GalleryUiState.Success(sortDirectory(cachedDirectory), requestContextKey)
                     } else {
                         _galleryState.value = GalleryUiState.Loading
                     }
@@ -1389,7 +1478,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                             directories = emptyList(),
                             media = cachedMedia
                         )
-                        _galleryState.value = GalleryUiState.Success(sortDirectory(directory))
+                        _galleryState.value = GalleryUiState.Success(sortDirectory(directory), requestContextKey)
                     } else {
                         _galleryState.value = GalleryUiState.Loading
                     }
@@ -1405,7 +1494,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     }
                     val filteredMedia = searchResult.media.orEmpty().filter { !isMediaProtected(it) }
                     val sortedDirectory = sortDirectory(searchResult.copy(media = filteredMedia))
-                    _galleryState.value = GalleryUiState.Success(sortedDirectory)
+                    _galleryState.value = GalleryUiState.Success(sortedDirectory, requestContextKey)
                 } else {
                     // Normal folder view
                     val freshDirectory = executeAuthenticated { activeCookies, activePrefix ->
@@ -1415,7 +1504,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         repo.saveDirectory(path, freshDirectory.media)
                     }
                     val sortedDirectory = sortDirectory(freshDirectory)
-                    _galleryState.value = GalleryUiState.Success(sortedDirectory)
+                    _galleryState.value = GalleryUiState.Success(sortedDirectory, requestContextKey)
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -2584,6 +2673,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun logout() {
         cachedFlattenedMedia.evictAll()
         cachedYearMedia.evictAll()
+        scrollPositions.evictAll()
         prefs.clearSession()
         isLoggedIn.value = false
         savedServerUrl.value = prefs.serverUrl
@@ -2602,6 +2692,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         _selectedPerson.value = null
         _personContentState.value = null
         _selectedMedia.value = null
+        _albumsFilterQuery.value = ""
+        _personsFilterQuery.value = ""
+        _rediscoverExpandedYears.value = emptySet()
+        _selectedSettingsTab.value = 0
         isSearchActive.value = false
         searchQuery.value = ""
         showSearchSuggestions.value = false

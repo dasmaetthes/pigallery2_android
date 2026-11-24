@@ -101,6 +101,9 @@
     <string name="save_album">Save Album</string>
     <string name="no_suggestions">No suggestions</string>
     <string name="recent_searches">Recent Searches</string>
+    <string name="clear_history">Clear all</string>
+    <string name="clear_search_history_cd">Clear search history</string>
+    <string name="remove_search_history_item_cd">Remove \"%1$s\" from search history</string>
     <string name="album_saved_toast">Saved album \"%1$s\"</string>
     <string name="album_deleted_toast">Deleted album \"%1$s\"</string>
     <string name="save_album_description">Create a dynamic saved-search album for this query:</string>
@@ -366,9 +369,10 @@
     <string name="view_source_github">View Source Code on GitHub</string>
     <string name="report_issue_feedback">Report an Issue / Feedback</string>
     <string name="open_source_licenses">Open Source Licenses</string>
-    <string name="open_source_intro_prefix">PiGallery2 Android Client is open-source software licensed under the </string>
+    <string name="open_source_intro_prefix">PiGallery2 Android Client is open-source software licensed under the</string>
     <string name="license_name">MIT License</string>
-    <string name="open_source_middle">.\n\nBuilt with open source software:\n• Android Jetpack, Compose, DataStore &amp; Biometric (Apache 2.0)\n• AndroidX Media3 / ExoPlayer (Apache 2.0)\n• Room Database (Apache 2.0)\n• Kotlin &amp; Coroutines (Apache 2.0)\n• Coil Image Loader (Apache 2.0)\n• OkHttp (Apache 2.0)\n• Moshi (Apache 2.0)\n• Leaflet (BSD-2-Clause)\n• Leaflet.markercluster &amp; PolylineDecorator (MIT)\n\nApache 2.0-licensed libraries are subject to the Apache License, Version 2.0: </string>
+    <string name="apache_license_name">Apache License 2.0</string>
+    <string name="open_source_middle">.\n\nBuilt with open source software:\n• Android Jetpack, Compose, DataStore &amp; Biometric (Apache 2.0)\n• AndroidX Media3 / ExoPlayer (Apache 2.0)\n• Room Database (Apache 2.0)\n• Kotlin &amp; Coroutines (Apache 2.0)\n• Coil Image Loader (Apache 2.0)\n• OkHttp (Apache 2.0)\n• Moshi (Apache 2.0)\n• Leaflet (BSD-2-Clause)\n• Leaflet.markercluster &amp; PolylineDecorator (MIT)\n\nApache 2.0-licensed libraries are subject to the</string>
     <string name="new_update_available">New Update Available</string>
     <string name="new_update_message">A new version of PiGallery2 (%1$s) is available!</string>
     <string name="release_notes_label">Release Notes:</string>
