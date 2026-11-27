@@ -5,65 +5,60 @@ import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.activity.compose.BackHandler
+import androidx.annotation.StringRes
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.ZoomIn
-import androidx.compose.material.icons.filled.ZoomOut
-import androidx.compose.material.icons.filled.ZoomInMap
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.LocationOff
-import androidx.compose.material.icons.filled.Map
-import androidx.compose.material.icons.filled.MyLocation
-import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material.icons.filled.Timeline
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Route
-import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.ZoomInMap
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.launch
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.draw.clip
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.foundation.focusable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
+import androidx.core.net.toUri
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.R
 import com.example.data.ApiMedia
 import com.example.data.PiGalleryApi
 import com.example.findActivity
-import androidx.activity.compose.BackHandler
-import androidx.annotation.StringRes
-import androidx.compose.ui.res.stringResource
-import androidx.core.graphics.toColorInt
-import androidx.core.net.toUri
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+
+private fun Color.toCssHex(): String =
+    String.format(java.util.Locale.ROOT, "#%06X", 0xFFFFFF and toArgb())
 
 private val MAP_CORS_HEADERS = mapOf(
     "Access-Control-Allow-Origin" to "*",
@@ -121,6 +116,11 @@ fun MapBrowserDialog(
     onDismiss: () -> Unit,
     initialMediaId: String? = null
 ) {
+    val tvCapabilities = com.example.util.rememberTvCapabilities()
+    if (!tvCapabilities.allowMapView) {
+        LaunchedEffect(Unit) { onDismiss() }
+        return
+    }
     val context = LocalContext.current
     val geotaggedMedia = remember(mediaList) {
         mediaList.filter { it.metadata?.gps != null }
@@ -139,31 +139,6 @@ fun MapBrowserDialog(
     var topLevelActiveMedia by remember(initialActiveMedia) { mutableStateOf(initialActiveMedia) }
 
     var isPlaying by remember { mutableStateOf(false) }
-    var isHeaderVisible by remember { mutableStateOf(true) }
-    var headerResetTrigger by remember { mutableIntStateOf(1) }
-
-    LaunchedEffect(headerResetTrigger, isPlaying, showProviderMenu) {
-        if (isPlaying) {
-            isHeaderVisible = false
-        } else if (showProviderMenu) {
-            isHeaderVisible = true
-        } else {
-            isHeaderVisible = true
-            kotlinx.coroutines.delay(3500)
-            isHeaderVisible = false
-        }
-    }
-
-    var keepHeaderForMenu by remember { mutableStateOf(false) }
-    val menuCoroutineScope = rememberCoroutineScope()
-    LaunchedEffect(showProviderMenu) {
-        if (showProviderMenu) {
-            keepHeaderForMenu = true
-        } else {
-            delay(200)
-            keepHeaderForMenu = false
-        }
-    }
 
     BackHandler {
         if (showProviderMenu) {
@@ -179,202 +154,43 @@ fun MapBrowserDialog(
         color = MaterialTheme.colorScheme.background
     ) {
         Box(
-            modifier = Modifier
-                .fillMaxSize()
+            modifier = Modifier.fillMaxSize()
         ) {
-                if (geotaggedMedia.isEmpty()) {
-                        EmptyStateView()
-                    } else {
-                        MapViewContainer(
-                            geotaggedMedia = geotaggedMedia,
-                            mediaList = mediaList,
-                            viewModel = viewModel,
-                            selectedProvider = selectedProvider,
-                            showTravelTrack = showTravelTrack,
-                            isHeaderVisible = isHeaderVisible,
-                            isPlaying = isPlaying,
-                            onPlayingChange = { isPlaying = it },
-                            onResetHeaderTimer = { headerResetTrigger++ },
-                            onDismiss = onDismiss,
-                            onActiveMediaChange = { topLevelActiveMedia = it },
-                            initialMediaId = initialMediaId
-                        )
-                        
-                        // Floating UI
-                        androidx.compose.animation.AnimatedVisibility(
-                            visible = isHeaderVisible || keepHeaderForMenu,
-                            enter = androidx.compose.animation.fadeIn(),
-                            exit = androidx.compose.animation.fadeOut(),
-                            modifier = Modifier.align(Alignment.TopEnd)
-                        ) {
-                            Box(modifier = Modifier.statusBarsPadding().padding(16.dp)) {
-                                IconButton(
-                                    onClick = { 
-                                        showProviderMenu = true 
-                                        headerResetTrigger++
-                                    },
-                                    modifier = Modifier
-                                        .size(48.dp)
-                                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f), androidx.compose.foundation.shape.CircleShape)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.MoreVert,
-                                        contentDescription = stringResource(R.string.map_menu),
-                                        tint = MaterialTheme.colorScheme.onSurface
-                                    )
-                                }
-                                DropdownMenu(
-                                    expanded = showProviderMenu,
-                                    onDismissRequest = { showProviderMenu = false },
-                                    modifier = Modifier.width(220.dp)
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(R.string.travel_track)) },
-                                        onClick = {
-                                            showTravelTrack = !showTravelTrack
-                                            headerResetTrigger++
-                                        },
-                                        leadingIcon = {
-                                            Icon(
-                                                imageVector = Icons.Default.Route,
-                                                tint = if (showTravelTrack) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                                contentDescription = null
-                                            )
-                                        },
-                                        trailingIcon = {
-                                            Switch(
-                                                checked = showTravelTrack,
-                                                onCheckedChange = null
-                                            )
-                                        }
-                                    )
-                                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 8.dp),
-                                        horizontalArrangement = Arrangement.Center,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Layers,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = stringResource(R.string.map_style),
-                                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                                            color = MaterialTheme.colorScheme.primary,
-                                            textAlign = TextAlign.Center
-                                        )
-                                    }
-                                    MapProvider.values().forEach { provider ->
-                                        val isSelected = selectedProvider == provider
-                                        val providerLabel = stringResource(provider.labelResId)
-                                        DropdownMenuItem(
-                                            onClick = {
-                                                if (showProviderMenu) {
-                                                    showProviderMenu = false
-                                                    headerResetTrigger++
-                                                    menuCoroutineScope.launch {
-                                                        delay(180)
-                                                        selectedProvider = provider
-                                                    }
-                                                }
-                                            },
-                                            modifier = Modifier.then(
-                                                if (isSelected) {
-                                                    Modifier.background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f))
-                                                } else Modifier
-                                            ),
-                                            text = {
-                                                Column(
-                                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                                    modifier = Modifier.fillMaxWidth()
-                                                ) {
-                                                    Box(
-                                                        modifier = Modifier
-                                                            .size(width = 140.dp, height = 90.dp)
-                                                            .clip(RoundedCornerShape(8.dp))
-                                                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                                                            .then(
-                                                                if (isSelected) {
-                                                                    Modifier.border(
-                                                                        width = 3.dp,
-                                                                        color = MaterialTheme.colorScheme.primary,
-                                                                        shape = RoundedCornerShape(8.dp)
-                                                                    )
-                                                                } else Modifier
-                                                            )
-                                                    ) {
-                                                        AsyncImage(
-                                                            model = provider.previewUrl,
-                                                            contentDescription = stringResource(R.string.map_preview_cd, providerLabel),
-                                                            modifier = Modifier.fillMaxSize(),
-                                                            contentScale = androidx.compose.ui.layout.ContentScale.Crop
-                                                        )
-                                                    }
-                                                    
-                                                    Spacer(modifier = Modifier.height(6.dp))
-                                                    
-                                                    Text(
-                                                        text = providerLabel,
-                                                        style = if (isSelected) {
-                                                            MaterialTheme.typography.labelLarge.copy(
-                                                                fontWeight = FontWeight.Bold,
-                                                                color = MaterialTheme.colorScheme.primary
-                                                            )
-                                                        } else {
-                                                            MaterialTheme.typography.bodyMedium
-                                                        },
-                                                        textAlign = TextAlign.Center,
-                                                        modifier = Modifier.fillMaxWidth()
-                                                    )
-                                                }
-                                            },
-                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
+            if (geotaggedMedia.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.safeDrawing)
+                        .testTag("map_empty_state")
+                ) {
+                    EmptyStateView(
+                        title = stringResource(R.string.no_geotagged_media),
+                        subtitle = stringResource(R.string.no_geotagged_media_subtitle),
+                        icon = Icons.Default.LocationOff,
+                        illustration = EmptyStateIllustration.MEMORIES,
+                        actionLabel = stringResource(R.string.close),
+                        onAction = onDismiss
+                    )
                 }
+            } else {
+                MapViewContainer(
+                    geotaggedMedia = geotaggedMedia,
+                    mediaList = mediaList,
+                    viewModel = viewModel,
+                    selectedProvider = selectedProvider,
+                    onSelectProvider = { selectedProvider = it },
+                    showTravelTrack = showTravelTrack,
+                    onToggleTravelTrack = { showTravelTrack = !showTravelTrack },
+                    showProviderMenu = showProviderMenu,
+                    onShowProviderMenuChange = { showProviderMenu = it },
+                    isPlaying = isPlaying,
+                    onPlayingChange = { isPlaying = it },
+                    onDismiss = onDismiss,
+                    onActiveMediaChange = { topLevelActiveMedia = it },
+                    initialMediaId = initialMediaId
+                )
             }
         }
-
-@Composable
-private fun EmptyStateView() {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(32.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Icon(
-            imageVector = Icons.Default.LocationOff,
-            contentDescription = stringResource(R.string.no_location_data),
-            modifier = Modifier.size(72.dp),
-            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = stringResource(R.string.no_geotagged_media),
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = stringResource(R.string.no_geotagged_media_subtitle),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(horizontal = 16.dp)
-        )
     }
 }
 
@@ -385,11 +201,13 @@ private fun MapViewContainer(
     mediaList: List<ApiMedia>,
     viewModel: GalleryViewModel,
     selectedProvider: MapProvider,
+    onSelectProvider: (MapProvider) -> Unit,
     showTravelTrack: Boolean,
-    isHeaderVisible: Boolean,
+    onToggleTravelTrack: () -> Unit,
+    showProviderMenu: Boolean,
+    onShowProviderMenuChange: (Boolean) -> Unit,
     isPlaying: Boolean,
     onPlayingChange: (Boolean) -> Unit,
-    onResetHeaderTimer: () -> Unit,
     onDismiss: () -> Unit,
     onActiveMediaChange: (ApiMedia?) -> Unit,
     initialMediaId: String? = null
@@ -401,6 +219,18 @@ private fun MapViewContainer(
     var isMapReady by remember { mutableStateOf(false) }
     var mapError by remember { mutableStateOf<String?>(null) }
     var reloadTrigger by remember { mutableIntStateOf(0) }
+
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val secondaryColor = MaterialTheme.colorScheme.secondary
+    val tertiaryColor = MaterialTheme.colorScheme.tertiary
+    val onPrimaryColor = MaterialTheme.colorScheme.onPrimary
+    val bgColor = MaterialTheme.colorScheme.background
+    val primaryHex = remember(primaryColor) { primaryColor.toCssHex() }
+    val secondaryHex = remember(secondaryColor) { secondaryColor.toCssHex() }
+    val tertiaryHex = remember(tertiaryColor) { tertiaryColor.toCssHex() }
+    val onPrimaryHex = remember(onPrimaryColor) { onPrimaryColor.toCssHex() }
+    val bgHex = remember(bgColor) { bgColor.toCssHex() }
+    val bgColorArgb = bgColor.toArgb()
 
     LaunchedEffect(isMapLoading, reloadTrigger) {
         if (isMapLoading) {
@@ -415,18 +245,33 @@ private fun MapViewContainer(
     }
 
     // Live-switch tile layers dynamically without reloading the entire WebView state
-    LaunchedEffect(selectedProvider) {
-        webViewRef?.evaluateJavascript(
-            "if (typeof changeTileLayer !== 'undefined') changeTileLayer('${selectedProvider.url}', '${selectedProvider.attribution.replace("'", "\\'")}')",
-            null
-        )
+    LaunchedEffect(selectedProvider, isMapReady, webViewRef) {
+        if (isMapReady) {
+            val quotedUrl = org.json.JSONObject.quote(selectedProvider.url)
+            val quotedAttr = org.json.JSONObject.quote(selectedProvider.attribution)
+            webViewRef?.evaluateJavascript(
+                "if (typeof changeTileLayer !== 'undefined') changeTileLayer($quotedUrl, $quotedAttr)",
+                null
+            )
+        }
     }
 
-    LaunchedEffect(showTravelTrack, webViewRef) {
-        webViewRef?.evaluateJavascript(
-            "if (typeof toggleTravelTrack !== 'undefined') toggleTravelTrack(${showTravelTrack})",
-            null
-        )
+    LaunchedEffect(showTravelTrack, isMapReady, webViewRef) {
+        if (isMapReady) {
+            webViewRef?.evaluateJavascript(
+                "if (typeof toggleTravelTrack !== 'undefined') toggleTravelTrack($showTravelTrack)",
+                null
+            )
+        }
+    }
+
+    LaunchedEffect(primaryHex, secondaryHex, tertiaryHex, onPrimaryHex, bgHex, isMapReady, webViewRef) {
+        if (isMapReady) {
+            webViewRef?.evaluateJavascript(
+                "if (typeof updateThemeColors !== 'undefined') updateThemeColors('$primaryHex', '$secondaryHex', '$tertiaryHex', '$onPrimaryHex', '$bgHex');",
+                null
+            )
+        }
     }
 
     val lastLoadedHash = remember { IntArray(1) }
@@ -505,9 +350,16 @@ private fun MapViewContainer(
             <script src="__map_assets__/leaflet.markercluster.js"></script>
             <script src="__map_assets__/leaflet.polylineDecorator.js"></script>
             <style>
-                body { padding: 0; margin: 0; background: #121212; color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+                :root {
+                    --map-primary: $primaryHex;
+                    --map-secondary: $secondaryHex;
+                    --map-tertiary: $tertiaryHex;
+                    --map-on-primary: $onPrimaryHex;
+                    --map-bg: $bgHex;
+                }
+                body { padding: 0; margin: 0; background: var(--map-bg); color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
                 html, body, #map { height: 100%; width: 100%; }
-                .leaflet-container { background: #121212; }
+                .leaflet-container { background: var(--map-bg); }
                 .leaflet-bar { border: none !important; box-shadow: 0 4px 10px rgba(0,0,0,0.4) !important; }
                 .leaflet-bar a { background-color: #2c2c2c !important; color: #ffffff !important; border-bottom: 1px solid #3c3c3c !important; }
                 .leaflet-bar a:hover { background-color: #3c3c3c !important; }
@@ -515,9 +367,9 @@ private fun MapViewContainer(
                 .custom-thumb-icon { background: transparent !important; border: none !important; }
                 .custom-thumb-icon.highlighted { background: transparent !important; border: none !important; z-index: 1000 !important; }
 
-                /* Custom Premium Dark Theme Marker Cluster Styles */
+                /* Custom Material 3 Theme Marker Cluster Styles */
                 .marker-cluster-custom {
-                    background: rgba(33, 150, 243, 0.22);
+                    background: color-mix(in srgb, var(--map-primary) 24%, transparent);
                     border-radius: 50%;
                     overflow: visible !important;
                     display: flex;
@@ -527,46 +379,71 @@ private fun MapViewContainer(
                     border: none !important;
                 }
                 .marker-cluster-custom:hover {
-                    background: rgba(33, 150, 243, 0.35);
+                    background: color-mix(in srgb, var(--map-primary) 36%, transparent);
                     transform: scale(1.08);
                 }
                 .marker-cluster-custom-inner {
                     width: 36px;
                     height: 36px;
-                    background: #2196F3;
+                    background: var(--map-primary);
                     border: 2px solid #ffffff;
                     border-radius: 50%;
-                    color: #ffffff;
+                    color: var(--map-on-primary);
                     font-weight: bold;
                     font-size: 12px;
                     display: flex;
                     align-items: center;
                     justify-content: center;
-                    box-shadow: 0 4px 12px rgba(33, 150, 243, 0.6);
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.35);
                 }
-                
+
                 /* Medium size cluster (10-99 items) */
                 .marker-cluster-medium-custom {
-                    background: rgba(0, 188, 212, 0.22);
+                    background: color-mix(in srgb, var(--map-secondary) 24%, transparent);
                 }
                 .marker-cluster-medium-custom .marker-cluster-custom-inner {
-                    background: #00BCD4;
-                    box-shadow: 0 4px 12px rgba(0, 188, 212, 0.6);
+                    background: var(--map-secondary);
                 }
-                
+
                 /* Large size cluster (100+ items) */
                 .marker-cluster-large-custom {
-                    background: rgba(156, 39, 176, 0.22);
+                    background: color-mix(in srgb, var(--map-tertiary) 24%, transparent);
                 }
                 .marker-cluster-large-custom .marker-cluster-custom-inner {
-                    background: #9C27B0;
-                    box-shadow: 0 4px 12px rgba(156, 39, 176, 0.6);
+                    background: var(--map-tertiary);
                 }
             </style>
         </head>
         <body>
             <div id="map"></div>
             <script>
+                var themePrimary = '$primaryHex';
+                var themeSecondary = '$secondaryHex';
+                var themeTertiary = '$tertiaryHex';
+                var themeOnPrimary = '$onPrimaryHex';
+                var themeBg = '$bgHex';
+                var lastShowTravelTrack = ${showTravelTrack};
+
+                function updateThemeColors(primary, secondary, tertiary, onPrimary, bg) {
+                    themePrimary = primary;
+                    themeSecondary = secondary;
+                    themeTertiary = tertiary;
+                    themeOnPrimary = onPrimary;
+                    themeBg = bg;
+                    var root = document.documentElement;
+                    root.style.setProperty('--map-primary', primary);
+                    root.style.setProperty('--map-secondary', secondary);
+                    root.style.setProperty('--map-tertiary', tertiary);
+                    root.style.setProperty('--map-on-primary', onPrimary);
+                    root.style.setProperty('--map-bg', bg);
+                    if (lastShowTravelTrack) {
+                        toggleTravelTrack(true);
+                    }
+                    if (typeof markersGroup !== 'undefined' && markersGroup.refreshClusters) {
+                        markersGroup.refreshClusters();
+                    }
+                }
+
                 // Built-in Leaflet zoom controls disabled for polished native Compose UI buttons
                 var map = L.map('map', {
                     zoomControl: false,
@@ -637,24 +514,24 @@ private fun MapViewContainer(
                         }
 
                         var mainClass = 'marker-cluster-custom';
-                        var clusterColor = '#2196F3';
+                        var clusterColor = themePrimary;
                         if (count >= 100) {
                             mainClass += ' marker-cluster-large-custom';
-                            clusterColor = '#9C27B0';
+                            clusterColor = themeTertiary;
                         } else if (count >= 10) {
                             mainClass += ' marker-cluster-medium-custom';
-                            clusterColor = '#00BCD4';
+                            clusterColor = themeSecondary;
                         }
 
                         var innerHtml = '';
                         if (thumbUrl) {
                             var safeThumb = escapeHtmlAttr(thumbUrl);
                             innerHtml = '<div style="position:relative; width:52px; height:52px; display:flex; align-items:center; justify-content:center; overflow:visible;">' +
-                                '<div style="width:42px; height:42px; border-radius:50%; overflow:hidden; border:2px solid #ffffff; box-shadow:0 2px 8px rgba(0,0,0,0.6); background:' + clusterColor + '; position:relative; display:flex; align-items:center; justify-content:center; box-sizing:border-box;">' +
-                                '<span style="position:relative; z-index:0; color:#ffffff; font-weight:700; font-size:13px; line-height:1;">' + count + '</span>' +
+                                '<div style="width:42px; height:42px; border-radius:50%; overflow:hidden; border:2px solid #ffffff; box-shadow:0 2px 8px rgba(0,0,0,0.45); background:' + clusterColor + '; position:relative; display:flex; align-items:center; justify-content:center; box-sizing:border-box;">' +
+                                '<span style="position:relative; z-index:0; color:' + themeOnPrimary + '; font-weight:700; font-size:13px; line-height:1;">' + count + '</span>' +
                                 '<img src="' + safeThumb + '" style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; display:block; z-index:1;" onerror="this.style.display=\'none\'; var b=this.parentElement&&this.parentElement.nextElementSibling; if(b) b.style.display=\'none\';" />' +
                                 '</div>' +
-                                '<div style="position:absolute; top:0; right:0; z-index:2; min-width:20px; height:20px; padding:0 5px; border-radius:10px; background:' + clusterColor + '; color:#ffffff; font-weight:700; font-size:11px; line-height:1; display:inline-flex; align-items:center; justify-content:center; border:2px solid #ffffff; box-shadow:0 2px 6px rgba(0,0,0,0.65); box-sizing:border-box;">' + count + '</div>' +
+                                '<div style="position:absolute; top:0; right:0; z-index:2; min-width:20px; height:20px; padding:0 5px; border-radius:10px; background:' + clusterColor + '; color:' + themeOnPrimary + '; font-weight:700; font-size:11px; line-height:1; display:inline-flex; align-items:center; justify-content:center; border:2px solid #ffffff; box-shadow:0 2px 6px rgba(0,0,0,0.45); box-sizing:border-box;">' + count + '</div>' +
                                 '</div>';
                         } else {
                             innerHtml = '<div class="marker-cluster-custom-inner"><span>' + count + '</span></div>';
@@ -684,11 +561,11 @@ private fun MapViewContainer(
                 function createMarkerHtml(thumbUrl, isHighlighted) {
                     var sz = isHighlighted ? 52 : 40;
                     var borderW = isHighlighted ? 3 : 2;
-                    var borderC = isHighlighted ? '#FFC107' : '#ffffff';
-                    var shadow = isHighlighted ? '0 0 14px rgba(255, 193, 7, 0.9)' : '0 2px 6px rgba(0,0,0,0.6)';
+                    var borderC = isHighlighted ? themePrimary : '#ffffff';
+                    var shadow = isHighlighted ? '0 0 14px rgba(0,0,0,0.55)' : '0 2px 6px rgba(0,0,0,0.45)';
                     var safeUrl = escapeHtmlAttr(thumbUrl);
-                    return '<div style="width:' + sz + 'px; height:' + sz + 'px; border-radius:50%; overflow:hidden; border:' + borderW + 'px solid ' + borderC + '; box-shadow:' + shadow + '; background-color:#2196F3; box-sizing:border-box; display:flex; align-items:center; justify-content:center; position:relative;">' +
-                        '<svg style="width:20px; height:20px; fill:#ffffff; position:absolute; z-index:0;" viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>' +
+                    return '<div style="width:' + sz + 'px; height:' + sz + 'px; border-radius:50%; overflow:hidden; border:' + borderW + 'px solid ' + borderC + '; box-shadow:' + shadow + '; background-color:' + themePrimary + '; box-sizing:border-box; display:flex; align-items:center; justify-content:center; position:relative;">' +
+                        '<svg style="width:20px; height:20px; fill:' + themeOnPrimary + '; position:absolute; z-index:0;" viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>' +
                         '<img src="' + safeUrl + '" style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; display:block; border-radius:50%; z-index:1;" onerror="this.style.display=\'none\';" />' +
                         '</div>';
                 }
@@ -731,6 +608,7 @@ private fun MapViewContainer(
                         markersGroup.addLayers(batch);
                     }
                     fitBounds();
+                    toggleTravelTrack(lastShowTravelTrack);
                 }
 
                 var activeHighlightedMarker = null;
@@ -786,6 +664,7 @@ private fun MapViewContainer(
                             } else {
                                 // For long distances, use flyTo but scale duration by distance so map tiles have time to load
                                 var calculatedDur = Math.max(baseDur, Math.min(dist / 400000, 8.0));
+                                var targetZoom = Math.max(map.getZoom(), 14);
                                 map.flyTo(latLng, targetZoom, {
                                     animate: true,
                                     duration: calculatedDur
@@ -840,30 +719,41 @@ private fun MapViewContainer(
                 var travelTrackLayer = null;
                 var travelTrackDecorator = null;
                 function toggleTravelTrack(show) {
-                    if (travelTrackLayer) {
-                        map.removeLayer(travelTrackLayer);
-                        travelTrackLayer = null;
-                    }
-                    if (travelTrackDecorator) {
-                        map.removeLayer(travelTrackDecorator);
-                        travelTrackDecorator = null;
-                    }
-                    if (show && markers.length > 1) {
-                        var latlngs = markers.map(function(m) { return m.getLatLng(); });
-                        travelTrackLayer = L.polyline(latlngs, {
-                            color: '#2196F3',
-                            weight: 3,
-                            opacity: 0.8,
-                            noClip: true,
-                            smoothFactor: 1
-                        }).addTo(map);
-                        
-                        // Add directional arrows
-                        travelTrackDecorator = L.polylineDecorator(travelTrackLayer, {
-                            patterns: [
-                                {offset: 25, repeat: 100, symbol: L.Symbol.arrowHead({pixelSize: 15, pathOptions: {fillOpacity: 1, weight: 0, color: '#2196F3'}})}
-                            ]
-                        }).addTo(map);
+                    lastShowTravelTrack = !!show;
+                    try {
+                        if (travelTrackLayer) {
+                            if (map.hasLayer(travelTrackLayer)) {
+                                map.removeLayer(travelTrackLayer);
+                            }
+                            travelTrackLayer = null;
+                        }
+                        if (travelTrackDecorator) {
+                            if (map.hasLayer(travelTrackDecorator)) {
+                                map.removeLayer(travelTrackDecorator);
+                            }
+                            travelTrackDecorator = null;
+                        }
+                        if (lastShowTravelTrack && markers.length > 1) {
+                            var latlngs = markers.map(function(m) { return m.getLatLng(); });
+                            travelTrackLayer = L.polyline(latlngs, {
+                                color: themePrimary,
+                                weight: 3,
+                                opacity: 0.85,
+                                noClip: true,
+                                smoothFactor: 1
+                            }).addTo(map);
+
+                            // Add directional arrows
+                            if (typeof L.polylineDecorator === 'function' && L.Symbol && L.Symbol.arrowHead) {
+                                travelTrackDecorator = L.polylineDecorator(travelTrackLayer, {
+                                    patterns: [
+                                        {offset: 25, repeat: 100, symbol: L.Symbol.arrowHead({pixelSize: 15, pathOptions: {fillOpacity: 1, weight: 0, color: themePrimary}})}
+                                    ]
+                                }).addTo(map);
+                            }
+                        }
+                    } catch (trackErr) {
+                        console.error('Error toggling travel track:', trackErr);
                     }
                 }
 
@@ -928,12 +818,16 @@ private fun MapViewContainer(
         onDispose { }
     }
 
+    val currentShowTravelTrackState = rememberUpdatedState(showTravelTrack)
+    val currentSelectedProviderState = rememberUpdatedState(selectedProvider)
+
     LaunchedEffect(isMapReady, markersJson, webViewRef) {
         val json = markersJson
         val wv = webViewRef
         if (isMapReady && json != null && wv != null) {
+            val trackEnabled = currentShowTravelTrackState.value
             wv.evaluateJavascript("if (typeof setMarkersData !== 'undefined') { setMarkersData($json); }", null)
-            wv.evaluateJavascript("if (typeof toggleTravelTrack !== 'undefined') { toggleTravelTrack(${showTravelTrack}); }", null)
+            wv.evaluateJavascript("if (typeof toggleTravelTrack !== 'undefined') { toggleTravelTrack($trackEnabled); }", null)
             currentActiveMediaId?.let { mediaId ->
                 val quotedId = org.json.JSONObject.quote(mediaId)
                 wv.evaluateJavascript("if (typeof highlightMarker !== 'undefined') { highlightMarker($quotedId, 1); }", null)
@@ -942,14 +836,16 @@ private fun MapViewContainer(
     }
 
     LaunchedEffect(activeMediaId) {
-        if (activeMediaId != null) {
+        val currentId = activeMediaId
+        if (currentId != null) {
             val duration = if (isPlaying) mapSlideDuration else 1
-            webViewRef?.evaluateJavascript("highlightMarker('$activeMediaId', $duration)", null)
-            val index = sortedMedia.indexOfFirst { it.id?.toString() == activeMediaId }
+            val quotedId = org.json.JSONObject.quote(currentId)
+            webViewRef?.evaluateJavascript("if (typeof highlightMarker !== 'undefined') highlightMarker($quotedId, $duration)", null)
+            val index = sortedMedia.indexOfFirst { it.id?.toString() == currentId }
             if (index >= 0) {
                 listState.animateScrollToItem(index)
             }
-            val media = sortedMedia.find { it.id?.toString() == activeMediaId }
+            val media = sortedMedia.find { it.id?.toString() == currentId }
             onActiveMediaChange(media)
         } else {
             onActiveMediaChange(null)
@@ -962,17 +858,18 @@ private fun MapViewContainer(
             if (currentIndex == -1 || currentIndex == sortedMedia.size - 1) {
                 currentIndex = 0
             }
-            
+
             // clear any pending signals
             flightCompleteChannel.tryReceive()
-            
+
             while (isPlaying && currentIndex < sortedMedia.size) {
                 val targetId = sortedMedia[currentIndex].id?.toString()
                 if (activeMediaId == targetId) {
                     // Force trigger highlight and scroll if activeMediaId matches current targetId (prevents Jetpack Compose state deduplication hang)
                     if (targetId != null) {
                         val duration = mapSlideDuration
-                        webViewRef?.evaluateJavascript("highlightMarker('$targetId', $duration)", null)
+                        val quotedId = org.json.JSONObject.quote(targetId)
+                        webViewRef?.evaluateJavascript("if (typeof highlightMarker !== 'undefined') highlightMarker($quotedId, $duration)", null)
                         val index = sortedMedia.indexOfFirst { it.id?.toString() == targetId }
                         if (index >= 0) {
                             listState.animateScrollToItem(index)
@@ -981,11 +878,11 @@ private fun MapViewContainer(
                 } else {
                     activeMediaId = targetId
                 }
-                
+
                 withTimeoutOrNull(25000L) {
                     flightCompleteChannel.receive()
                 }
-                
+
                 delay((mapSlideDuration * 0.2 * 1000L).toLong().coerceAtLeast(100L))
                 currentIndex++
                 if (currentIndex >= sortedMedia.size) {
@@ -1000,33 +897,34 @@ private fun MapViewContainer(
     }
 
     var isMapInteractionEnabled by remember { mutableStateOf(false) }
-    
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-    ) {
-        // Map Section taking exactly 60% of the screen height when activeMedia is present
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(if (activeMedia != null) 0.6f else 1.0f)
-        ) {
-            var isMapFocused by remember { mutableStateOf(false) }
-            AndroidView(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .onFocusChanged { 
-                        isMapFocused = it.isFocused 
-                        if (!it.isFocused) {
-                            isMapInteractionEnabled = false // disable interaction when focus lost
+    val currentBgColorArgb by rememberUpdatedState(bgColorArgb)
+    val currentHtmlContent by rememberUpdatedState(htmlContent)
+    val currentSortedMedia by rememberUpdatedState(sortedMedia)
+    val currentShowProviderMenu by rememberUpdatedState(showProviderMenu)
+    val currentOnSelectProvider by rememberUpdatedState(onSelectProvider)
+    val currentOnToggleTravelTrack by rememberUpdatedState(onToggleTravelTrack)
+    val currentOnShowProviderMenuChange by rememberUpdatedState(onShowProviderMenuChange)
+    val currentOnDismiss by rememberUpdatedState(onDismiss)
+    val currentOnActiveMediaChange by rememberUpdatedState(onActiveMediaChange)
+
+    val mapPane = remember {
+        movableContentOf<Modifier, Boolean> { paneModifier, isSideBySide ->
+            Box(modifier = paneModifier) {
+                var isMapFocused by remember { mutableStateOf(false) }
+                AndroidView(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .onFocusChanged {
+                            isMapFocused = it.isFocused
+                            if (!it.isFocused) {
+                                isMapInteractionEnabled = false // disable interaction when focus lost
+                            }
                         }
-                    }
-                    .focusable()
-                    .border(
-                        width = if (isMapFocused) 4.dp else 0.dp,
-                        color = if (isMapInteractionEnabled) MaterialTheme.colorScheme.secondary else if (isMapFocused) MaterialTheme.colorScheme.primary else androidx.compose.ui.graphics.Color.Transparent
-                    ),
+                        .focusable()
+                        .border(
+                            width = if (isMapFocused) 4.dp else 0.dp,
+                            color = if (isMapInteractionEnabled) MaterialTheme.colorScheme.secondary else if (isMapFocused) MaterialTheme.colorScheme.primary else Color.Transparent
+                        ),
                 factory = { ctx ->
                     val ensureCacheDirs = { context: android.content.Context ->
                         try {
@@ -1086,7 +984,7 @@ private fun MapViewContainer(
                                 false
                             }
                         }
-                        setBackgroundColor("#121212".toColorInt())
+                        setBackgroundColor(currentBgColorArgb)
                         layoutParams = android.view.ViewGroup.LayoutParams(
                             android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                             android.view.ViewGroup.LayoutParams.MATCH_PARENT
@@ -1321,15 +1219,12 @@ private fun MapViewContainer(
                             fun onMediaSelected(mediaId: String) {
                                 scope.launch {
                                     activeMediaId = mediaId
-                                    onResetHeaderTimer()
                                 }
                             }
 
                             @JavascriptInterface
                             fun onMapClick() {
-                                scope.launch {
-                                    onResetHeaderTimer()
-                                }
+                                // Map surface click handled natively by Leaflet
                             }
                             
                             @JavascriptInterface
@@ -1337,8 +1232,8 @@ private fun MapViewContainer(
                                 flightCompleteChannel.trySend(mediaId)
                                 scope.launch {
                                     mediaId?.let { id ->
-                                        val activeMedia = sortedMedia.find { it.id?.toString() == id }
-                                        onActiveMediaChange(activeMedia)
+                                        val activeMediaItem = currentSortedMedia.find { it.id?.toString() == id }
+                                        currentOnActiveMediaChange(activeMediaItem)
                                     }
                                 }
                             }
@@ -1348,6 +1243,7 @@ private fun MapViewContainer(
                     }
                 },
                 update = { webView ->
+                    webView.setBackgroundColor(currentBgColorArgb)
                     // Inject Cookies for authorized image loading
                     val cookieManager = CookieManager.getInstance()
                     cookieManager.setAcceptCookie(true)
@@ -1379,312 +1275,639 @@ private fun MapViewContainer(
 
                     // Only load once to prevent flickering on recomposition, 
                     // unless content or manual reload trigger changed.
-                    if (lastLoadedHash[0] != htmlContent.hashCode() || lastReloadTrigger[0] != reloadTrigger) {
+                    val latestHtml = currentHtmlContent
+                    if (lastLoadedHash[0] != latestHtml.hashCode() || lastReloadTrigger[0] != reloadTrigger) {
                         webView.loadDataWithBaseURL(
                             baseUrl,
-                            htmlContent,
+                            latestHtml,
                             "text/html",
                             "UTF-8",
                             null
                         )
-                        lastLoadedHash[0] = htmlContent.hashCode()
+                        lastLoadedHash[0] = latestHtml.hashCode()
                         lastReloadTrigger[0] = reloadTrigger
                     }
                 }
             )
 
-            if (isMapLoading) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.background.copy(alpha = 0.85f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(text = stringResource(R.string.loading_map), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+                if (isMapLoading) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            tonalElevation = 4.dp,
+                            border = GalleryCardDefaults.sectionCardBorder()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = stringResource(R.string.loading_map),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
                     }
                 }
-            }
 
-            mapError?.let { err ->
-                Box(
+                mapError?.let { err ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .widthIn(max = 400.dp)
+                                .padding(24.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.LocationOff,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(48.dp)
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = err,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Button(
+                                onClick = {
+                                    mapError = null
+                                    isMapLoading = true
+                                    reloadTrigger++
+                                },
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier
+                                    .defaultMinSize(minHeight = 48.dp)
+                                    .tvFocus(shape = RoundedCornerShape(16.dp))
+                                    .testTag("map_retry_button")
+                            ) {
+                                Text(stringResource(R.string.retry))
+                            }
+                        }
+                    }
+                }
+
+                // Persistent Floating Close button (Top-Start of map pane)
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
+                    tonalElevation = 4.dp,
+                    shadowElevation = 4.dp,
+                    border = BorderStroke(
+                        width = 0.75.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                    ),
                     modifier = Modifier
-                        .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.background.copy(alpha = 0.95f)),
-                    contentAlignment = Alignment.Center
+                        .align(Alignment.TopStart)
+                        .windowInsetsPadding(
+                            WindowInsets.statusBars.union(WindowInsets.displayCutout)
+                                .only(WindowInsetsSides.Top + WindowInsetsSides.Start)
+                        )
+                        .padding(16.dp)
                 ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(24.dp)
+                    IconButton(
+                        onClick = currentOnDismiss,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .tvFocus(shape = CircleShape)
+                            .testTag("map_close_button")
                     ) {
                         Icon(
-                            imageVector = Icons.Default.LocationOff,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(48.dp)
+                            imageVector = Icons.Default.Close,
+                            contentDescription = stringResource(R.string.close_map),
+                            tint = MaterialTheme.colorScheme.onSurface
                         )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(text = err, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.Center)
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Button(onClick = {
-                            mapError = null
-                            isMapLoading = true
-                            reloadTrigger++
-                        }) {
-                            Text(stringResource(R.string.retry))
+                    }
+                }
+
+                // Persistent Floating Route Toggle & Layer Selector (Top-End of map pane)
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .windowInsetsPadding(
+                            WindowInsets.statusBars.union(WindowInsets.displayCutout).only(
+                                if (isSideBySide) WindowInsetsSides.Top
+                                else WindowInsetsSides.Top + WindowInsetsSides.End
+                            )
+                        )
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val trackEnabled = currentShowTravelTrackState.value
+                    Surface(
+                        shape = CircleShape,
+                        color = if (trackEnabled) {
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f)
+                        },
+                        tonalElevation = 4.dp,
+                        shadowElevation = 4.dp,
+                        border = BorderStroke(
+                            width = if (trackEnabled) 1.dp else 0.75.dp,
+                            color = if (trackEnabled) {
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+                            } else {
+                                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                            }
+                        )
+                    ) {
+                        IconButton(
+                            onClick = { currentOnToggleTravelTrack() },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .tvFocus(shape = CircleShape)
+                                .testTag("map_travel_track_toggle")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Route,
+                                contentDescription = stringResource(
+                                    if (trackEnabled) R.string.hide_travel_track else R.string.show_travel_track
+                                ),
+                                tint = if (trackEnabled) {
+                                    MaterialTheme.colorScheme.onPrimaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            )
+                        }
+                    }
+
+                    Box {
+                        val activeProvider = currentSelectedProviderState.value
+                        Surface(
+                            shape = CircleShape,
+                            color = if (currentShowProviderMenu) {
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f)
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f)
+                            },
+                            tonalElevation = 4.dp,
+                            shadowElevation = 4.dp,
+                            border = BorderStroke(
+                                width = if (currentShowProviderMenu) 1.dp else 0.75.dp,
+                                color = if (currentShowProviderMenu) {
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+                                } else {
+                                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                                }
+                            )
+                        ) {
+                            IconButton(
+                                onClick = { currentOnShowProviderMenuChange(true) },
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .tvFocus(shape = CircleShape)
+                                    .testTag("map_menu_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Layers,
+                                    contentDescription = stringResource(R.string.map_layers),
+                                    tint = if (currentShowProviderMenu) {
+                                        MaterialTheme.colorScheme.onPrimaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    }
+                                )
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = currentShowProviderMenu,
+                            onDismissRequest = { currentOnShowProviderMenuChange(false) },
+                            shape = RoundedCornerShape(16.dp),
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            modifier = Modifier.width(220.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Layers,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = stringResource(R.string.map_style),
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                            HorizontalDivider(
+                                modifier = Modifier.padding(bottom = 4.dp),
+                                thickness = 0.5.dp,
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                            )
+                            MapProvider.values().forEach { provider ->
+                                val isSelected = activeProvider == provider
+                                val providerLabel = stringResource(provider.labelResId)
+                                DropdownMenuItem(
+                                    onClick = {
+                                        currentOnSelectProvider(provider)
+                                        currentOnShowProviderMenuChange(false)
+                                    },
+                                    modifier = Modifier
+                                        .testTag("map_provider_${provider.name.lowercase()}")
+                                        .then(
+                                            if (isSelected) {
+                                                Modifier.background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f))
+                                            } else Modifier
+                                        ),
+                                    text = {
+                                        Column(
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Card(
+                                                modifier = Modifier.size(width = 140.dp, height = 90.dp),
+                                                shape = RoundedCornerShape(12.dp),
+                                                colors = GalleryCardDefaults.previewCardColors(),
+                                                elevation = GalleryCardDefaults.previewCardElevation(),
+                                                border = GalleryCardDefaults.previewCardBorder(isSelected = isSelected)
+                                            ) {
+                                                AsyncImage(
+                                                    model = provider.previewUrl,
+                                                    contentDescription = stringResource(R.string.map_preview_cd, providerLabel),
+                                                    modifier = Modifier
+                                                        .fillMaxSize()
+                                                        .background(MaterialTheme.colorScheme.surfaceContainer),
+                                                    contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                                                )
+                                            }
+
+                                            Spacer(modifier = Modifier.height(6.dp))
+
+                                            Text(
+                                                text = providerLabel,
+                                                style = if (isSelected) {
+                                                    MaterialTheme.typography.labelLarge.copy(
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = MaterialTheme.colorScheme.primary
+                                                    )
+                                                } else {
+                                                    MaterialTheme.typography.bodyMedium
+                                                },
+                                                textAlign = TextAlign.Center,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.fillMaxWidth()
+                                            )
+                                        }
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                                )
+                            }
                         }
                     }
                 }
-            }
 
-            // Floating Close button
-            androidx.compose.animation.AnimatedVisibility(
-                visible = isHeaderVisible,
-                enter = androidx.compose.animation.fadeIn(),
-                exit = androidx.compose.animation.fadeOut(),
-                modifier = Modifier.align(Alignment.TopStart)
-            ) {
-                IconButton(
-                    onClick = onDismiss,
+                // Floating Controls Column (Zoom +, Zoom -, and Re-center)
+                Column(
                     modifier = Modifier
-                        .statusBarsPadding()
-                        .padding(16.dp)
-                        .size(48.dp)
-                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f), androidx.compose.foundation.shape.CircleShape)
+                        .align(Alignment.BottomEnd)
+                        .windowInsetsPadding(
+                            if (isSideBySide) WindowInsets(0)
+                            else WindowInsets.displayCutout.only(WindowInsetsSides.End)
+                        )
+                        .padding(end = 16.dp, bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = Alignment.End
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = stringResource(R.string.close_map),
-                        tint = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            }
+                    SmallFloatingActionButton(
+                        onClick = {
+                            webViewRef?.evaluateJavascript("if (typeof map !== 'undefined') map.zoomIn()", null)
+                        },
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .tvFocus(shape = RoundedCornerShape(12.dp))
+                            .testTag("map_zoom_in_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = stringResource(R.string.zoom_in)
+                        )
+                    }
 
-            // Floating Controls Column (Zoom +, Zoom -, and Re-center)
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 16.dp, bottom = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                horizontalAlignment = Alignment.End
-            ) {
-                // Zoom In
-                SmallFloatingActionButton(
-                    onClick = {
-                        webViewRef?.evaluateJavascript("map.zoomIn()", null)
-                        onResetHeaderTimer()
-                    },
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                    modifier = Modifier.size(48.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = stringResource(R.string.zoom_in)
-                    )
+                    SmallFloatingActionButton(
+                        onClick = {
+                            webViewRef?.evaluateJavascript("if (typeof map !== 'undefined') map.zoomOut()", null)
+                        },
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .tvFocus(shape = RoundedCornerShape(12.dp))
+                            .testTag("map_zoom_out_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Remove,
+                            contentDescription = stringResource(R.string.zoom_out)
+                        )
+                    }
+
+                    SmallFloatingActionButton(
+                        onClick = {
+                            val currentId = activeMediaId
+                            if (currentId != null) {
+                                val quotedId = org.json.JSONObject.quote(currentId)
+                                webViewRef?.evaluateJavascript("if (typeof highlightMarker !== 'undefined') highlightMarker($quotedId, 1.0)", null)
+                            } else {
+                                webViewRef?.evaluateJavascript("if (typeof fitBounds !== 'undefined') fitBounds()", null)
+                            }
+                        },
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .tvFocus(shape = RoundedCornerShape(12.dp))
+                            .testTag("map_center_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ZoomInMap,
+                            contentDescription = stringResource(R.string.center_map)
+                        )
+                    }
                 }
 
-                // Zoom Out
-                SmallFloatingActionButton(
-                    onClick = {
-                        webViewRef?.evaluateJavascript("map.zoomOut()", null)
-                        onResetHeaderTimer()
-                    },
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                    modifier = Modifier.size(48.dp)
+                // Map interaction overlay for TV
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = isMapFocused,
+                    enter = androidx.compose.animation.fadeIn(),
+                    exit = androidx.compose.animation.fadeOut(),
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Remove,
-                        contentDescription = stringResource(R.string.zoom_out)
-                    )
-                }
-
-                // Center Map
-                SmallFloatingActionButton(
-                    onClick = {
-                        if (activeMediaId != null) {
-                            webViewRef?.evaluateJavascript("highlightMarker('$activeMediaId', 1.0)", null)
-                        } else {
-                            webViewRef?.evaluateJavascript("fitBounds()", null)
-                        }
-                        onResetHeaderTimer()
-                    },
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                    modifier = Modifier.size(48.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.ZoomInMap,
-                        contentDescription = stringResource(R.string.center_map)
-                    )
-                }
-            }
-
-            // Map interaction overlay for TV
-            androidx.compose.animation.AnimatedVisibility(
-                visible = isMapFocused,
-                enter = androidx.compose.animation.fadeIn(),
-                exit = androidx.compose.animation.fadeOut(),
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.8f), RoundedCornerShape(16.dp))
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                ) {
-                    Text(
-                        text = if (isMapInteractionEnabled) stringResource(R.string.tv_map_pan_hint) else stringResource(R.string.tv_map_enter_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
+                        tonalElevation = 4.dp,
+                        border = GalleryCardDefaults.sectionCardBorder()
+                    ) {
+                        Text(
+                            text = if (isMapInteractionEnabled) stringResource(R.string.tv_map_pan_hint) else stringResource(R.string.tv_map_enter_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+                    }
                 }
             }
         }
+    }
 
-        // Active Photo Preview Panel (instead of popup, place photo above timeline, name and timestamp under previewimage)
-        if (activeMedia != null) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(0.4f)
-                    .padding(horizontal = 16.dp, vertical = 4.dp)
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
-                    .clickable {
-                        // Click to view the full screen media viewer
-                        viewModel.selectMedia(activeMedia, mediaList)
-                    }
-                    .padding(8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
+    val previewCardContent: @Composable (Modifier) -> Unit = { cardModifier ->
+        val media = activeMedia
+        if (media != null) {
+            Card(
+                onClick = { viewModel.selectMedia(media, mediaList) },
+                modifier = cardModifier
+                    .tvFocus(shape = RoundedCornerShape(16.dp))
+                    .testTag("map_preview_card"),
+                shape = RoundedCornerShape(16.dp),
+                colors = GalleryCardDefaults.previewCardColors(),
+                elevation = GalleryCardDefaults.previewCardElevation(),
+                border = GalleryCardDefaults.previewCardBorder()
             ) {
-                val cookies = viewModel.prefs.cookies
-                val thumbUrl = remember(activeMedia.id, activeMedia.parentPath, activeMedia.name, activeServerUrl, thumbSuffix) {
-                    viewModel.getThumbnailUrl(activeMedia).let {
-                        if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it
-                    }
-                }
-                val cacheKey = "thumb_${activeMedia.id}_${activeMedia.name}"
-                val imgRequest = remember(thumbUrl, cookies, cacheKey) {
-                    ImageRequest.Builder(context)
-                        .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
-                        .diskCachePolicy(coil.request.CachePolicy.ENABLED)
-                        .networkCachePolicy(coil.request.CachePolicy.ENABLED)
-                        .memoryCacheKey(cacheKey)
-                        .diskCacheKey(cacheKey)
-                        .data(thumbUrl)
-                        .apply {
-                            if (cookies.isNotBlank()) {
-                                setHeader("Cookie", cookies)
-                            }
-                        }
-                        .crossfade(true)
-                        .build()
-                }
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.surface)
-                ) {
-                    AsyncImage(
-                        model = imgRequest,
-                        contentDescription = stringResource(R.string.active_media_preview),
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = androidx.compose.ui.layout.ContentScale.Fit
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(6.dp))
-
                 Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
                 ) {
-                    Text(
-                        text = activeMedia.name,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                    )
-                    
-                    if (activeMedia.metadata?.creationDate != null) {
-                        val dateStr = DateUtils.formatMediaDate(activeMedia.metadata?.creationDate, activeMedia.metadata?.creationDateOffset, unknownLabel = unknownLabel)
-                        Text(
-                            text = dateStr,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    val cookies = viewModel.prefs.cookies
+                    val thumbUrl = remember(media.id, media.parentPath, media.name, activeServerUrl, thumbSuffix) {
+                        viewModel.getThumbnailUrl(media).let {
+                            if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it
+                        }
+                    }
+                    val cacheKey = "thumb_${media.id}_${media.name}"
+                    val imgRequest = remember(thumbUrl, cookies, cacheKey) {
+                        ImageRequest.Builder(context)
+                            .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                            .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                            .networkCachePolicy(coil.request.CachePolicy.ENABLED)
+                            .memoryCacheKey(cacheKey)
+                            .diskCacheKey(cacheKey)
+                            .data(thumbUrl)
+                            .apply {
+                                if (cookies.isNotBlank()) {
+                                    setHeader("Cookie", cookies)
+                                }
+                            }
+                            .crossfade(true)
+                            .build()
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainer)
+                    ) {
+                        AsyncImage(
+                            model = imgRequest,
+                            contentDescription = stringResource(R.string.active_media_preview),
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = androidx.compose.ui.layout.ContentScale.Fit
                         )
                     }
-                    
-                    val currentIndex = geotaggedMedia.indexOf(activeMedia) + 1
-                    Text(
-                        text = stringResource(R.string.map_counter_format, currentIndex, geotaggedMedia.size, mediaList.size),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = media.name,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center
+                        )
+
+                        if (media.metadata?.creationDate != null) {
+                            val dateStr = DateUtils.formatMediaDate(
+                                media.metadata?.creationDate,
+                                media.metadata?.creationDateOffset,
+                                unknownLabel = unknownLabel
+                            )
+                            Text(
+                                text = dateStr,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        val currentIndex = geotaggedMedia.indexOf(media) + 1
+                        Text(
+                            text = stringResource(R.string.map_counter_format, currentIndex, geotaggedMedia.size, mediaList.size),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+    ) {
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+        ) {
+            val useSideBySide = activeMedia != null &&
+                ((maxWidth >= 600.dp && maxWidth > maxHeight) || maxHeight < 460.dp)
+
+            if (useSideBySide) {
+                Row(modifier = Modifier.fillMaxSize()) {
+                    mapPane(
+                        Modifier
+                            .fillMaxHeight()
+                            .weight(0.62f),
+                        true
                     )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .weight(0.38f)
+                            .windowInsetsPadding(WindowInsets.statusBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top + WindowInsetsSides.End))
+                            .padding(start = 12.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        previewCardContent(Modifier.fillMaxSize())
+                    }
+                }
+            } else {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    mapPane(
+                        Modifier
+                            .fillMaxWidth()
+                            .weight(if (activeMedia != null) 0.6f else 1.0f),
+                        false
+                    )
+                    if (activeMedia != null) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(0.4f)
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            previewCardContent(
+                                Modifier
+                                    .fillMaxHeight()
+                                    .fillMaxWidth()
+                                    .widthIn(max = 600.dp)
+                            )
+                        }
+                    }
                 }
             }
         }
 
         // Timeline Section (LazyRow of thumbnails)
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surface)
-                .windowInsetsPadding(WindowInsets.navigationBars)
-                .padding(bottom = 8.dp)
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            tonalElevation = 2.dp,
+            modifier = Modifier.fillMaxWidth()
         ) {
-            Column(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .windowInsetsPadding(WindowInsets.navigationBars)
+                    .padding(bottom = 8.dp)
+            ) {
+                HorizontalDivider(
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                )
                 val currentIndex = sortedMedia.indexOfFirst { it.id?.toString() == activeMediaId }
                 val progress = if (sortedMedia.isEmpty()) 0f else {
                     if (currentIndex < 0) 0f else (currentIndex.toFloat() / (sortedMedia.size - 1).coerceAtLeast(1).toFloat())
                 }
                 LinearProgressIndicator(
                     progress = { progress },
-                    modifier = Modifier.fillMaxWidth().height(3.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp),
                     color = MaterialTheme.colorScheme.primary,
                     trackColor = MaterialTheme.colorScheme.surfaceVariant
                 )
-                
+
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    var isPlayFocused by remember { mutableStateOf(false) }
-                    IconButton(
-                        onClick = { 
-                            onPlayingChange(!isPlaying) 
-                            onResetHeaderTimer()
+                    FilledTonalIconButton(
+                        onClick = {
+                            onPlayingChange(!isPlaying)
                         },
+                        colors = IconButtonDefaults.filledTonalIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
                         modifier = Modifier
-                            .onFocusChanged { isPlayFocused = it.isFocused }
-                            .border(
-                                width = if (isPlayFocused) 3.dp else 0.dp,
-                                color = if (isPlayFocused) MaterialTheme.colorScheme.secondary else androidx.compose.ui.graphics.Color.Transparent,
-                                shape = androidx.compose.foundation.shape.CircleShape
-                            )
+                            .size(48.dp)
+                            .tvFocus(shape = CircleShape)
+                            .testTag("map_play_pause_button")
                     ) {
                         Icon(
                             imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = if (isPlaying) stringResource(R.string.pause) else stringResource(R.string.play),
-                            tint = MaterialTheme.colorScheme.primary
+                            contentDescription = if (isPlaying) stringResource(R.string.pause) else stringResource(R.string.play)
                         )
                     }
-                    
-                    Spacer(modifier = Modifier.width(8.dp))
-                    
+
+                    Spacer(modifier = Modifier.width(10.dp))
+
                     LazyRow(
                         state = listState,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("map_timeline_row"),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(sortedMedia, key = { it.id ?: it.hashCode() }) { media ->
+                        itemsIndexed(sortedMedia, key = { _, media -> media.id ?: media.hashCode() }) { index, media ->
                             val isSelected = activeMediaId == media.id?.toString()
                             val cookies = viewModel.prefs.cookies
                             val thumbUrl = remember(media.id, media.parentPath, media.name, activeServerUrl, thumbSuffix) {
@@ -1710,24 +1933,30 @@ private fun MapViewContainer(
                                     .build()
                             }
 
+                            val cornerRadius by viewModel.cornerRadius.collectAsState()
+                            val thumbnailCornerRadius = cornerRadius.coerceAtMost(12).dp
                             var isFocused by remember { mutableStateOf(false) }
-                            Box(
+                            val surfaceStyle = GalleryCardDefaults.mediaCardSurfaceStyle(
+                                cornerRadius = thumbnailCornerRadius,
+                                isSelected = isSelected,
+                                isFocused = isFocused
+                            )
+                            Surface(
+                                onClick = {
+                                    activeMediaId = media.id?.toString()
+                                    onPlayingChange(false)
+                                },
                                 modifier = Modifier
                                     .size(64.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(MaterialTheme.colorScheme.surfaceVariant)
                                     .onFocusChanged { isFocused = it.isFocused }
-                                    .border(
-                                        width = if (isFocused || isSelected) 3.dp else 0.dp,
-                                        color = if (isFocused) MaterialTheme.colorScheme.secondary else if (isSelected) MaterialTheme.colorScheme.primary else androidx.compose.ui.graphics.Color.Transparent,
-                                        shape = RoundedCornerShape(8.dp)
-                                    )
-                                    .clickable {
-                                        activeMediaId = media.id?.toString()
-                                        onPlayingChange(false)
-                                        onResetHeaderTimer()
-                                    }
-                                    .focusable()
+                                    .tvFocus(shape = surfaceStyle.shape)
+                                    .testTag("map_timeline_item_$index"),
+                                shape = surfaceStyle.shape,
+                                color = surfaceStyle.containerColor,
+                                contentColor = surfaceStyle.contentColor,
+                                tonalElevation = surfaceStyle.tonalElevation,
+                                shadowElevation = surfaceStyle.shadowElevation,
+                                border = surfaceStyle.border
                             ) {
                                 AsyncImage(
                                     model = imgRequest,
@@ -1738,10 +1967,10 @@ private fun MapViewContainer(
                             }
                         }
                     }
-                } // end Row
-            } // end Column
-        } // end Box
-    } // end Column
+                }
+            }
+        }
+    }
 }
 
 enum class MapProvider(@StringRes val labelResId: Int, val url: String, val attribution: String) {

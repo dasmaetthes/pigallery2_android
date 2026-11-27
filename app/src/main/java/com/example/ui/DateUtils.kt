@@ -49,4 +49,35 @@ object DateUtils {
         }
         return ms
     }
+
+    /**
+     * Groups media into localized "MMMM yyyy" buckets using a single SimpleDateFormat instance
+     * over local-adjusted timestamps, avoiding thousands of per-item formatter allocations.
+     */
+    fun groupMediaByMonthYear(
+        mediaList: List<com.example.data.ApiMedia>,
+        unknownLabel: String
+    ): Map<String, List<com.example.data.ApiMedia>> {
+        if (mediaList.isEmpty()) return emptyMap()
+        val sdf = SimpleDateFormat("MMMM yyyy", Locale.getDefault()).apply {
+            timeZone = TimeZone.getTimeZone("UTC")
+        }
+        val reusableDate = Date()
+        val grouped = LinkedHashMap<String, MutableList<com.example.data.ApiMedia>>()
+        for (media in mediaList) {
+            val localMs = getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+            val key = if (localMs > 0L) {
+                reusableDate.time = localMs
+                try {
+                    sdf.format(reusableDate)
+                } catch (_: Exception) {
+                    unknownLabel
+                }
+            } else {
+                unknownLabel
+            }
+            grouped.getOrPut(key) { mutableListOf() }.add(media)
+        }
+        return grouped
+    }
 }

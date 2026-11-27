@@ -23,6 +23,7 @@ import com.example.ui.LoginScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.data.PreferencesManager
 import com.example.util.AppImageLoaderFactory
+import com.example.util.LocaleHelper
 
 import android.app.Activity
 import android.content.Context
@@ -35,6 +36,10 @@ tailrec fun Context.findActivity(): Activity? = when (this) {
 }
 
 class MainActivity : FragmentActivity() {
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(LocaleHelper.wrapContext(newBase))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
@@ -45,7 +50,10 @@ class MainActivity : FragmentActivity() {
             e.printStackTrace()
         }
 
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+        val tvCapabilities = com.example.util.TvModeHelper.capabilitiesFor(this)
+        val isTvDevice = tvCapabilities.isTvMode
+
+        if (!isTvDevice && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
             try {
                 val lp = window.attributes
                 lp.layoutInDisplayCutoutMode =
@@ -79,7 +87,7 @@ class MainActivity : FragmentActivity() {
             androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
                 val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
                     if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
-                        if (viewModel.isBiometricLockEnabled.value) {
+                        if (tvCapabilities.allowItemLocking && viewModel.isBiometricLockEnabled.value) {
                             viewModel.lockApp()
                         }
                     }
@@ -94,7 +102,7 @@ class MainActivity : FragmentActivity() {
             val darkTheme = when (themeMode) {
                 "Dark", "Black", "OLED Black", "OLED" -> true
                 "Light" -> false
-                else -> isSystemDark // "Auto"
+                else -> if (isTvDevice) true else isSystemDark // "Auto" prefers comfortable dark UI on living-room TVs
             }
             val isOledMode = themeMode == "Black" || themeMode == "OLED Black" || themeMode == "OLED"
 
@@ -110,11 +118,13 @@ class MainActivity : FragmentActivity() {
                         insetsController.isAppearanceLightStatusBars = !darkTheme
                         insetsController.isAppearanceLightNavigationBars = !darkTheme
 
-                        val layoutParams = window.attributes
-                        val targetBrightness = if (maxBrightnessEnabled) 1.0f else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
-                        if (layoutParams.screenBrightness != targetBrightness) {
-                            layoutParams.screenBrightness = targetBrightness
-                            window.attributes = layoutParams
+                        if (!isTvDevice) {
+                            val layoutParams = window.attributes
+                            val targetBrightness = if (maxBrightnessEnabled) 1.0f else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                            if (layoutParams.screenBrightness != targetBrightness) {
+                                layoutParams.screenBrightness = targetBrightness
+                                window.attributes = layoutParams
+                            }
                         }
                     } catch (e: Exception) {
                         // Prevent crash on startup if window attributes fail
@@ -122,21 +132,25 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
-            MyApplicationTheme(
-                themeColorOption = themeColorOption,
-                darkTheme = darkTheme,
-                isOledMode = isOledMode
+            androidx.compose.runtime.CompositionLocalProvider(
+                com.example.util.LocalIsAndroidTv provides isTvDevice
             ) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
+                MyApplicationTheme(
+                    themeColorOption = themeColorOption,
+                    darkTheme = darkTheme,
+                    isOledMode = isOledMode
                 ) {
-                    val isLoggedIn by viewModel.isLoggedIn.collectAsState()
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background
+                    ) {
+                        val isLoggedIn by viewModel.isLoggedIn.collectAsState()
 
-                    if (isLoggedIn) {
-                        GalleryScreen(viewModel = viewModel)
-                    } else {
-                        LoginScreen(viewModel = viewModel)
+                        if (isLoggedIn) {
+                            GalleryScreen(viewModel = viewModel)
+                        } else {
+                            LoginScreen(viewModel = viewModel)
+                        }
                     }
                 }
             }

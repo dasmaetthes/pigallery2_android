@@ -27,6 +27,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.PopupProperties
 import com.example.R
+import com.example.util.rememberTvCapabilities
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -51,6 +52,8 @@ fun AdvancedQueryBuilderDialog(
     onSaveAsAlbum: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
+    val tvCapabilities = rememberTvCapabilities()
+    val effectiveCanManageAlbums = tvCapabilities.canManageAlbums(canManageAlbums)
     val coroutineScope = rememberCoroutineScope()
     
     val initialQuery by viewModel.searchQuery.collectAsState()
@@ -76,15 +79,16 @@ fun AdvancedQueryBuilderDialog(
         Surface(
             modifier = Modifier
                 .fillMaxWidth(0.95f)
+                .widthIn(max = 640.dp)
                 .fillMaxHeight(0.85f),
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
             tonalElevation = 6.dp
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(20.dp)
+                    .padding(24.dp)
             ) {
                 // Header
                 Row(
@@ -93,12 +97,20 @@ fun AdvancedQueryBuilderDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Tune,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(28.dp)
-                        )
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Tune,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
                             text = stringResource(R.string.advanced_search),
@@ -106,12 +118,17 @@ fun AdvancedQueryBuilderDialog(
                             fontWeight = FontWeight.Bold
                         )
                     }
-                    IconButton(onClick = onDismissRequest) {
+                    IconButton(
+                        onClick = onDismissRequest,
+                        modifier = Modifier.tvFocus(shape = CircleShape)
+                    ) {
                         Icon(imageVector = Icons.Default.Close, contentDescription = stringResource(R.string.close))
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                Spacer(modifier = Modifier.height(12.dp))
 
                 // Scrollable filters list
                 Box(
@@ -157,7 +174,9 @@ fun AdvancedQueryBuilderDialog(
                                                 onClick = {
                                                     rows = rows.toMutableList().apply { removeAt(index) }
                                                 },
-                                                modifier = Modifier.size(48.dp)
+                                                modifier = Modifier
+                                                    .size(48.dp)
+                                                    .tvFocus(shape = CircleShape)
                                             ) {
                                                 Icon(
                                                     imageVector = Icons.Default.Delete,
@@ -193,7 +212,9 @@ fun AdvancedQueryBuilderDialog(
                                                         modifier = Modifier.clickable { expanded = true }
                                                     )
                                                 },
-                                                modifier = Modifier.clickable { expanded = true }
+                                                modifier = Modifier
+                                                    .tvFocus(shape = RoundedCornerShape(12.dp))
+                                                    .clickable { expanded = true }
                                             )
                                             DropdownMenu(
                                                 expanded = expanded,
@@ -202,6 +223,7 @@ fun AdvancedQueryBuilderDialog(
                                                 listOf("", "(", "((", "(((").forEach { valName ->
                                                     DropdownMenuItem(
                                                         text = { Text(valName.ifEmpty { "-" }) },
+                                                        modifier = Modifier.tvFocus(shape = RoundedCornerShape(8.dp)),
                                                         onClick = {
                                                             if (expanded) {
                                                                 expanded = false
@@ -247,7 +269,9 @@ fun AdvancedQueryBuilderDialog(
                                                         modifier = Modifier.clickable { expanded = true }
                                                     )
                                                 },
-                                                modifier = Modifier.clickable { expanded = true }
+                                                modifier = Modifier
+                                                    .tvFocus(shape = RoundedCornerShape(12.dp))
+                                                    .clickable { expanded = true }
                                             )
                                             DropdownMenu(
                                                 expanded = expanded,
@@ -256,6 +280,7 @@ fun AdvancedQueryBuilderDialog(
                                                 attributeLabels.forEach { (key, label) ->
                                                     DropdownMenuItem(
                                                         text = { Text(label) },
+                                                        modifier = Modifier.tvFocus(shape = RoundedCornerShape(8.dp)),
                                                         onClick = {
                                                             if (expanded) {
                                                                 expanded = false
@@ -290,7 +315,9 @@ fun AdvancedQueryBuilderDialog(
                                                         modifier = Modifier.clickable { expanded = true }
                                                     )
                                                 },
-                                                modifier = Modifier.clickable { expanded = true }
+                                                modifier = Modifier
+                                                    .tvFocus(shape = RoundedCornerShape(12.dp))
+                                                    .clickable { expanded = true }
                                             )
                                             DropdownMenu(
                                                 expanded = expanded,
@@ -299,6 +326,7 @@ fun AdvancedQueryBuilderDialog(
                                                 listOf("", ")", "))", ")))").forEach { valName ->
                                                     DropdownMenuItem(
                                                         text = { Text(valName.ifEmpty { "-" }) },
+                                                        modifier = Modifier.tvFocus(shape = RoundedCornerShape(8.dp)),
                                                         onClick = {
                                                             if (expanded) {
                                                                 expanded = false
@@ -352,7 +380,8 @@ fun AdvancedQueryBuilderDialog(
                                                         this[index] = this[index].copy(connector = "AND")
                                                     }
                                                 },
-                                                label = { Text(stringResource(R.string.connector_and)) }
+                                                label = { Text(stringResource(R.string.connector_and)) },
+                                                modifier = Modifier.tvFocus(shape = RoundedCornerShape(8.dp))
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))
                                             FilterChip(
@@ -362,7 +391,8 @@ fun AdvancedQueryBuilderDialog(
                                                         this[index] = this[index].copy(connector = "OR")
                                                     }
                                                 },
-                                                label = { Text(stringResource(R.string.connector_or)) }
+                                                label = { Text(stringResource(R.string.connector_or)) },
+                                                modifier = Modifier.tvFocus(shape = RoundedCornerShape(8.dp))
                                             )
                                         }
                                     }
@@ -375,7 +405,10 @@ fun AdvancedQueryBuilderDialog(
                             onClick = {
                                 rows = rows + VisualQueryRow(connector = "AND")
                             },
-                            modifier = Modifier.align(Alignment.CenterHorizontally),
+                            modifier = Modifier
+                                .align(Alignment.CenterHorizontally)
+                                .defaultMinSize(minHeight = 48.dp)
+                                .tvFocus(shape = RoundedCornerShape(20.dp)),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.secondaryContainer,
                                 contentColor = MaterialTheme.colorScheme.onSecondaryContainer
@@ -433,12 +466,14 @@ fun AdvancedQueryBuilderDialog(
                         },
                         modifier = Modifier
                             .weight(1f)
+                            .defaultMinSize(minHeight = 48.dp)
+                            .tvFocus(shape = RoundedCornerShape(20.dp))
                             .testTag("query_builder_clear_button")
                     ) {
                         Text(stringResource(R.string.clear_all))
                     }
 
-                    if (canManageAlbums && compiledQuery.isNotBlank()) {
+                    if (effectiveCanManageAlbums && compiledQuery.isNotBlank()) {
                         FilledTonalIconButton(
                             onClick = { onSaveAsAlbum(compiledQuery) },
                             modifier = Modifier
@@ -459,6 +494,8 @@ fun AdvancedQueryBuilderDialog(
                         },
                         modifier = Modifier
                             .weight(1f)
+                            .defaultMinSize(minHeight = 48.dp)
+                            .tvFocus(shape = RoundedCornerShape(20.dp))
                             .testTag("query_builder_search_button")
                     ) {
                         Icon(imageVector = Icons.Default.Search, contentDescription = null)
@@ -563,6 +600,8 @@ fun FilterValueInputSection(
         }
     }
 
+    val isTv = rememberTvCapabilities().isTvMode
+
     Column(modifier = Modifier.fillMaxWidth()) {
         Box(modifier = Modifier.fillMaxWidth()) {
             OutlinedTextField(
@@ -584,43 +623,48 @@ fun FilterValueInputSection(
                 trailingIcon = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (row.attribute == "date") {
-                            IconButton(onClick = {
-                                val calendar = java.util.Calendar.getInstance()
-                                val datePickerDialog = DatePickerDialog(
-                                    context,
-                                    { _, year, month, dayOfMonth ->
-                                        val monthStr = (month + 1).toString().padStart(2, '0')
-                                        val dayStr = dayOfMonth.toString().padStart(2, '0')
-                                        val selectedDate = "$year-$monthStr-$dayStr"
-                                        textInput = selectedDate
-                                        onValueChange(selectedDate)
-                                    },
-                                    calendar.get(java.util.Calendar.YEAR),
-                                    calendar.get(java.util.Calendar.MONTH),
-                                    calendar.get(java.util.Calendar.DAY_OF_MONTH)
-                                )
-                                datePickerDialog.show()
-                            }) {
+                            IconButton(
+                                onClick = {
+                                    val calendar = java.util.Calendar.getInstance()
+                                    val datePickerDialog = DatePickerDialog(
+                                        context,
+                                        { _, year, month, dayOfMonth ->
+                                            val monthStr = (month + 1).toString().padStart(2, '0')
+                                            val dayStr = dayOfMonth.toString().padStart(2, '0')
+                                            val selectedDate = "$year-$monthStr-$dayStr"
+                                            textInput = selectedDate
+                                            onValueChange(selectedDate)
+                                        },
+                                        calendar.get(java.util.Calendar.YEAR),
+                                        calendar.get(java.util.Calendar.MONTH),
+                                        calendar.get(java.util.Calendar.DAY_OF_MONTH)
+                                    )
+                                    datePickerDialog.show()
+                                },
+                                modifier = Modifier.tvFocus(shape = CircleShape)
+                            ) {
                                 Icon(imageVector = Icons.Default.DateRange, contentDescription = stringResource(R.string.pick_date))
                             }
                         }
                         if (textInput.isNotEmpty()) {
-                            IconButton(onClick = {
-                                textInput = ""
-                                onValueChange("")
-                            }) {
+                            IconButton(
+                                onClick = {
+                                    textInput = ""
+                                    onValueChange("")
+                                },
+                                modifier = Modifier.tvFocus(shape = CircleShape)
+                            ) {
                                 Icon(imageVector = Icons.Default.Clear, contentDescription = stringResource(R.string.clear))
                             }
                         }
                     }
                 },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .tvFocus(shape = RoundedCornerShape(12.dp))
             )
 
             // Autocomplete suggestions dropdown (for text attributes)
-            val isTv = remember(context) {
-                context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
-            }
             if (!isTv) {
                 DropdownMenu(
                     expanded = suggestionsExpanded && displayedSuggestions.isNotEmpty(),
@@ -645,9 +689,6 @@ fun FilterValueInputSection(
             }
         }
 
-        val isTv = remember(context) {
-            context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
-        }
         if (isTv && suggestionsExpanded && suggestions.isNotEmpty()) {
             Spacer(modifier = Modifier.height(6.dp))
             FlowRow(
@@ -702,7 +743,8 @@ fun FilterValueInputSection(
                             textInput = value
                             onValueChange(value)
                         },
-                        label = { Text(label) }
+                        label = { Text(label) },
+                        modifier = Modifier.tvFocus(shape = RoundedCornerShape(8.dp))
                     )
                 }
             }

@@ -24,7 +24,7 @@
     <string name="pause">Pause</string>
     <string name="play">Wiedergabe</string>
     <string name="unknown">Unbekannt</string>
-    <string name="root">Stammverzeichnis</string>
+    <string name="root">Stamm</string>
     <string name="date_label">Datum</string>
     <string name="undated">Ohne Datum</string>
     <string name="flattened_gallery">Alle Medien</string>
@@ -116,6 +116,22 @@
     <string name="clear_search">Suche leeren</string>
     <string name="no_saved_albums">Keine gespeicherten Alben</string>
     <string name="no_saved_albums_subtitle">Erstelle Such-Alben in PiGallery2 oder speichere eine Suche, um sie hier zu sehen.</string>
+    <string name="album_restore_banner_title">Gesicherte Alben wiederherstellen (%1$d)</string>
+    <string name="album_restore_banner_subtitle">Auf dem Server wurden keine gespeicherten Alben gefunden. Falls sie bei einem PiGallery2-Update oder einer Neuinstallation verloren gingen, kannst du sie hier wiederherstellen.</string>
+    <string name="album_restore_preview_more">%1$s (+%2$d weitere)</string>
+    <string name="album_restore_action">Wiederherstellen</string>
+    <string name="album_restore_dismiss_action">Verwerfen</string>
+    <string name="album_restore_dialog_title">Alben zur Wiederherstellung wählen</string>
+    <string name="album_restore_select_all">Alle auswählen</string>
+    <string name="album_restore_deselect_all">Alle abwählen</string>
+    <string name="album_restore_confirm_count">Wiederherstellen (%1$d)</string>
+    <string name="album_restore_progress">Stelle %1$d von %2$d Alben wieder her…</string>
+    <string name="album_restore_saved_date">Gesichert: %1$s</string>
+    <string name="album_restore_success_toast">%1$d Album/Alben wiederhergestellt</string>
+    <string name="album_restore_failed">Alben konnten nicht wiederhergestellt werden</string>
+    <string name="album_backup_dismiss_dialog_title">Album-Sicherung verwerfen?</string>
+    <string name="album_backup_dismiss_dialog_message">Dadurch wird die lokale Sicherung von %1$d Alben für diesen Server dauerhaft gelöscht. Wähle das, wenn du alle Alben absichtlich in PiGallery2 gelöscht hast.</string>
+    <string name="album_backup_dismiss_confirm">Sicherung verwerfen</string>
     <string name="no_matching_albums">Keine passenden Alben</string>
     <string name="try_different_search">Versuche es mit einem anderen Suchbegriff.</string>
     <string name="no_items_for_person">Keine Elemente für diese Person</string>
@@ -228,13 +244,21 @@
     <string name="meta_gps_coordinates">GPS-Koordinaten</string>
     <string name="meta_keywords">Schlagwörter</string>
     <string name="meta_people">Personen</string>
+    <string name="meta_section_file">Datei &amp; Aufnahme</string>
+    <string name="meta_section_camera">Kamera &amp; Belichtung</string>
+    <string name="meta_section_location">Standort</string>
+    <string name="meta_section_tags">Schlagwörter &amp; Personen</string>
+    <string name="slideshow_duration_tv">Diashow-Dauer</string>
     <string name="download_description">Datei wird von PiGallery2 heruntergeladen</string>
     <string name="download_started_single">Download gestartet: %1$s</string>
     <string name="download_failed_single">Download fehlgeschlagen: %1$s</string>
 
     <!-- Kartenansicht -->
     <string name="map_menu">Kartenmenü</string>
+    <string name="map_layers">Kartenebenen</string>
     <string name="travel_track">Reiseroute</string>
+    <string name="show_travel_track">Reiseroute einblenden</string>
+    <string name="hide_travel_track">Reiseroute ausblenden</string>
     <string name="map_style">Kartenstil</string>
     <string name="map_provider_base">Standard</string>
     <string name="map_provider_dark_matter">Dunkel</string>
@@ -404,4 +428,138 @@
     <string name="failed_check_updates">Update-Prüfung fehlgeschlagen (%1$d)</string>
     <string name="no_release_notes">Keine Versionshinweise vorhanden.</string>
     <string name="network_error_updates">Netzwerkfehler bei der Update-Prüfung</string>
+
+    <!-- Share-Link-Funktion -->
+    <string name="create_share_link">Share-Link erstellen</string>
+    <string name="share_link_dialog_subtitle">Diesen Ordner über einen öffentlichen PiGallery2-Link teilen</string>
+    <string name="share_link_subtitle_search">Diese Suchergebnisse über einen öffentlichen PiGallery2-Link teilen</string>
+    <string name="share_link_subtitle_album">Dieses Album über einen öffentlichen PiGallery2-Link teilen</string>
+    <string name="share_link_subtitle_person">Fotos dieser Person über einen öffentlichen PiGallery2-Link teilen</string>
+    <string name="share_folder_root">Stamm</string>
+    <string name="share_include_subfolders">Unterordner einschließen</string>
+    <string name="share_validity_label">Gültigkeitsdauer</string>
+    <string name="share_validity_1_day">1 Tag</string>
+    <string name="share_validity_7_days">7 Tage</string>
+    <string name="share_validity_30_days">30 Tage</string>
+    <string name="share_validity_unlimited">Unbegrenzt</string>
+    <string name="share_password_label">Passwort (optional)</string>
+    <string name="share_password_placeholder">Leer lassen für kein Passwort</string>
+    <string name="share_show_password">Passwort anzeigen</string>
+    <string name="share_hide_password">Passwort verbergen</string>
+    <string name="share_generate_button">Share-Link erstellen</string>
+    <string name="share_creating_button">Wird erstellt…</string>
+    <string name="share_created_header">Share-Link erstellt</string>
+    <string name="share_copy_link">Link kopieren</string>
+    <string name="share_link_action">Teilen</string>
+    <string name="share_link_via">Link teilen über</string>
+    <string name="share_link_copied">Share-Link in Zwischenablage kopiert</string>
+    <string name="share_active_links_header">Aktive Links für diesen Ordner</string>
+    <string name="share_no_active_links">Keine aktiven Share-Links für diesen Ordner.</string>
+    <string name="share_active_links_target_header">Aktive Links für diese Ansicht</string>
+    <string name="share_no_active_links_target">Keine aktiven Share-Links für diese Ansicht.</string>
+    <string name="share_expires_on">Gültig bis: %1$s</string>
+    <string name="share_expired_label">Abgelaufen</string>
+    <string name="share_password_protected_badge">Passwortgeschützt</string>
+    <string name="share_subfolders_included">Mit Unterordnern</string>
+    <string name="share_subfolders_excluded">Nur dieser Ordner</string>
+    <string name="share_revoke_link_cd">Share-Link widerrufen</string>
+    <string name="share_revoked_toast">Share-Link widerrufen</string>
+    <string name="not_authorized_share">Die Freigabe per Share-Link ist deaktiviert oder für dieses Konto nicht erlaubt.</string>
+    <string name="failed_create_share">Share-Link konnte nicht erstellt werden</string>
+    <string name="failed_load_shares">Aktive Share-Links konnten nicht geladen werden</string>
+    <string name="failed_revoke_share">Share-Link konnte nicht widerrufen werden</string>
+    <string name="share_search_unsupported_server">Diese PiGallery2-Serverversion unterstützt das Teilen von Suchergebnissen, Alben oder Personen nicht.</string>
+    <string name="manage_active_shares">Aktive Freigaben verwalten</string>
+    <string name="manage_active_shares_desc">Aktive Share-Links vom Server ansehen, kopieren, teilen oder löschen.</string>
+    <string name="share_refresh_links_cd">Aktive Share-Links aktualisieren</string>
+    <string name="share_no_active_links_server">Keine aktiven Share-Links auf diesem Server.</string>
+    <string name="share_no_active_links_hint">Erstelle einen Link über das 3-Punkte-Menü in einem Ordner, Album, einer Person oder Suche.</string>
+    <string name="share_details_dialog_title">Share-Link-Optionen</string>
+    <string name="share_details_open_cd">Share-Link-Optionen öffnen</string>
+    <string name="share_target_search_label">Suche: %1$s</string>
+    <string name="share_target_person_label">Person: %1$s</string>
+    <string name="share_target_query_fallback">Such-Freigabe</string>
+    <string name="share_delete_link_action">Link löschen</string>
+    <string name="share_deleting_link">Wird gelöscht…</string>
+    <string name="share_active_count_badge">%1$d aktiv</string>
+    <string name="share_link_created_toast">Share-Link erstellt</string>
+    <string name="share_no_app_fallback_copied">Keine App zum Teilen verfügbar. Link in Zwischenablage kopiert.</string>
+    <string name="share_in_progress_cd">Share-Link wird erstellt</string>
+    <string name="share_prevent_download">Herunterladen verhindern</string>
+    <string name="share_prevent_download_desc">Bild- und ZIP-Downloads für diesen Link deaktivieren</string>
+    <string name="share_validity_amount_label">Dauer</string>
+    <string name="share_validity_unit_label">Einheit</string>
+    <string name="share_unit_minutes">Minuten</string>
+    <string name="share_unit_hours">Stunden</string>
+    <string name="share_unit_days">Tage</string>
+    <string name="share_unit_months">Monate</string>
+    <string name="share_unit_none">Kein Ablauf</string>
+    <string name="share_validity_invalid_amount">Gib einen Wert von mindestens 1 ein</string>
+
+    <!-- Einheitliche UI & Kontextaktionen -->
+    <string name="refresh">Aktualisieren</string>
+    <string name="select_items">Elemente auswählen</string>
+    <string name="select_all">Alle auswählen</string>
+    <string name="deselect_all">Auswahl aufheben</string>
+    <string name="reset_filter">Filter zurücksetzen</string>
+    <string name="active_filter_label">Filter: %1$s</string>
+    <string name="folders_and_items_count">%1$d Ordner · %2$d Elemente</string>
+    <string name="folders_count">%1$d Ordner</string>
+    <string name="albums_count">%1$d Alben</string>
+    <string name="albums_filtered_count">%1$d von %2$d Alben</string>
+    <string name="persons_count">%1$d Personen</string>
+    <string name="persons_filtered_count">%1$d von %2$d Personen</string>
+    <string name="memories_count">%1$d Erinnerungen</string>
+    <string name="results_count">%1$d Ergebnisse</string>
+    <string name="about_app_desc">Version, Updates &amp; Open-Source-Lizenzen</string>
+
+    <!-- Spracheinstellungen -->
+    <string name="language">Sprache</string>
+    <string name="language_desc">Anzeigesprache für die App auswählen</string>
+    <string name="language_system">Systemstandard</string>
+    <string name="language_english">English</string>
+    <string name="language_german">Deutsch</string>
+    <string name="language_ukrainian">Українська</string>
+
+    <!-- Hinweise & Aktionen für leere Ansichten -->
+    <string name="empty_guidance_search">Tipp: Verwende kürzere Suchbegriffe, prüfe die Schreibweise oder kombiniere Filter in der erweiterten Suche.</string>
+    <string name="empty_guidance_albums">Tipp: Führe eine Suche in der Galerie aus und wähle im Menü „Suche als Album speichern“.</string>
+    <string name="empty_guidance_album_detail">Tipp: Zum Aktualisieren nach unten ziehen oder die Suchabfrage dieses Albums in PiGallery2 prüfen.</string>
+    <string name="empty_guidance_people">Tipp: Aktiviere „Schlagwort-Fallback für Personen“ unter Einstellungen → Funktionen, falls keine Gesichtserkennung aktiv ist.</string>
+    <string name="empty_guidance_person_detail">Tipp: Zum Aktualisieren nach unten ziehen oder prüfen, ob geschützte Ordner ausgeblendet sind.</string>
+    <string name="empty_guidance_folder">Tipp: Zum Aktualisieren nach unten ziehen oder im Menü zwischen Ordner- und Datumsansicht wechseln.</string>
+    <string name="empty_guidance_rediscover">Tipp: Vergrößere den Entdecken-Zeitraum unter Einstellungen → Funktionen, um mehr Erinnerungen zu sehen.</string>
+    <string name="empty_action_open_settings">Einstellungen öffnen</string>
+    <string name="empty_action_advanced_search">Erweiterte Suche</string>
+    <string name="empty_action_clear_search">Suche zurücksetzen</string>
+
+    <!-- Datumsansicht Schnellauswahl & Suche -->
+    <string name="year_label">Jahr</string>
+    <string name="month_label">Monat</string>
+    <string name="all_years">Alle Jahre</string>
+    <string name="all_months">Alle Monate</string>
+    <string name="search_in_period">In Zeitraum suchen</string>
+    <string name="empty_date_period_title">Keine Medien in diesem Zeitraum</string>
+    <string name="empty_date_period_subtitle">Für den gewählten Zeitraum wurden keine Fotos oder Videos gefunden.</string>
+    <string name="empty_guidance_date">Tipp: Wähle oben ein anderes Jahr bzw. einen anderen Monat oder ziehe zum Aktualisieren nach unten.</string>
+
+    <!-- Android TV Einstellungen -->
+    <string name="tv_settings_category_display">Anzeige &amp; Design</string>
+    <string name="tv_settings_category_playback">Diashow &amp; Galerie</string>
+    <string name="tv_settings_category_server">Server &amp; Speicher</string>
+    <string name="tv_settings_grid_layout">TV-Rasterlayout</string>
+    <string name="tv_settings_items_per_row">Elemente pro Zeile</string>
+    <string name="tv_settings_connected_server">Verbundener Server</string>
+    <string name="tv_settings_server_not_configured">Nicht verbunden</string>
+
+    <!-- Android TV Videosteuerung -->
+    <string name="tv_video_seek_back_10">10 Sekunden zurück</string>
+    <string name="tv_video_seek_forward_10">10 Sekunden vor</string>
+    <string name="tv_video_restart">Video neu starten</string>
+    <string name="tv_video_mute">Stummschalten</string>
+    <string name="tv_video_unmute">Ton einschalten</string>
+    <string name="tv_video_seek_bar_cd">Videofortschritt</string>
+    <string name="tv_video_seek_back_badge">-10s</string>
+    <string name="tv_video_seek_forward_badge">+10s</string>
+    <string name="tv_video_restart_badge">0:00</string>
 </resources>

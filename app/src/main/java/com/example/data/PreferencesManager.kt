@@ -19,6 +19,12 @@ class PreferencesManager(context: Context) {
         private const val KEY_ALBUM_WRITE_MIN_ROLE = "album_write_min_role"
         private const val KEY_ALBUM_FEATURE_ENABLED = "album_feature_enabled"
         private const val KEY_USER_CAN_CREATE_ALBUMS = "user_can_create_albums"
+        private const val KEY_SHARING_CONFIG_LOADED = "sharing_config_loaded"
+        private const val KEY_SHARING_SUPPORTED_BY_SERVER = "sharing_supported_by_server"
+        private const val KEY_SHARING_FEATURE_ENABLED = "sharing_feature_enabled"
+        private const val KEY_SHARING_PASSWORD_PROTECTED = "sharing_password_protected"
+        private const val KEY_SHARING_MIN_ROLE = "sharing_min_role"
+        private const val KEY_SHARING_AUTH_REQUIRED = "sharing_auth_required"
         private const val KEY_IS_LOGGED_IN = "is_logged_in"
         private const val KEY_API_PREFIX = "api_prefix"
         private const val KEY_REDISCOVER_DAYS = "rediscover_days"
@@ -37,6 +43,7 @@ class PreferencesManager(context: Context) {
         private const val KEY_ASPECT_RATIO = "aspect_ratio"
         private const val KEY_THEME_COLOR = "theme_color"
         private const val KEY_THEME_MODE = "theme_mode"
+        private const val KEY_APP_LANGUAGE = "app_language"
         private const val KEY_PEOPLE_FALLBACK_TO_KEYWORDS = "people_fallback_to_keywords"
         private const val KEY_DEFAULT_ROOT_PATH = "default_root_path"
         private const val KEY_AUTO_CHECK_UPDATES = "auto_check_updates"
@@ -125,7 +132,7 @@ class PreferencesManager(context: Context) {
         set(value) = prefs.edit { putInt(KEY_USER_ROLE, value) }
 
     var albumWriteMinRole: Int
-        get() = prefs.getInt(KEY_ALBUM_WRITE_MIN_ROLE, UserRoles.ADMIN)
+        get() = prefs.getInt(KEY_ALBUM_WRITE_MIN_ROLE, UserRoles.USER)
         set(value) = prefs.edit { putInt(KEY_ALBUM_WRITE_MIN_ROLE, value) }
 
     var albumFeatureEnabled: Boolean
@@ -139,6 +146,30 @@ class PreferencesManager(context: Context) {
     var userCanCreateAlbumsOverride: Int
         get() = prefs.getInt(KEY_USER_CAN_CREATE_ALBUMS, -1)
         set(value) = prefs.edit { putInt(KEY_USER_CAN_CREATE_ALBUMS, value) }
+
+    var sharingConfigLoaded: Boolean
+        get() = prefs.getBoolean(KEY_SHARING_CONFIG_LOADED, false)
+        set(value) = prefs.edit { putBoolean(KEY_SHARING_CONFIG_LOADED, value) }
+
+    var sharingSupportedByServer: Boolean
+        get() = prefs.getBoolean(KEY_SHARING_SUPPORTED_BY_SERVER, false)
+        set(value) = prefs.edit { putBoolean(KEY_SHARING_SUPPORTED_BY_SERVER, value) }
+
+    var sharingFeatureEnabled: Boolean
+        get() = prefs.getBoolean(KEY_SHARING_FEATURE_ENABLED, false)
+        set(value) = prefs.edit { putBoolean(KEY_SHARING_FEATURE_ENABLED, value) }
+
+    var sharingPasswordProtected: Boolean
+        get() = prefs.getBoolean(KEY_SHARING_PASSWORD_PROTECTED, true)
+        set(value) = prefs.edit { putBoolean(KEY_SHARING_PASSWORD_PROTECTED, value) }
+
+    var sharingMinRole: Int
+        get() = prefs.getInt(KEY_SHARING_MIN_ROLE, UserRoles.USER)
+        set(value) = prefs.edit { putInt(KEY_SHARING_MIN_ROLE, value) }
+
+    var sharingAuthenticationRequired: Boolean
+        get() = prefs.getBoolean(KEY_SHARING_AUTH_REQUIRED, true)
+        set(value) = prefs.edit { putBoolean(KEY_SHARING_AUTH_REQUIRED, value) }
 
     var isLoggedIn: Boolean
         get() = prefs.getBoolean(KEY_IS_LOGGED_IN, false)
@@ -185,11 +216,11 @@ class PreferencesManager(context: Context) {
         set(value) = prefs.edit { putInt(KEY_ITEMS_PER_ROW_LANDSCAPE, value) }
 
     var cornerRadius: Int
-        get() = prefs.getInt(KEY_CORNER_RADIUS, 5)
+        get() = prefs.getInt(KEY_CORNER_RADIUS, 12)
         set(value) = prefs.edit { putInt(KEY_CORNER_RADIUS, value) }
 
     var spacing: Int
-        get() = prefs.getInt(KEY_SPACING, 5)
+        get() = prefs.getInt(KEY_SPACING, 8)
         set(value) = prefs.edit { putInt(KEY_SPACING, value) }
 
     var aspectRatio: Float
@@ -283,6 +314,10 @@ class PreferencesManager(context: Context) {
     var themeMode: String
         get() = prefs.getString(KEY_THEME_MODE, "Auto") ?: "Auto"
         set(value) = prefs.edit { putString(KEY_THEME_MODE, value) }
+
+    var appLanguage: String
+        get() = prefs.getString(KEY_APP_LANGUAGE, "system") ?: "system"
+        set(value) = prefs.edit { putString(KEY_APP_LANGUAGE, value) }
 
     var peopleFallbackToKeywords: Boolean
         get() = prefs.getBoolean(KEY_PEOPLE_FALLBACK_TO_KEYWORDS, false)
@@ -391,6 +426,12 @@ class PreferencesManager(context: Context) {
             remove(KEY_ALBUM_WRITE_MIN_ROLE)
             remove(KEY_ALBUM_FEATURE_ENABLED)
             remove(KEY_USER_CAN_CREATE_ALBUMS)
+            remove(KEY_SHARING_CONFIG_LOADED)
+            remove(KEY_SHARING_SUPPORTED_BY_SERVER)
+            remove(KEY_SHARING_FEATURE_ENABLED)
+            remove(KEY_SHARING_PASSWORD_PROTECTED)
+            remove(KEY_SHARING_MIN_ROLE)
+            remove(KEY_SHARING_AUTH_REQUIRED)
         }
     }
 

@@ -181,6 +181,25 @@ class GalleryRepository(private val database: AppDatabase) {
         }
     }
 
+    suspend fun getMediaInDateRange(minMs: Long, maxMs: Long): List<ApiMedia>? {
+        return try {
+            val safeMinMs = minMs.coerceAtLeast(1L)
+            val safeMaxMs = maxMs.coerceAtLeast(safeMinMs)
+            val minSec = (safeMinMs / 1000L).coerceAtLeast(1L)
+            val maxSec = (safeMaxMs / 1000L) + 1L
+            val mediaEntities = database.mediaDao().getMediaInDateRange(
+                minMs = safeMinMs,
+                maxMs = safeMaxMs,
+                minSec = minSec,
+                maxSec = maxSec
+            )
+            if (mediaEntities.isEmpty()) return null
+            mediaEntities.map { mapEntityToMedia(it) }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     suspend fun saveAllMedia(mediaList: List<ApiMedia>) {
         if (mediaList.isEmpty()) return
         try {

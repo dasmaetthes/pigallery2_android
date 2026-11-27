@@ -19,12 +19,17 @@ import com.example.data.ApiSubFolder
 import com.example.data.ApiSubFolderCache
 import com.example.data.PiGalleryApi
 import com.example.data.PreferencesManager
+import com.example.util.TvFeatureCapabilities
+import com.example.util.TvModeHelper
+import com.example.util.VersionComparator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -86,6 +91,45 @@ sealed interface DeleteAlbumUiState {
     data class Error(val message: String) : DeleteAlbumUiState
 }
 
+sealed interface AlbumRestoreUiState {
+    object Idle : AlbumRestoreUiState
+    data class Restoring(val completed: Int, val total: Int) : AlbumRestoreUiState
+    data class Success(val restoredCount: Int) : AlbumRestoreUiState
+    data class Error(val message: String, val restoredCount: Int = 0) : AlbumRestoreUiState
+}
+
+data class SharingConfigState(
+    val isConfigLoaded: Boolean = false,
+    val isSupportedByServer: Boolean = false,
+    val isEnabled: Boolean = false,
+    val isAuthenticationRequired: Boolean = true,
+    val passwordProtected: Boolean = true,
+    val minRole: Int = com.example.data.UserRoles.USER
+) {
+    fun isAvailableForRole(userRole: Int): Boolean {
+        if (!isConfigLoaded || !isSupportedByServer || !isEnabled || !isAuthenticationRequired) {
+            return false
+        }
+        return com.example.data.UserRoles.canCreateShareLinks(
+            role = userRole,
+            sharingMinRole = minRole,
+            sharingFeatureEnabled = true
+        )
+    }
+}
+
+sealed interface ShareLinkUiState {
+    object Idle : ShareLinkUiState
+    object Creating : ShareLinkUiState
+    data class Success(val shareUrl: String, val share: com.example.data.ApiShareLink) : ShareLinkUiState
+    data class Error(val message: String) : ShareLinkUiState
+}
+
+sealed interface ShareLinkToastEvent {
+    data class Created(val shareUrl: String) : ShareLinkToastEvent
+    data class Failed(val message: String) : ShareLinkToastEvent
+}
+
 enum class ActiveTab {
     GALLERY,
     ALBUMS,
@@ -100,6 +144,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val database = com.example.data.database.DatabaseProvider.getDatabase(application)
     val repo = com.example.data.GalleryRepository(database)
     val searchHistoryManager = com.example.data.SearchHistoryManager(application)
+    val albumBackupManager = com.example.data.AlbumBackupManager(application)
 
     private fun str(@StringRes resId: Int, vararg args: Any): String =
         getApplication<Application>().getString(resId, *args)
@@ -110,6 +155,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     // Active Navigation Tab
     private val _activeTab = MutableStateFlow(ActiveTab.GALLERY)
     val activeTab: StateFlow<ActiveTab> = _activeTab.asStateFlow()
+
+    private val _previousNonSettingsTab = MutableStateFlow(ActiveTab.GALLERY)
+    val previousNonSettingsTab: StateFlow<ActiveTab> = _previousNonSettingsTab.asStateFlow()
 
     // Login/Connection State
     private val _loginState = MutableStateFlow<LoginUiState>(LoginUiState.Idle)
@@ -167,27 +215,74 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     // Preserved per-tab UI filter & expansion states across tab switches and detail navigation
     data class SavedScrollPosition(val index: Int = 0, val offset: Int = 0)
-    private val scrollPositions = android.util.LruCache<String, SavedScrollPosition>(64)
+    private val scrollPositions = android.util.LruCache<String, SavedScrollPosition>(128)
+    private val scrollKeyOwnerSeq = java.util.concurrent.atomic.AtomicLong(0L)
+    private val activeScrollKeyOwners = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    fun claimScrollKeyOwner(key: String): Long {
+        val token = scrollKeyOwnerSeq.incrementAndGet()
+        activeScrollKeyOwners[key] = token
+        return token
+    }
 
     fun getScrollPosition(key: String): SavedScrollPosition =
         scrollPositions.get(key) ?: SavedScrollPosition()
 
-    fun saveScrollPosition(key: String, index: Int, offset: Int) {
-        scrollPositions.put(key, SavedScrollPosition(index, offset))
+    fun saveScrollPosition(key: String, index: Int, offset: Int, ownerToken: Long? = null) {
+        if (ownerToken != null && activeScrollKeyOwners[key] != ownerToken) {
+            return
+        }
+        scrollPositions.put(key, SavedScrollPosition(index.coerceAtLeast(0), offset.coerceAtLeast(0)))
     }
 
     private val _albumsFilterQuery = MutableStateFlow("")
     val albumsFilterQuery: StateFlow<String> = _albumsFilterQuery.asStateFlow()
 
+    private val _isAlbumsSearchActive = MutableStateFlow(false)
+    val isAlbumsSearchActive: StateFlow<Boolean> = _isAlbumsSearchActive.asStateFlow()
+
     fun setAlbumsFilterQuery(query: String) {
         _albumsFilterQuery.value = query
+    }
+
+    fun setAlbumsSearchActive(active: Boolean, clearQueryOnClose: Boolean = false) {
+        _isAlbumsSearchActive.value = active
+        if (!active && clearQueryOnClose) {
+            _albumsFilterQuery.value = ""
+        }
+    }
+
+    fun toggleAlbumsSearchActive() {
+        val next = !_isAlbumsSearchActive.value
+        _isAlbumsSearchActive.value = next
+        if (!next) {
+            _albumsFilterQuery.value = ""
+        }
     }
 
     private val _personsFilterQuery = MutableStateFlow("")
     val personsFilterQuery: StateFlow<String> = _personsFilterQuery.asStateFlow()
 
+    private val _isPersonsSearchActive = MutableStateFlow(false)
+    val isPersonsSearchActive: StateFlow<Boolean> = _isPersonsSearchActive.asStateFlow()
+
     fun setPersonsFilterQuery(query: String) {
         _personsFilterQuery.value = query
+    }
+
+    fun setPersonsSearchActive(active: Boolean, clearQueryOnClose: Boolean = false) {
+        _isPersonsSearchActive.value = active
+        if (!active && clearQueryOnClose) {
+            _personsFilterQuery.value = ""
+        }
+    }
+
+    fun togglePersonsSearchActive() {
+        val next = !_isPersonsSearchActive.value
+        _isPersonsSearchActive.value = next
+        if (!next) {
+            _personsFilterQuery.value = ""
+        }
     }
 
     private val _rediscoverExpandedYears = MutableStateFlow<Set<Int>>(emptySet())
@@ -248,6 +343,38 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private val _deleteAlbumState = MutableStateFlow<DeleteAlbumUiState>(DeleteAlbumUiState.Idle)
     val deleteAlbumState: StateFlow<DeleteAlbumUiState> = _deleteAlbumState.asStateFlow()
 
+    private val _recoverableAlbums = MutableStateFlow<List<com.example.data.BackedUpAlbum>>(emptyList())
+    val recoverableAlbums: StateFlow<List<com.example.data.BackedUpAlbum>> = _recoverableAlbums.asStateFlow()
+
+    private val _albumRestoreState = MutableStateFlow<AlbumRestoreUiState>(AlbumRestoreUiState.Idle)
+    val albumRestoreState: StateFlow<AlbumRestoreUiState> = _albumRestoreState.asStateFlow()
+
+    private val _sharingConfig = MutableStateFlow(buildSharingConfigState())
+    val sharingConfig: StateFlow<SharingConfigState> = _sharingConfig.asStateFlow()
+
+    private val _canCreateShareLink = MutableStateFlow(computeCanCreateShareLink())
+    val canCreateShareLink: StateFlow<Boolean> = _canCreateShareLink.asStateFlow()
+
+    private val _sharingPasswordProtected = MutableStateFlow(prefs.sharingPasswordProtected)
+    val sharingPasswordProtected: StateFlow<Boolean> = _sharingPasswordProtected.asStateFlow()
+
+    private val _shareLinkState = MutableStateFlow<ShareLinkUiState>(ShareLinkUiState.Idle)
+    val shareLinkState: StateFlow<ShareLinkUiState> = _shareLinkState.asStateFlow()
+
+    private val _shareLinkToastEvents = MutableSharedFlow<ShareLinkToastEvent>(extraBufferCapacity = 4)
+    val shareLinkToastEvents: SharedFlow<ShareLinkToastEvent> = _shareLinkToastEvents.asSharedFlow()
+
+    private fun buildSharingConfigState(): SharingConfigState {
+        return SharingConfigState(
+            isConfigLoaded = prefs.sharingConfigLoaded,
+            isSupportedByServer = prefs.sharingSupportedByServer,
+            isEnabled = prefs.sharingFeatureEnabled,
+            isAuthenticationRequired = prefs.sharingAuthenticationRequired,
+            passwordProtected = prefs.sharingPasswordProtected,
+            minRole = prefs.sharingMinRole
+        )
+    }
+
     private fun computeCanManageAlbums(): Boolean {
         return com.example.data.UserRoles.canManageAlbums(
             role = prefs.userRole,
@@ -255,6 +382,20 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             albumFeatureEnabled = prefs.albumFeatureEnabled,
             userCanCreateAlbumsOverride = prefs.userCanCreateAlbumsOverride
         )
+    }
+
+    private fun computeCanCreateShareLink(): Boolean {
+        return buildSharingConfigState().isAvailableForRole(prefs.userRole)
+    }
+
+    internal fun syncPermissionStateFlows() {
+        val currentSharingConfig = buildSharingConfigState()
+        val canShare = currentSharingConfig.isAvailableForRole(prefs.userRole)
+        _userRole.value = prefs.userRole
+        _sharingConfig.value = currentSharingConfig
+        _canManageAlbums.value = computeCanManageAlbums()
+        _canCreateShareLink.value = canShare
+        _sharingPasswordProtected.value = currentSharingConfig.passwordProtected
     }
 
     // Reactive Visual Settings StateFlows
@@ -267,12 +408,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val aspectRatio = MutableStateFlow(prefs.aspectRatio)
     val themeColorOption = MutableStateFlow(prefs.themeColor)
     val themeMode = MutableStateFlow(prefs.themeMode)
+    val appLanguage = MutableStateFlow(com.example.util.LocaleHelper.normalizeLanguageTag(prefs.appLanguage))
     val maxBrightnessEnabled = MutableStateFlow(prefs.maxBrightnessEnabled)
     val defaultRootPath = MutableStateFlow(prefs.defaultRootPath)
     val dismissGestureEnabled = MutableStateFlow(prefs.dismissGestureEnabled)
     val showMetadataGestureEnabled = MutableStateFlow(prefs.showMetadataGestureEnabled)
+    private fun tvCapabilities(): TvFeatureCapabilities =
+        TvModeHelper.capabilitiesFor(getApplication())
+
     val isBiometricLockEnabled = MutableStateFlow(prefs.biometricLockEnabled)
-    val isAppLocked = MutableStateFlow(prefs.biometricLockEnabled)
+    val isAppLocked = MutableStateFlow(if (tvCapabilities().allowItemLocking) prefs.biometricLockEnabled else false)
     val protectedFolders = MutableStateFlow(prefs.getProtectedFolders())
     val hideProtectedItems = MutableStateFlow(prefs.hideProtectedItems)
 
@@ -283,15 +428,55 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val galleryViewMode = MutableStateFlow(try { GalleryViewMode.valueOf(prefs.galleryViewMode) } catch (e: Exception) { GalleryViewMode.FOLDER })
     val networkConnectionInfo = MutableStateFlow(NetworkConnectionInfo())
 
+    private val cachedFolderDirectories = android.util.LruCache<String, ApiDirectory>(32)
+    private val cachedAlbumDirectories = android.util.LruCache<String, ApiDirectory>(24)
+    private val cachedPersonDirectories = android.util.LruCache<String, ApiDirectory>(24)
     private val cachedFlattenedMedia = android.util.LruCache<String, List<ApiMedia>>(4)
-    private val cachedYearMedia = android.util.LruCache<Int, List<ApiMedia>>(8)
+    private val cachedYearMedia = android.util.LruCache<String, List<ApiMedia>>(12)
+    private val cachedMonthMedia = android.util.LruCache<String, List<ApiMedia>>(36)
+    private val cachedDateRootFolders = android.util.LruCache<String, List<ApiSubFolder>>(4)
     private val lastBackgroundSyncTime = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val lastDateRootSyncTime = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    internal fun folderCacheKey(path: String): String =
+        path.trim('/').replace("\\", "/").ifEmpty { "ROOT" }
+
+    internal fun cacheFolderDirectory(path: String, directory: ApiDirectory) {
+        cachedFolderDirectories.put(folderCacheKey(path), directory)
+    }
+
+    private fun cacheCurrentDisplayedFolderIfApplicable() {
+        if (galleryViewMode.value == GalleryViewMode.FOLDER && !isFlattened.value && searchQuery.value.isEmpty()) {
+            val currentSuccess = _galleryState.value as? GalleryUiState.Success ?: return
+            val key = folderCacheKey(currentPath)
+            if (cachedFolderDirectories.get(key) == null &&
+                currentSuccess.contextKey == buildGalleryContextKey(path = currentPath)
+            ) {
+                cachedFolderDirectories.put(key, currentSuccess.directory)
+            }
+        }
+    }
+
+    private fun emitGallerySuccessIfChanged(sortedDirectory: ApiDirectory, requestContextKey: String) {
+        val current = _galleryState.value as? GalleryUiState.Success
+        if (current != null && current.contextKey == requestContextKey && current.directory == sortedDirectory) {
+            return
+        }
+        _galleryState.value = GalleryUiState.Success(sortedDirectory, requestContextKey)
+    }
     private val fetchSemaphore = Semaphore(4)
     private val reauthMutex = Mutex()
     private var backgroundSyncJob: kotlinx.coroutines.Job? = null
     private var directoryLoadJob: kotlinx.coroutines.Job? = null
+    private var dateIndexJob: kotlinx.coroutines.Job? = null
     private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
     private var urlProbeJob: kotlinx.coroutines.Job? = null
+
+    private val _availableDateYears = MutableStateFlow<List<Int>>(emptyList())
+    val availableDateYears: StateFlow<List<Int>> = _availableDateYears.asStateFlow()
+
+    private val _isDateIndexLoading = MutableStateFlow(false)
+    val isDateIndexLoading: StateFlow<Boolean> = _isDateIndexLoading.asStateFlow()
 
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
@@ -308,11 +493,65 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private val _isPersonContentRefreshing = MutableStateFlow(false)
     val isPersonContentRefreshing: StateFlow<Boolean> = _isPersonContentRefreshing.asStateFlow()
 
+    private val _isRediscoverRefreshing = MutableStateFlow(false)
+    val isRediscoverRefreshing: StateFlow<Boolean> = _isRediscoverRefreshing.asStateFlow()
+
     fun setGalleryViewMode(mode: GalleryViewMode) {
+        if (mode != GalleryViewMode.DATE) {
+            dateIndexJob?.cancel()
+            _isDateIndexLoading.value = false
+        }
         galleryViewMode.value = mode
         prefs.galleryViewMode = mode.name
         _pathHistory.value = if (mode == GalleryViewMode.DATE) listOf("") else buildInitialPathStack(prefs.defaultRootPath)
         loadCurrentDirectory()
+    }
+
+    /**
+     * Jumps directly to Date Root (year == null), a specific Year, or a specific Year + Month
+     * in "View by Date", immediately issuing a targeted Search API DATE query.
+     */
+    fun jumpToDate(year: Int?, month: Int? = null) {
+        if (galleryViewMode.value != GalleryViewMode.DATE) {
+            galleryViewMode.value = GalleryViewMode.DATE
+            prefs.galleryViewMode = GalleryViewMode.DATE.name
+        }
+        if (isSearchActive.value || searchQuery.value.isNotEmpty()) {
+            isSearchActive.value = false
+            showSearchSuggestions.value = false
+            searchQuery.value = ""
+        }
+        _pathHistory.value = when {
+            year == null || year <= 0 -> listOf("")
+            month == null || month !in 1..12 -> listOf("", com.example.data.search.DateSearchQueryHelper.buildDatePath(year))
+            else -> listOf(
+                "",
+                com.example.data.search.DateSearchQueryHelper.buildDatePath(year),
+                com.example.data.search.DateSearchQueryHelper.buildDatePath(year, month)
+            )
+        }
+        loadCurrentDirectory()
+    }
+
+    /**
+     * Opens the unified inline Search bar pre-filled with PiGallery2's `date:YYYY` or `date:YYYY-MM`
+     * parameter matching the current View by Date scope so users can combine date + keywords/people/places.
+     */
+    fun searchInCurrentDateScope() {
+        val path = currentPath
+        val year = com.example.data.search.DateSearchQueryHelper.parseYearFromPath(path)
+        val month = com.example.data.search.DateSearchQueryHelper.parseMonthFromPath(path)
+        val prefix = if (year != null) {
+            "${com.example.data.search.DateSearchQueryHelper.buildSearchTextForDate(year, month)} "
+        } else {
+            "date:"
+        }
+        if (_activeTab.value != ActiveTab.GALLERY) {
+            setActiveTab(ActiveTab.GALLERY)
+        }
+        searchQuery.value = prefix
+        isSearchActive.value = true
+        showSearchSuggestions.value = true
     }
     val searchSuggestions = MutableStateFlow<List<String>>(emptyList())
     val showSearchSuggestions = MutableStateFlow(false)
@@ -325,6 +564,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             setSearchQuery("")
             searchSuggestions.value = emptyList()
         }
+    }
+
+    fun openGlobalSearch() {
+        if (_activeTab.value != ActiveTab.GALLERY) {
+            setActiveTab(ActiveTab.GALLERY)
+        }
+        if (!isSearchActive.value) {
+            isSearchActive.value = true
+        }
+        showSearchSuggestions.value = true
     }
 
     fun updateSearchQueryText(query: String) {
@@ -915,8 +1164,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun refreshUserPermissions(force: Boolean = false) {
-        _userRole.value = prefs.userRole
-        _canManageAlbums.value = computeCanManageAlbums()
+        syncPermissionStateFlows()
 
         val now = System.currentTimeMillis()
         if (!force && (now - lastPermissionsSyncMs) < 30_000L) return
@@ -938,8 +1186,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         throwOnUnauthorized = requiresAuth
                     )
                 }
-                _userRole.value = prefs.userRole
-                _canManageAlbums.value = computeCanManageAlbums()
+                syncPermissionStateFlows()
             } catch (_: Exception) {
                 // Keep previously known permissions if session/config check fails transiently
             }
@@ -948,15 +1195,43 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun setActiveTab(tab: ActiveTab) {
         val previousTab = _activeTab.value
+        if (previousTab != ActiveTab.SETTINGS) {
+            _previousNonSettingsTab.value = previousTab
+        }
+        if (tab != ActiveTab.SETTINGS) {
+            _previousNonSettingsTab.value = tab
+        }
         _activeTab.value = tab
         // Clear multi-select mode when switching tabs to avoid stray states
         exitSelectMode()
 
-        // Tapping an already-active tab returns from detail view to its overview list
+        // Collapse inline TopAppBar search inputs when leaving Albums or Persons
+        if (previousTab != tab) {
+            if (previousTab == ActiveTab.ALBUMS) {
+                _isAlbumsSearchActive.value = false
+            }
+            if (previousTab == ActiveTab.PERSONS) {
+                _isPersonsSearchActive.value = false
+            }
+        }
+
+        // Tapping an already-active tab returns from detail view (or active search) to its overview list
         if (previousTab == tab) {
             when (tab) {
-                ActiveTab.ALBUMS -> if (_selectedAlbum.value != null) selectAlbum(null)
-                ActiveTab.PERSONS -> if (_selectedPerson.value != null) clearSelectedPerson()
+                ActiveTab.ALBUMS -> {
+                    if (_selectedAlbum.value != null) {
+                        selectAlbum(null)
+                    } else if (_isAlbumsSearchActive.value || _albumsFilterQuery.value.isNotEmpty()) {
+                        setAlbumsSearchActive(active = false, clearQueryOnClose = true)
+                    }
+                }
+                ActiveTab.PERSONS -> {
+                    if (_selectedPerson.value != null) {
+                        clearSelectedPerson()
+                    } else if (_isPersonsSearchActive.value || _personsFilterQuery.value.isNotEmpty()) {
+                        setPersonsSearchActive(active = false, clearQueryOnClose = true)
+                    }
+                }
                 else -> {}
             }
             return
@@ -978,6 +1253,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
                 ActiveTab.PERSONS -> {
+                    refreshUserPermissions(force = false)
                     if (_personsState.value !is PersonsUiState.Success) {
                         loadPersons()
                     }
@@ -987,25 +1263,42 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         loadRediscover()
                     }
                 }
-                ActiveTab.SETTINGS -> { /* no-op */ }
+                ActiveTab.SETTINGS -> {
+                    refreshUserPermissions(force = false)
+                }
             }
         }
+    }
+
+    fun navigateBackFromSettings() {
+        val target = _previousNonSettingsTab.value.takeIf { it != ActiveTab.SETTINGS } ?: ActiveTab.GALLERY
+        setActiveTab(target)
     }
 
     fun connectAndLogin(url: String, user: String, pass: String, allowInsecureSsl: Boolean = prefs.allowInsecureSsl) {
         viewModelScope.launch(Dispatchers.IO) {
             _loginState.value = LoginUiState.Loading
             try {
-                // Ensure URL has schema
-                val formattedUrl = if (!url.startsWith("http://") && !url.startsWith("https://")) {
-                    "http://$url"
-                } else {
-                    url
-                }
+                // Ensure URL has schema and clean whitespace/trailing slash
+                val formattedUrl = PiGalleryApi.ensureHttpUrl(url)
+                val previousServerUrl = prefs.serverUrl
+                val previousLocalServerUrl = prefs.localServerUrl
 
                 prefs.allowInsecureSsl = allowInsecureSsl
                 api.updateClientSsl(allowInsecureSsl)
                 com.example.util.AppImageLoaderFactory.install(getApplication(), allowInsecureSsl)
+
+                // Clear any previous server's permission/sharing config before authenticating to the new server
+                lastPermissionsSyncMs = 0L
+                prefs.userRole = -1
+                prefs.albumWriteMinRole = com.example.data.UserRoles.USER
+                prefs.albumFeatureEnabled = true
+                prefs.userCanCreateAlbumsOverride = -1
+                prefs.sharingConfigLoaded = false
+                prefs.sharingSupportedByServer = false
+                prefs.sharingFeatureEnabled = false
+                prefs.sharingAuthenticationRequired = true
+                syncPermissionStateFlows()
 
                 val (cookies, apiPrefix) = api.login(formattedUrl, user, pass)
                 
@@ -1017,7 +1310,25 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 prefs.apiPrefix = apiPrefix
                 prefs.isLoggedIn = true
 
-                // Sync viewmodel fields and fetch server ClientConfig (e.g. PR #1400 user album rights)
+                // If user reconnected via the previously configured local URL (or swapped primary/local),
+                // carry over the local album backup snapshot seamlessly.
+                val normalizedFormatted = com.example.data.AlbumBackupManager.normalizeServerKey(formattedUrl)
+                val normalizedPrevPrimary = com.example.data.AlbumBackupManager.normalizeServerKey(previousServerUrl)
+                val normalizedPrevLocal = com.example.data.AlbumBackupManager.normalizeServerKey(previousLocalServerUrl)
+                val normalizedCurrLocal = com.example.data.AlbumBackupManager.normalizeServerKey(prefs.localServerUrl)
+                val switchedBetweenLinkedUrls = normalizedPrevPrimary.isNotEmpty() &&
+                    normalizedFormatted != normalizedPrevPrimary &&
+                    (
+                        (normalizedPrevLocal.isNotEmpty() &&
+                            com.example.data.AlbumBackupManager.hostKey(formattedUrl) == com.example.data.AlbumBackupManager.hostKey(previousLocalServerUrl)) ||
+                            (normalizedCurrLocal.isNotEmpty() &&
+                                com.example.data.AlbumBackupManager.hostKey(prefs.localServerUrl) == com.example.data.AlbumBackupManager.hostKey(previousServerUrl))
+                        )
+                if (switchedBetweenLinkedUrls) {
+                    albumBackupManager.migrateBackupsIfMissing(previousServerUrl, formattedUrl)
+                }
+
+                // Sync viewmodel fields and fetch server ClientConfig (e.g. PR #1400 user album rights & Sharing config)
                 savedServerUrl.value = formattedUrl
                 savedUsername.value = user
                 savedPassword.value = pass
@@ -1044,38 +1355,375 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    suspend fun fetchMediaForYear(year: Int): List<ApiMedia> {
-        val cached = cachedYearMedia.get(year)
-        if (cached != null) return cached
+    private fun dateScopeRoot(): String = PiGalleryApi.cleanServerPath(prefs.defaultRootPath)
 
-        val server = prefs.serverUrl
-        val cookies = prefs.cookies
-        val apiPrefix = prefs.apiPrefix
-        if (server.isEmpty()) return emptyList()
+    private fun yearCacheKey(year: Int, cleanRoot: String = dateScopeRoot()): String =
+        "${cleanRoot.ifEmpty { "ROOT" }}:$year"
 
-        return try {
-            val minMs = com.example.data.search.SearchQueryParser.parse("date:$year-01-01").let { 
-                (it as? com.example.data.search.RangeSearch)?.min ?: 0L 
-            }
-            val maxMs = com.example.data.search.SearchQueryParser.parse("date:$year-12-31").let { 
-                (it as? com.example.data.search.RangeSearch)?.max ?: Long.MAX_VALUE 
-            }
-            val queryYear: Map<String, Any?> = mapOf(
-                "type" to 10, // DATE RangeSearch
-                "min" to minMs,
-                "max" to maxMs
-            )
-            val queryJson = api.serializeQuery(queryYear)
-            val result = executeAuthenticated { activeCookies, activePrefix ->
+    private fun monthCacheKey(year: Int, month: Int, cleanRoot: String = dateScopeRoot()): String =
+        "${cleanRoot.ifEmpty { "ROOT" }}:$year-$month"
+
+    private fun filterExactYear(media: List<ApiMedia>, year: Int, cleanRoot: String): List<ApiMedia> {
+        return deduplicateMedia(media).filter { item ->
+            com.example.data.search.DateSearchQueryHelper.matchesRootPath(item, cleanRoot) &&
+                getYearFromTimestamp(
+                    DateUtils.getLocalTimeMs(item.metadata?.creationDate, item.metadata?.creationDateOffset)
+                ) == year
+        }
+    }
+
+    private fun filterExactMonth(media: List<ApiMedia>, year: Int, month: Int, cleanRoot: String): List<ApiMedia> {
+        return deduplicateMedia(media).filter { item ->
+            if (!com.example.data.search.DateSearchQueryHelper.matchesRootPath(item, cleanRoot)) return@filter false
+            val localMs = DateUtils.getLocalTimeMs(item.metadata?.creationDate, item.metadata?.creationDateOffset)
+            getYearFromTimestamp(localMs) == year && getMonthFromTimestamp(localMs) == month
+        }
+    }
+
+    private suspend fun executeDateSearchQuery(
+        server: String,
+        query: Map<String, Any?>
+    ): ApiDirectory {
+        val queryJson = api.serializeQuery(query)
+        return fetchSemaphore.withPermit {
+            executeAuthenticated { activeCookies, activePrefix ->
                 api.search(server, queryJson, activeCookies, activePrefix)
             }
-            val mediaList = deduplicateMedia(result.media.orEmpty())
-            if (mediaList.isNotEmpty()) {
-                cachedYearMedia.put(year, mediaList)
+        }
+    }
+
+    private fun prewarmMonthCachesForYear(year: Int, yearMedia: List<ApiMedia>, cleanRoot: String) {
+        val byMonth = yearMedia.groupBy { media ->
+            val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+            if (localMs > 0L) getMonthFromTimestamp(localMs) else 0
+        }
+        for (m in 1..12) {
+            cachedMonthMedia.put(monthCacheKey(year, m, cleanRoot), byMonth[m].orEmpty())
+        }
+    }
+
+    private fun registerDiscoveredYears(years: Collection<Int>) {
+        val positive = years.filter { it > 0 }
+        if (positive.isEmpty()) return
+        val merged = (_availableDateYears.value + positive).distinct().sortedDescending()
+        _availableDateYears.value = merged
+    }
+
+    /**
+     * Fetches media for a single (year, month) directly via PiGallery2 Search API DATE range.
+     * Avoids downloading the entire year or crawling folders when browsing a specific month.
+     */
+    suspend fun fetchMediaForMonth(
+        year: Int,
+        month: Int,
+        forceRefresh: Boolean = false,
+        rethrowErrors: Boolean = false
+    ): List<ApiMedia> {
+        val cleanRoot = dateScopeRoot()
+        val key = monthCacheKey(year, month, cleanRoot)
+        if (!forceRefresh) {
+            cachedMonthMedia.get(key)?.let { return it }
+        }
+
+        val server = prefs.serverUrl
+        if (server.isEmpty() || year <= 0 || month !in 1..12) return emptyList()
+
+        return try {
+            val query = com.example.data.search.DateSearchQueryHelper.buildMonthQuery(year, month, cleanRoot)
+            val result = executeDateSearchQuery(server, query)
+            val monthMedia = filterExactMonth(result.media.orEmpty(), year, month, cleanRoot)
+            cachedMonthMedia.put(key, monthMedia)
+            if (monthMedia.isNotEmpty()) {
+                registerDiscoveredYears(listOf(year))
+                try {
+                    repo.saveAllMedia(monthMedia)
+                } catch (_: Exception) {
+                    // Safe ignore on local cache write
+                }
             }
-            mediaList
+            monthMedia
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: com.example.data.UnauthorizedSessionException) {
+            throw e
         } catch (e: Exception) {
+            if (rethrowErrors) throw e
             emptyList()
+        }
+    }
+
+    /**
+     * Fetches media for an entire year via PiGallery2 Search API DATE range.
+     * If the server signals resultOverflow (e.g. > maxMediaResult photos in one year),
+     * automatically splits the request into 12 parallel month queries so no photos are lost.
+     */
+    suspend fun fetchMediaForYear(
+        year: Int,
+        forceRefresh: Boolean = false,
+        rethrowErrors: Boolean = false
+    ): List<ApiMedia> {
+        val cleanRoot = dateScopeRoot()
+        val key = yearCacheKey(year, cleanRoot)
+        if (!forceRefresh) {
+            cachedYearMedia.get(key)?.let { return it }
+        }
+
+        val server = prefs.serverUrl
+        if (server.isEmpty() || year <= 0) return emptyList()
+
+        return try {
+            val query = com.example.data.search.DateSearchQueryHelper.buildYearQuery(year, cleanRoot)
+            val result = executeDateSearchQuery(server, query)
+            val yearMedia = if (result.resultOverflow) {
+                kotlinx.coroutines.coroutineScope {
+                    (1..12).map { month ->
+                        async(Dispatchers.IO) {
+                            fetchMediaForMonth(year, month, forceRefresh = true)
+                        }
+                    }.awaitAll().flatten()
+                }.let { deduplicateMedia(it) }
+            } else {
+                val filtered = filterExactYear(result.media.orEmpty(), year, cleanRoot)
+                prewarmMonthCachesForYear(year, filtered, cleanRoot)
+                filtered
+            }
+            cachedYearMedia.put(key, yearMedia)
+            if (yearMedia.isNotEmpty()) {
+                registerDiscoveredYears(listOf(year))
+                try {
+                    repo.saveAllMedia(yearMedia)
+                } catch (_: Exception) {
+                    // Safe ignore on local cache write
+                }
+            }
+            yearMedia
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: com.example.data.UnauthorizedSessionException) {
+            throw e
+        } catch (e: Exception) {
+            if (rethrowErrors) throw e
+            emptyList()
+        }
+    }
+
+    private fun buildYearSubFolder(year: Int, mediaList: List<ApiMedia>): ApiSubFolder {
+        val firstMedia = mediaList.firstOrNull()
+        val cover = firstMedia?.let {
+            ApiCoverPhoto(
+                name = it.name,
+                directory = ApiCoverPhotoDirectory(name = "", path = it.parentPath ?: "")
+            )
+        }
+        return ApiSubFolder(
+            id = year,
+            name = if (year > 0) "$year" else str(R.string.undated),
+            path = "year:$year",
+            mediaCount = mediaList.size,
+            cache = ApiSubFolderCache(cover = cover)
+        )
+    }
+
+    private fun publishDateRootSubFolders(
+        subFolders: List<ApiSubFolder>,
+        cacheKey: String,
+        requestContextKey: String
+    ) {
+        val sortedSubFolders = subFolders
+            .filter { (it.mediaCount ?: 0) > 0 }
+            .sortedByDescending { it.id ?: 0 }
+        cachedDateRootFolders.put(cacheKey, sortedSubFolders)
+        registerDiscoveredYears(sortedSubFolders.mapNotNull { it.id })
+
+        if (searchQuery.value.isEmpty() &&
+            galleryViewMode.value == GalleryViewMode.DATE &&
+            !isFlattened.value &&
+            currentPath.isEmpty()
+        ) {
+            val dir = ApiDirectory(
+                id = -1,
+                name = str(R.string.gallery),
+                path = currentPath,
+                directories = sortedSubFolders,
+                media = emptyList()
+            )
+            emitGallerySuccessIfChanged(sortDirectory(dir), requestContextKey)
+        }
+    }
+
+    /**
+     * Search-first Year discovery for "View by Date" Root:
+     * 1. Issues a single DATE >= 1 Search API query. If resultOverflow == false, the entire
+     *    year/month index is built in 1 HTTP call (pre-warming year & month caches!).
+     * 2. If resultOverflow == true (very large gallery), streams years newest-first in parallel
+     *    batches of 4 with an early-exit `DATE < oldestCheckedYear` boundary probe so it stops
+     *    immediately once no older photos exist—never needing a full recursive folder crawl.
+     */
+    private fun startDateRootSearchDiscovery(
+        server: String,
+        cleanRoot: String,
+        requestContextKey: String,
+        forceRefresh: Boolean
+    ) {
+        val cacheKey = cleanRoot.ifEmpty { "ROOT" }
+        val lastSync = lastDateRootSyncTime[cacheKey] ?: 0L
+        val now = System.currentTimeMillis()
+        if (!forceRefresh && dateIndexJob?.isActive == true) return
+        if (!forceRefresh && cachedDateRootFolders.get(cacheKey) != null && (now - lastSync) < 120_000L) {
+            _isRefreshing.value = false
+            return
+        }
+
+        dateIndexJob?.cancel()
+        dateIndexJob = viewModelScope.launch(Dispatchers.IO) {
+            _isDateIndexLoading.value = true
+            try {
+                val allQuery = com.example.data.search.DateSearchQueryHelper.buildAllDatedQuery(cleanRoot)
+                val probeResult = executeDateSearchQuery(server, allQuery)
+                val probeMedia = deduplicateMedia(probeResult.media.orEmpty())
+                    .filter { com.example.data.search.DateSearchQueryHelper.matchesRootPath(it, cleanRoot) }
+                    .filter { !isMediaProtected(it) }
+
+                if (!probeResult.resultOverflow) {
+                    val grouped = probeMedia.groupBy { media ->
+                        val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+                        if (localMs > 0L) getYearFromTimestamp(localMs) else 0
+                    }
+                    val folders = grouped.map { (year, items) ->
+                        if (year > 0) {
+                            cachedYearMedia.put(yearCacheKey(year, cleanRoot), items)
+                            prewarmMonthCachesForYear(year, items, cleanRoot)
+                        }
+                        buildYearSubFolder(year, items)
+                    }
+                    if (probeMedia.isNotEmpty()) {
+                        cachedFlattenedMedia.put(cacheKey, probeMedia)
+                        try {
+                            repo.saveAllMedia(probeMedia)
+                        } catch (_: Exception) {
+                            // Safe ignore
+                        }
+                    }
+                    lastDateRootSyncTime[cacheKey] = System.currentTimeMillis()
+                    publishDateRootSubFolders(folders, cacheKey, requestContextKey)
+                    return@launch
+                }
+
+                // Overflow path: preserve any previously cached years while merging initial probe
+                // so already-known older years never vanish temporarily during refresh.
+                val yearFoldersMap = java.util.concurrent.ConcurrentHashMap<Int, ApiSubFolder>()
+                cachedDateRootFolders.get(cacheKey)?.forEach { existing ->
+                    val y = existing.id
+                    if (y != null && y > 0) {
+                        yearFoldersMap[y] = existing
+                    }
+                }
+                probeMedia.groupBy { media ->
+                    val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+                    if (localMs > 0L) getYearFromTimestamp(localMs) else 0
+                }.forEach { (year, items) ->
+                    if (year > 0 && items.isNotEmpty()) {
+                        yearFoldersMap[year] = buildYearSubFolder(year, items)
+                    }
+                }
+                if (yearFoldersMap.isNotEmpty()) {
+                    publishDateRootSubFolders(yearFoldersMap.values.toList(), cacheKey, requestContextKey)
+                }
+
+                val currentYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
+                val minYear = com.example.data.search.DateSearchQueryHelper.MIN_DISCOVERY_YEAR
+                var cursorYear = currentYear
+                val batchSize = 4
+
+                while (cursorYear >= minYear) {
+                    val batchEnd = (cursorYear - batchSize + 1).coerceAtLeast(minYear)
+                    val batchYears = (cursorYear downTo batchEnd).toList()
+                    val batchResults = kotlinx.coroutines.coroutineScope {
+                        batchYears.map { year ->
+                            async(Dispatchers.IO) {
+                                year to fetchMediaForYear(year, forceRefresh = forceRefresh)
+                            }
+                        }.awaitAll()
+                    }
+
+                    var updated = false
+                    for ((year, items) in batchResults) {
+                        val visible = items.filter { !isMediaProtected(it) }
+                        if (visible.isNotEmpty()) {
+                            yearFoldersMap[year] = buildYearSubFolder(year, visible)
+                            updated = true
+                        } else if (yearFoldersMap.remove(year) != null) {
+                            updated = true
+                        }
+                    }
+                    if (updated) {
+                        publishDateRootSubFolders(yearFoldersMap.values.toList(), cacheKey, requestContextKey)
+                    }
+
+                    if (batchEnd <= minYear) break
+
+                    // Boundary early-exit check: ask PiGallery2 if ANY photo exists before batchEnd
+                    val beforeQuery = com.example.data.search.DateSearchQueryHelper.buildBeforeYearQuery(batchEnd, cleanRoot)
+                    val beforeResult = executeDateSearchQuery(server, beforeQuery)
+                    val strictlyOlder = deduplicateMedia(beforeResult.media.orEmpty())
+                        .filter { com.example.data.search.DateSearchQueryHelper.matchesRootPath(it, cleanRoot) }
+                        .filter { !isMediaProtected(it) }
+                        .filter { media ->
+                            val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+                            val y = if (localMs > 0L) getYearFromTimestamp(localMs) else 0
+                            y in 1 until batchEnd
+                        }
+
+                    if (!beforeResult.resultOverflow) {
+                        // All remaining older media arrived in 1 shot (or none exist) -> we are done!
+                        strictlyOlder.groupBy { media ->
+                            val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+                            getYearFromTimestamp(localMs)
+                        }.forEach { (year, items) ->
+                            if (year > 0 && items.isNotEmpty()) {
+                                cachedYearMedia.put(yearCacheKey(year, cleanRoot), items)
+                                prewarmMonthCachesForYear(year, items, cleanRoot)
+                                yearFoldersMap[year] = buildYearSubFolder(year, items)
+                            }
+                        }
+                        if (strictlyOlder.isNotEmpty()) {
+                            try {
+                                repo.saveAllMedia(strictlyOlder)
+                            } catch (_: Exception) {
+                                // Safe ignore
+                            }
+                        }
+                        publishDateRootSubFolders(yearFoldersMap.values.toList(), cacheKey, requestContextKey)
+                        break
+                    } else {
+                        // More older media exists beyond batchEnd; seed any newly seen years & continue
+                        strictlyOlder.groupBy { media ->
+                            val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+                            getYearFromTimestamp(localMs)
+                        }.forEach { (year, items) ->
+                            if (year > 0 && items.isNotEmpty() && !yearFoldersMap.containsKey(year)) {
+                                yearFoldersMap[year] = buildYearSubFolder(year, items)
+                            }
+                        }
+                        cursorYear = batchEnd - 1
+                    }
+                }
+
+                lastDateRootSyncTime[cacheKey] = System.currentTimeMillis()
+                publishDateRootSubFolders(yearFoldersMap.values.toList(), cacheKey, requestContextKey)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: com.example.data.UnauthorizedSessionException) {
+                handleApiError(e)
+            } catch (_: Exception) {
+                // Fallback to directory crawl only if Search API is unavailable on server
+                if (cachedDateRootFolders.get(cacheKey).isNullOrEmpty()) {
+                    triggerSilentBackgroundSync(force = forceRefresh)
+                }
+            } finally {
+                _isDateIndexLoading.value = false
+                _isRefreshing.value = false
+            }
         }
     }
 
@@ -1215,7 +1863,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun refreshCurrentDirectory() {
-        cachedYearMedia.evictAll()
         _isRefreshing.value = true
         // Safety timeout so refresh indicator is guaranteed to dismiss within 12 seconds max
         viewModelScope.launch {
@@ -1224,7 +1871,30 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 _isRefreshing.value = false
             }
         }
-        if (galleryViewMode.value == GalleryViewMode.DATE || isFlattened.value) {
+        if (galleryViewMode.value == GalleryViewMode.DATE && searchQuery.value.isEmpty()) {
+            val cleanRoot = dateScopeRoot()
+            val path = currentPath
+            val year = com.example.data.search.DateSearchQueryHelper.parseYearFromPath(path)
+            val month = com.example.data.search.DateSearchQueryHelper.parseMonthFromPath(path)
+            when {
+                year != null && month != null -> {
+                    cachedMonthMedia.remove(monthCacheKey(year, month, cleanRoot))
+                }
+                year != null -> {
+                    cachedYearMedia.remove(yearCacheKey(year, cleanRoot))
+                    for (m in 1..12) cachedMonthMedia.remove(monthCacheKey(year, m, cleanRoot))
+                }
+                else -> {
+                    cachedDateRootFolders.evictAll()
+                    cachedYearMedia.evictAll()
+                    cachedMonthMedia.evictAll()
+                    lastDateRootSyncTime.clear()
+                }
+            }
+            loadCurrentDirectory(forceRefresh = true)
+        } else if (isFlattened.value) {
+            cachedYearMedia.evictAll()
+            cachedMonthMedia.evictAll()
             triggerSilentBackgroundSync(force = true)
         } else {
             loadCurrentDirectory(forceRefresh = true)
@@ -1330,7 +2000,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         } else {
                             buildDateViewDirectory(activePath, freshMediaList)
                         }
-                        _galleryState.value = GalleryUiState.Success(
+                        emitGallerySuccessIfChanged(
                             sortDirectory(updatedDir),
                             buildGalleryContextKey(path = activePath)
                         )
@@ -1371,69 +2041,294 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             return
         }
 
+        val isDateOrFlattened = searchQuery.value.isEmpty() && (isFlattened.value || galleryViewMode.value == GalleryViewMode.DATE)
+        val initialAlreadyShowingSameContext = (_galleryState.value as? GalleryUiState.Success)?.contextKey == requestContextKey
+
+        // Synchronous RAM-cache restore BEFORE launching IO so returning to a parent folder
+        // (via Back or Breadcrumb) restores the complete directory (including all subfolders)
+        // on the very same frame — preventing folders from vanishing or scroll positions shifting.
+        var restoredSynchronously = false
+        if (!forceRefresh && !initialAlreadyShowingSameContext && searchQuery.value.isEmpty()) {
+            if (!isFlattened.value && galleryViewMode.value == GalleryViewMode.FOLDER) {
+                val cachedDir = cachedFolderDirectories.get(folderCacheKey(path))
+                if (cachedDir != null) {
+                    emitGallerySuccessIfChanged(sortDirectory(cachedDir), requestContextKey)
+                    restoredSynchronously = true
+                }
+            } else if (galleryViewMode.value == GalleryViewMode.DATE) {
+                val cleanRoot = dateScopeRoot()
+                val parsedYear = com.example.data.search.DateSearchQueryHelper.parseYearFromPath(path)
+                val parsedMonth = com.example.data.search.DateSearchQueryHelper.parseMonthFromPath(path)
+                when {
+                    parsedYear != null && parsedMonth != null -> {
+                        val cachedMonth = cachedMonthMedia.get(monthCacheKey(parsedYear, parsedMonth, cleanRoot))
+                        if (cachedMonth != null) {
+                            val dir = if (isFlattened.value) {
+                                ApiDirectory(
+                                    id = -1,
+                                    name = "${getMonthName(parsedMonth)} $parsedYear",
+                                    path = path,
+                                    directories = emptyList(),
+                                    media = filterFlattenedMedia(path, cachedMonth)
+                                )
+                            } else {
+                                buildDateViewDirectory(path, cachedMonth)
+                            }
+                            emitGallerySuccessIfChanged(sortDirectory(dir), requestContextKey)
+                            restoredSynchronously = true
+                        }
+                    }
+                    parsedYear != null -> {
+                        val cachedYear = cachedYearMedia.get(yearCacheKey(parsedYear, cleanRoot))
+                        if (!cachedYear.isNullOrEmpty()) {
+                            val dir = if (isFlattened.value) {
+                                ApiDirectory(
+                                    id = -1,
+                                    name = "$parsedYear",
+                                    path = path,
+                                    directories = emptyList(),
+                                    media = filterFlattenedMedia(path, cachedYear)
+                                )
+                            } else {
+                                buildDateViewDirectory(path, cachedYear)
+                            }
+                            emitGallerySuccessIfChanged(sortDirectory(dir), requestContextKey)
+                            restoredSynchronously = true
+                        }
+                    }
+                    !isFlattened.value -> {
+                        val dateCacheKey = cleanRoot.ifEmpty { "ROOT" }
+                        val cachedFolders = cachedDateRootFolders.get(dateCacheKey)
+                        if (!cachedFolders.isNullOrEmpty()) {
+                            publishDateRootSubFolders(cachedFolders, dateCacheKey, requestContextKey)
+                            restoredSynchronously = true
+                        }
+                    }
+                }
+            } else if (isFlattened.value) {
+                val rootPath = if (!path.startsWith("year:") && !path.startsWith("month:")) {
+                    path
+                } else {
+                    prefs.defaultRootPath
+                }
+                val cleanFlatRoot = rootPath.trim('/').replace("\\", "/")
+                val flatCacheKey = cleanFlatRoot.ifEmpty { "ROOT" }
+                val cachedFlat = cachedFlattenedMedia.get(flatCacheKey)
+                if (!cachedFlat.isNullOrEmpty()) {
+                    val filteredMedia = filterFlattenedMedia(path, cachedFlat)
+                    val cachedDir = ApiDirectory(
+                        id = -1,
+                        name = if (path.isEmpty() || path == prefs.defaultRootPath) str(R.string.flattened_gallery) else path.substringAfterLast('/'),
+                        path = path,
+                        directories = emptyList(),
+                        media = filteredMedia
+                    )
+                    emitGallerySuccessIfChanged(sortDirectory(cachedDir), requestContextKey)
+                    restoredSynchronously = true
+                }
+            }
+        }
+
+        // Transition synchronously to Loading when entering an uncached context so the previous
+        // folder's LazyVerticalGrid disposes cleanly on the same frame that pathHistory changes.
+        if (!restoredSynchronously && !initialAlreadyShowingSameContext && !forceRefresh) {
+            _galleryState.value = GalleryUiState.Loading
+        }
+
         directoryLoadJob?.cancel()
         directoryLoadJob = viewModelScope.launch(Dispatchers.IO) {
-            val isDateOrFlattened = searchQuery.value.isEmpty() && (isFlattened.value || galleryViewMode.value == GalleryViewMode.DATE)
+            val alreadyShowingSameContext = initialAlreadyShowingSameContext || restoredSynchronously
             try {
                 if (forceRefresh) {
                     _isRefreshing.value = true
                 }
 
                 if (isDateOrFlattened) {
-                    // Check if we are inside a specific year or month in DATE mode
-                    if (galleryViewMode.value == GalleryViewMode.DATE && (currentPath.startsWith("year:") || currentPath.contains("month:"))) {
-                        val year = currentPath.substringAfter("year:").substringBefore("/").toIntOrNull() ?: 0
-                        if (year > 0) {
-                            var yearMedia = cachedYearMedia.get(year)
-                            if (yearMedia == null || yearMedia.isEmpty()) {
-                                // Try getting from Room DB or fast server query
+                    val cleanRoot = dateScopeRoot()
+                    val parsedYear = com.example.data.search.DateSearchQueryHelper.parseYearFromPath(path)
+                    val parsedMonth = com.example.data.search.DateSearchQueryHelper.parseMonthFromPath(path)
+
+                    // 1. Targeted MONTH search query (year:YYYY/month:M) — fastest path, only fetches 1 month!
+                    if (galleryViewMode.value == GalleryViewMode.DATE && parsedYear != null && parsedMonth != null) {
+                        val mKey = monthCacheKey(parsedYear, parsedMonth, cleanRoot)
+                        var initialMonthMedia = if (!forceRefresh) cachedMonthMedia.get(mKey) else null
+                        if (initialMonthMedia == null && !alreadyShowingSameContext) {
+                            cachedYearMedia.get(yearCacheKey(parsedYear, cleanRoot))?.let { cachedYear ->
+                                initialMonthMedia = filterExactMonth(cachedYear, parsedYear, parsedMonth, cleanRoot)
+                            }
+                        }
+                        if (initialMonthMedia == null && !alreadyShowingSameContext) {
+                            val (minMs, maxMs) = com.example.data.search.DateSearchQueryHelper.paddedBounds(
+                                com.example.data.search.DateSearchQueryHelper.monthUtcBounds(parsedYear, parsedMonth)
+                            )
+                            val dbRange = repo.getMediaInDateRange(minMs, maxMs)
+                            if (!dbRange.isNullOrEmpty()) {
+                                initialMonthMedia = filterExactMonth(dbRange, parsedYear, parsedMonth, cleanRoot)
+                            }
+                        }
+
+                        if (initialMonthMedia != null) {
+                            val dir = if (isFlattened.value) {
+                                ApiDirectory(
+                                    id = -1,
+                                    name = "${getMonthName(parsedMonth)} $parsedYear",
+                                    path = path,
+                                    directories = emptyList(),
+                                    media = filterFlattenedMedia(path, initialMonthMedia!!)
+                                )
+                            } else {
+                                buildDateViewDirectory(path, initialMonthMedia!!)
+                            }
+                            emitGallerySuccessIfChanged(sortDirectory(dir), requestContextKey)
+                        } else if (!alreadyShowingSameContext) {
+                            _galleryState.value = GalleryUiState.Loading
+                        }
+
+                        val needsNetwork = forceRefresh || cachedMonthMedia.get(mKey) == null
+                        if (needsNetwork) {
+                            val freshMonthMedia = fetchMediaForMonth(
+                                year = parsedYear,
+                                month = parsedMonth,
+                                forceRefresh = forceRefresh,
+                                rethrowErrors = initialMonthMedia == null && !alreadyShowingSameContext
+                            )
+                            if (buildGalleryContextKey() == requestContextKey) {
+                                val dir = if (isFlattened.value) {
+                                    ApiDirectory(
+                                        id = -1,
+                                        name = "${getMonthName(parsedMonth)} $parsedYear",
+                                        path = path,
+                                        directories = emptyList(),
+                                        media = filterFlattenedMedia(path, freshMonthMedia)
+                                    )
+                                } else {
+                                    buildDateViewDirectory(path, freshMonthMedia)
+                                }
+                                emitGallerySuccessIfChanged(sortDirectory(dir), requestContextKey)
+                            }
+                        }
+                        _isRefreshing.value = false
+                        return@launch
+                    }
+
+                    // 2. Targeted YEAR search query (year:YYYY) — 1 query (auto-splits by month on overflow)
+                    if (galleryViewMode.value == GalleryViewMode.DATE && parsedYear != null) {
+                        val yKey = yearCacheKey(parsedYear, cleanRoot)
+                        var initialYearMedia = if (!forceRefresh) cachedYearMedia.get(yKey) else null
+                        if (initialYearMedia == null && !alreadyShowingSameContext) {
+                            val (minMs, maxMs) = com.example.data.search.DateSearchQueryHelper.paddedBounds(
+                                com.example.data.search.DateSearchQueryHelper.yearUtcBounds(parsedYear)
+                            )
+                            val dbRange = repo.getMediaInDateRange(minMs, maxMs)
+                            if (!dbRange.isNullOrEmpty()) {
+                                initialYearMedia = filterExactYear(dbRange, parsedYear, cleanRoot)
+                            }
+                        }
+
+                        if (initialYearMedia != null && initialYearMedia!!.isNotEmpty()) {
+                            val dir = if (isFlattened.value) {
+                                ApiDirectory(
+                                    id = -1,
+                                    name = "$parsedYear",
+                                    path = path,
+                                    directories = emptyList(),
+                                    media = filterFlattenedMedia(path, initialYearMedia!!)
+                                )
+                            } else {
+                                buildDateViewDirectory(path, initialYearMedia!!)
+                            }
+                            emitGallerySuccessIfChanged(sortDirectory(dir), requestContextKey)
+                        } else if (!alreadyShowingSameContext) {
+                            _galleryState.value = GalleryUiState.Loading
+                        }
+
+                        val needsNetwork = forceRefresh || cachedYearMedia.get(yKey) == null
+                        if (needsNetwork) {
+                            val freshYearMedia = fetchMediaForYear(
+                                year = parsedYear,
+                                forceRefresh = forceRefresh,
+                                rethrowErrors = initialYearMedia.isNullOrEmpty() && !alreadyShowingSameContext
+                            )
+                            if (buildGalleryContextKey() == requestContextKey) {
+                                val dir = if (isFlattened.value) {
+                                    ApiDirectory(
+                                        id = -1,
+                                        name = "$parsedYear",
+                                        path = path,
+                                        directories = emptyList(),
+                                        media = filterFlattenedMedia(path, freshYearMedia)
+                                    )
+                                } else {
+                                    buildDateViewDirectory(path, freshYearMedia)
+                                }
+                                emitGallerySuccessIfChanged(sortDirectory(dir), requestContextKey)
+                            }
+                        }
+                        _isRefreshing.value = false
+                        return@launch
+                    }
+
+                    // 3. Date Root (Years overview) via fast Search API discovery
+                    if (galleryViewMode.value == GalleryViewMode.DATE && !isFlattened.value) {
+                        val cacheKey = cleanRoot.ifEmpty { "ROOT" }
+                        val cachedFolders = if (!forceRefresh) cachedDateRootFolders.get(cacheKey) else null
+                        if (!cachedFolders.isNullOrEmpty()) {
+                            publishDateRootSubFolders(cachedFolders, cacheKey, requestContextKey)
+                        } else if (!alreadyShowingSameContext) {
+                            // Instant warm start from RAM/Room if previously populated
+                            var warmMedia = cachedFlattenedMedia.get(cacheKey)
+                            if (warmMedia.isNullOrEmpty()) {
                                 val dbMedia = repo.getAllMedia()
-                                if (dbMedia != null && dbMedia.isNotEmpty()) {
-                                    yearMedia = dbMedia.filter { media ->
-                                        val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
-                                        getYearFromTimestamp(localMs) == year
+                                if (!dbMedia.isNullOrEmpty()) {
+                                    val filteredDb = dbMedia.filter {
+                                        com.example.data.search.DateSearchQueryHelper.matchesRootPath(it, cleanRoot)
+                                    }
+                                    if (filteredDb.isNotEmpty()) {
+                                        warmMedia = deduplicateMedia(filteredDb)
+                                        cachedFlattenedMedia.put(cacheKey, warmMedia)
                                     }
                                 }
                             }
-
-                            if (yearMedia != null && yearMedia.isNotEmpty()) {
-                                cachedYearMedia.put(year, yearMedia)
-                                val dir = buildDateViewDirectory(currentPath, yearMedia)
-                                _galleryState.value = GalleryUiState.Success(sortDirectory(dir), requestContextKey)
+                            if (!warmMedia.isNullOrEmpty()) {
+                                val warmDir = buildDateViewDirectory(path, warmMedia)
+                                warmDir.directories?.let { dirs ->
+                                    cachedDateRootFolders.put(cacheKey, dirs)
+                                    registerDiscoveredYears(dirs.mapNotNull { it.id })
+                                }
+                                emitGallerySuccessIfChanged(sortDirectory(warmDir), requestContextKey)
                             } else {
                                 _galleryState.value = GalleryUiState.Loading
                             }
-
-                            // Fetch from server specifically for this year in background/refresh
-                            val freshYearMedia = fetchMediaForYear(year)
-                            if (freshYearMedia.isNotEmpty()) {
-                                val dir = buildDateViewDirectory(currentPath, freshYearMedia)
-                                _galleryState.value = GalleryUiState.Success(sortDirectory(dir), requestContextKey)
-                            }
-                            _isRefreshing.value = false
-                            return@launch
                         }
+
+                        startDateRootSearchDiscovery(
+                            server = server,
+                            cleanRoot = cleanRoot,
+                            requestContextKey = requestContextKey,
+                            forceRefresh = forceRefresh
+                        )
+                        return@launch
                     }
 
+                    // 4. Flattened folder view (non-Date-Root)
                     val rootPath = if (isFlattened.value && !currentPath.startsWith("year:") && !currentPath.startsWith("month:")) {
                         path
                     } else {
                         prefs.defaultRootPath
                     }
-                    val cleanRoot = rootPath.trim('/').replace("\\", "/")
-                    val cacheKey = cleanRoot.ifEmpty { "ROOT" }
+                    val cleanFlatRoot = rootPath.trim('/').replace("\\", "/")
+                    val cacheKey = cleanFlatRoot.ifEmpty { "ROOT" }
 
-                    // 1. Lade sofort den letzten Stand (aus Speicher oder Room DB)
                     var mediaList = cachedFlattenedMedia.get(cacheKey)
                     if (mediaList == null || mediaList.isEmpty()) {
                         val dbMedia = repo.getAllMedia()
                         if (dbMedia != null && dbMedia.isNotEmpty()) {
-                            val filteredDb = if (cleanRoot.isEmpty()) {
+                            val filteredDb = if (cleanFlatRoot.isEmpty()) {
                                 dbMedia
                             } else {
                                 dbMedia.filter {
                                     val p = (it.parentPath ?: "").trim('/').replace("\\", "/")
-                                    p == cleanRoot || p.startsWith("$cleanRoot/")
+                                    p == cleanFlatRoot || p.startsWith("$cleanFlatRoot/")
                                 }
                             }
                             if (filteredDb.isNotEmpty()) {
@@ -1443,46 +2338,31 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         }
                     }
 
-                    // Sofort anzeigen wenn gecached
                     if (mediaList != null && mediaList.isNotEmpty()) {
-                        val cachedDirectory = if (isFlattened.value) {
-                            val filteredMedia = filterFlattenedMedia(currentPath, mediaList)
-                            ApiDirectory(
-                                id = -1,
-                                name = if (currentPath.isEmpty() || currentPath == prefs.defaultRootPath) str(R.string.flattened_gallery) else currentPath.substringAfterLast('/'),
-                                path = currentPath,
-                                directories = emptyList(),
-                                media = filteredMedia
-                            )
-                        } else {
-                            buildDateViewDirectory(currentPath, mediaList)
-                        }
-                        _galleryState.value = GalleryUiState.Success(sortDirectory(cachedDirectory), requestContextKey)
-                    } else {
+                        val filteredMedia = filterFlattenedMedia(currentPath, mediaList)
+                        val cachedDirectory = ApiDirectory(
+                            id = -1,
+                            name = if (currentPath.isEmpty() || currentPath == prefs.defaultRootPath) str(R.string.flattened_gallery) else currentPath.substringAfterLast('/'),
+                            path = currentPath,
+                            directories = emptyList(),
+                            media = filteredMedia
+                        )
+                        emitGallerySuccessIfChanged(sortDirectory(cachedDirectory), requestContextKey)
+                    } else if (!alreadyShowingSameContext) {
                         _galleryState.value = GalleryUiState.Loading
                     }
 
-                    // 2. Silent background sync starten (ohne UI zu unterbrechen oder Teillisten zu pushen)
                     triggerSilentBackgroundSync(force = forceRefresh)
                     return@launch
                 }
 
-                // 2. Room DB cache check for FOLDER view
-                if (searchQuery.value.isEmpty() && !isFlattened.value && galleryViewMode.value == GalleryViewMode.FOLDER) {
-                    val cachedMedia = repo.getDirectory(path)
-                    if (cachedMedia != null && cachedMedia.isNotEmpty()) {
-                        val directory = ApiDirectory(
-                            id = -1,
-                            name = path.substringAfterLast('/'),
-                            path = path,
-                            directories = emptyList(),
-                            media = cachedMedia
-                        )
-                        _galleryState.value = GalleryUiState.Success(sortDirectory(directory), requestContextKey)
-                    } else {
-                        _galleryState.value = GalleryUiState.Loading
-                    }
-                } else if (searchQuery.value.isNotEmpty() || _galleryState.value !is GalleryUiState.Success) {
+                // 2. Folder view & search:
+                // Never emit subfolder-less Room DB media ahead of the network call — doing so hides
+                // top-row subfolders temporarily and causes LazyVerticalGrid to anchor on media items
+                // and jump to the wrong scroll position once subfolders arrive.
+                // Visited folders are restored synchronously from cachedFolderDirectories above;
+                // uncached folders wait cleanly for the complete ApiDirectory (with Room as offline fallback).
+                if (!alreadyShowingSameContext) {
                     _galleryState.value = GalleryUiState.Loading
                 }
 
@@ -1492,25 +2372,46 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     val searchResult = executeAuthenticated { activeCookies, activePrefix ->
                         api.search(server, queryJson, activeCookies, activePrefix)
                     }
-                    val filteredMedia = searchResult.media.orEmpty().filter { !isMediaProtected(it) }
-                    val sortedDirectory = sortDirectory(searchResult.copy(media = filteredMedia))
-                    _galleryState.value = GalleryUiState.Success(sortedDirectory, requestContextKey)
+                    if (buildGalleryContextKey() == requestContextKey) {
+                        val filteredMedia = searchResult.media.orEmpty().filter { !isMediaProtected(it) }
+                        val sortedDirectory = sortDirectory(searchResult.copy(media = filteredMedia))
+                        emitGallerySuccessIfChanged(sortedDirectory, requestContextKey)
+                    }
                 } else {
                     // Normal folder view
                     val freshDirectory = executeAuthenticated { activeCookies, activePrefix ->
                         api.getGalleryContent(server, path, activeCookies, activePrefix)
                     }
+                    cachedFolderDirectories.put(folderCacheKey(path), freshDirectory)
                     if (freshDirectory.media != null && searchQuery.value.isEmpty() && !isFlattened.value && galleryViewMode.value == GalleryViewMode.FOLDER) {
                         repo.saveDirectory(path, freshDirectory.media)
                     }
-                    val sortedDirectory = sortDirectory(freshDirectory)
-                    _galleryState.value = GalleryUiState.Success(sortedDirectory, requestContextKey)
+                    if (buildGalleryContextKey() == requestContextKey) {
+                        val sortedDirectory = sortDirectory(freshDirectory)
+                        emitGallerySuccessIfChanged(sortedDirectory, requestContextKey)
+                    }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
+                // Offline fallback for uncached folder views: show Room-cached media if available
+                val currentMatches = (_galleryState.value as? GalleryUiState.Success)?.contextKey == requestContextKey
+                if (!currentMatches && searchQuery.value.isEmpty() && !isFlattened.value && galleryViewMode.value == GalleryViewMode.FOLDER) {
+                    val offlineMedia = repo.getDirectory(path)
+                    if (!offlineMedia.isNullOrEmpty() && buildGalleryContextKey() == requestContextKey) {
+                        val offlineDir = ApiDirectory(
+                            id = -1,
+                            name = path.substringAfterLast('/'),
+                            path = path,
+                            directories = emptyList(),
+                            media = offlineMedia
+                        )
+                        emitGallerySuccessIfChanged(sortDirectory(offlineDir), requestContextKey)
+                        return@launch
+                    }
+                }
                 handleApiError(e) { msg ->
-                    if (_galleryState.value !is GalleryUiState.Success) {
+                    if (!currentMatches && _galleryState.value !is GalleryUiState.Success) {
                         _galleryState.value = GalleryUiState.Error(msg.ifEmpty { str(R.string.failed_fetch_gallery) })
                     }
                 }
@@ -1523,6 +2424,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun enterFolder(folderPath: String) {
+        cacheCurrentDisplayedFolderIfApplicable()
         val clean = folderPath.replace('\\', '/').trim().trim('/').let {
             if (it == "." || it == "./") "" else it.removePrefix("./").trim('/')
         }
@@ -1533,6 +2435,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun navigateToBreadcrumb(index: Int) {
+        cacheCurrentDisplayedFolderIfApplicable()
         val currentStack = _pathHistory.value
         if (index in currentStack.indices) {
             _pathHistory.value = currentStack.take(index + 1)
@@ -1547,9 +2450,20 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             return true
         }
 
+        // If on Settings screen, return to previous tab
+        if (_activeTab.value == ActiveTab.SETTINGS) {
+            navigateBackFromSettings()
+            return true
+        }
+
         // If an album detail view is open in Albums Tab, go back to albums list
         if (_activeTab.value == ActiveTab.ALBUMS && _selectedAlbum.value != null) {
             selectAlbum(null)
+            return true
+        }
+        // If Albums filter/search is active, clear and close it first
+        if (_activeTab.value == ActiveTab.ALBUMS && (_isAlbumsSearchActive.value || _albumsFilterQuery.value.isNotEmpty())) {
+            setAlbumsSearchActive(active = false, clearQueryOnClose = true)
             return true
         }
         // If a person detail view is open in Persons Tab, go back to persons list
@@ -1557,9 +2471,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             clearSelectedPerson()
             return true
         }
+        // If Persons filter/search is active, clear and close it first
+        if (_activeTab.value == ActiveTab.PERSONS && (_isPersonsSearchActive.value || _personsFilterQuery.value.isNotEmpty())) {
+            setPersonsSearchActive(active = false, clearQueryOnClose = true)
+            return true
+        }
 
         val currentStack = _pathHistory.value.toMutableList()
         if (currentStack.size > 1) {
+            cacheCurrentDisplayedFolderIfApplicable()
             currentStack.removeAt(currentStack.size - 1)
             _pathHistory.value = currentStack
             loadCurrentDirectory()
@@ -1622,6 +2542,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun togglePersonFavourite(person: com.example.data.ApiPerson) {
+        if (!tvCapabilities().allowFavoriteMarking) return
         val currentFavState = prefs.getFavoritePersons().contains(person.name) || person.isFavourite == true
         val newFavState = !currentFavState
         
@@ -1664,6 +2585,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
     
     fun selectPerson(person: com.example.data.ApiPerson) {
+        _isPersonsSearchActive.value = false
         _selectedPerson.value = person
         loadPersonContent(person)
     }
@@ -1673,34 +2595,51 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         _personContentState.value = null
     }
 
+    fun buildPersonSearchQuery(person: com.example.data.ApiPerson): Map<String, Any?> {
+        return if (prefs.peopleFallbackToKeywords) {
+            mapOf(
+                "type" to 2, // SearchQueryTypes.OR
+                "list" to listOf(
+                    mapOf("type" to 105, "value" to person.name, "matchType" to 1),
+                    mapOf("type" to 104, "value" to person.name, "matchType" to 2) // LIKE match for keyword
+                )
+            )
+        } else {
+            mapOf("type" to 105, "value" to person.name, "matchType" to 1)
+        }
+    }
+
     private fun loadPersonContent(person: com.example.data.ApiPerson) {
         val server = prefs.serverUrl ?: return
-        val cookies = prefs.cookies
-        val apiPrefix = prefs.apiPrefix
-        _personContentState.value = GalleryUiState.Loading
+        val cacheKey = person.name
+        val cached = cachedPersonDirectories.get(cacheKey)
+        if (cached != null) {
+            _personContentState.value = GalleryUiState.Success(sortDirectory(cached))
+        } else {
+            _personContentState.value = GalleryUiState.Loading
+        }
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val searchQuery: Map<String, Any?> = if (prefs.peopleFallbackToKeywords) {
-                    mapOf(
-                        "type" to 2, // SearchQueryTypes.OR
-                        "list" to listOf(
-                            mapOf("type" to 105, "value" to person.name, "matchType" to 1),
-                            mapOf("type" to 104, "value" to person.name, "matchType" to 2) // LIKE match for keyword
-                        )
-                    )
-                } else {
-                    mapOf("type" to 105, "value" to person.name, "matchType" to 1)
-                }
+                val searchQuery = buildPersonSearchQuery(person)
                 val searchQueryJson = api.serializeQuery(searchQuery)
                 val dummyDir = executeAuthenticated { activeCookies, activePrefix ->
                     api.search(server, searchQueryJson, activeCookies, activePrefix)
                 }
                 val filteredMedia = dummyDir.media.orEmpty().filter { !isMediaFromProtectedFolder(it) }
-                val sortedDirectory = sortDirectory(dummyDir.copy(media = filteredMedia))
-                _personContentState.value = GalleryUiState.Success(sortedDirectory)
+                val cleanDir = dummyDir.copy(media = filteredMedia)
+                cachedPersonDirectories.put(cacheKey, cleanDir)
+                if (_selectedPerson.value?.name == person.name) {
+                    val sortedDirectory = sortDirectory(cleanDir)
+                    val current = _personContentState.value as? GalleryUiState.Success
+                    if (current == null || current.directory != sortedDirectory) {
+                        _personContentState.value = GalleryUiState.Success(sortedDirectory)
+                    }
+                }
             } catch (e: Exception) {
-                handleApiError(e) { msg ->
-                    _personContentState.value = GalleryUiState.Error(msg.ifEmpty { str(R.string.failed_fetch_person_content) })
+                if (cached == null) {
+                    handleApiError(e) { msg ->
+                        _personContentState.value = GalleryUiState.Error(msg.ifEmpty { str(R.string.failed_fetch_person_content) })
+                    }
                 }
             }
         }
@@ -1749,17 +2688,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val server = prefs.serverUrl ?: return@launch
-                val searchQuery: Map<String, Any?> = if (prefs.peopleFallbackToKeywords) {
-                    mapOf(
-                        "type" to 2,
-                        "list" to listOf(
-                            mapOf("type" to 105, "value" to person.name, "matchType" to 1),
-                            mapOf("type" to 104, "value" to person.name, "matchType" to 2)
-                        )
-                    )
-                } else {
-                    mapOf("type" to 105, "value" to person.name, "matchType" to 1)
-                }
+                val searchQuery = buildPersonSearchQuery(person)
                 val searchQueryJson = api.serializeQuery(searchQuery)
                 val dummyDir = executeAuthenticated { activeCookies, activePrefix ->
                     api.search(server, searchQueryJson, activeCookies, activePrefix)
@@ -1773,6 +2702,28 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 _isPersonContentRefreshing.value = false
             }
         }
+    }
+
+    internal fun reconcileAlbumsWithBackup(server: String, fetchedAlbums: List<ApiAlbum>) {
+        if (server.isBlank()) return
+        val unlockedAlbums = fetchedAlbums.filter {
+            !it.locked && !it.searchQuery.isNullOrEmpty() && it.name.isNotBlank()
+        }
+        if (unlockedAlbums.isNotEmpty()) {
+            albumBackupManager.replaceUnlockedSnapshot(server, unlockedAlbums)
+            _recoverableAlbums.value = emptyList()
+        } else {
+            _recoverableAlbums.value = albumBackupManager.getBackups(server)
+        }
+    }
+
+    private fun isForbiddenPermissionMessage(message: String): Boolean {
+        val lower = message.lowercase()
+        return lower.contains("403") ||
+            lower.contains("not authorized") ||
+            lower.contains("not enough rights") ||
+            lower.contains("forbidden") ||
+            lower.contains("admin role")
     }
 
     fun loadAlbums() {
@@ -1790,6 +2741,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     api.getAlbums(server, activeCookies, activePrefix)
                 }
                 _albumsState.value = AlbumsUiState.Success(sortAlbums(albums))
+                reconcileAlbumsWithBackup(server, albums)
             } catch (e: Exception) {
                 handleApiError(e) { msg ->
                     _albumsState.value = AlbumsUiState.Error(msg.ifEmpty { str(R.string.failed_fetch_albums) })
@@ -1803,6 +2755,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun saveSearchAsAlbum(name: String, rawQuery: String = searchQuery.value) {
+        if (!tvCapabilities().allowAlbumManagement) return
         if (!_canManageAlbums.value) {
             _saveAlbumState.value = SaveAlbumUiState.Error(str(R.string.not_authorized_save_album))
             return
@@ -1818,8 +2771,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             return
         }
         val server = prefs.serverUrl
-        val cookies = prefs.cookies
-        val apiPrefix = prefs.apiPrefix
         if (server.isEmpty()) {
             _saveAlbumState.value = SaveAlbumUiState.Error(str(R.string.no_server_configured))
             return
@@ -1828,7 +2779,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         _saveAlbumState.value = SaveAlbumUiState.Saving
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                executeAuthenticated { activeCookies, activePrefix ->
+                val createdAlbum = executeAuthenticated { activeCookies, activePrefix ->
                     api.createSavedSearchAlbum(
                         serverUrl = server,
                         name = trimmedName,
@@ -1837,10 +2788,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         apiPrefix = activePrefix
                     )
                 }
+                albumBackupManager.upsertAlbum(server, trimmedName, parsedQuery, createdAlbum?.id)
                 _saveAlbumState.value = SaveAlbumUiState.Success(trimmedName)
                 loadAlbums()
             } catch (e: Exception) {
                 handleApiError(e) { msg ->
+                    if (isForbiddenPermissionMessage(msg) && prefs.userRole < com.example.data.UserRoles.ADMIN) {
+                        prefs.albumWriteMinRole = com.example.data.UserRoles.ADMIN
+                        syncPermissionStateFlows()
+                    }
                     _saveAlbumState.value = SaveAlbumUiState.Error(
                         msg.ifEmpty { str(R.string.failed_save_album) }
                     )
@@ -1855,6 +2811,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun deleteAlbum(album: ApiAlbum) {
+        if (!tvCapabilities().allowAlbumManagement) return
         if (!_canManageAlbums.value) {
             _deleteAlbumState.value = DeleteAlbumUiState.Error(str(R.string.not_authorized_delete_album))
             return
@@ -1880,6 +2837,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         apiPrefix = activePrefix
                     )
                 }
+                // Remove from local backup BEFORE reloading so deleting even the last album
+                // inside the app never triggers a false restore prompt.
+                albumBackupManager.removeAlbum(server, album)
+                _recoverableAlbums.value = albumBackupManager.getBackups(server)
+
                 if (_selectedAlbum.value?.id == album.id) {
                     _selectedAlbum.value = null
                     _albumContentState.value = null
@@ -1894,6 +2856,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 loadAlbums()
             } catch (e: Exception) {
                 handleApiError(e) { msg ->
+                    if (isForbiddenPermissionMessage(msg) && prefs.userRole < com.example.data.UserRoles.ADMIN) {
+                        prefs.albumWriteMinRole = com.example.data.UserRoles.ADMIN
+                        syncPermissionStateFlows()
+                    }
                     _deleteAlbumState.value = DeleteAlbumUiState.Error(
                         msg.ifEmpty { str(R.string.failed_delete_album) }
                     )
@@ -1903,7 +2869,212 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun resetAlbumRestoreState() {
+        _albumRestoreState.value = AlbumRestoreUiState.Idle
+    }
+
+    fun dismissAlbumBackup() {
+        val server = prefs.serverUrl
+        if (server.isNotEmpty()) {
+            albumBackupManager.clearBackups(server)
+        }
+        _recoverableAlbums.value = emptyList()
+        _albumRestoreState.value = AlbumRestoreUiState.Idle
+    }
+
+    fun restoreBackedUpAlbums(selectedAlbums: List<com.example.data.BackedUpAlbum>) {
+        if (!tvCapabilities().allowAlbumManagement) return
+        if (selectedAlbums.isEmpty()) return
+        if (_albumRestoreState.value is AlbumRestoreUiState.Restoring) return
+        if (!_canManageAlbums.value) {
+            _albumRestoreState.value = AlbumRestoreUiState.Error(str(R.string.not_authorized_save_album))
+            return
+        }
+        val server = prefs.serverUrl
+        if (server.isEmpty()) {
+            _albumRestoreState.value = AlbumRestoreUiState.Error(str(R.string.no_server_configured))
+            return
+        }
+
+        _albumRestoreState.value = AlbumRestoreUiState.Restoring(0, selectedAlbums.size)
+        viewModelScope.launch(Dispatchers.IO) {
+            var restoredCount = 0
+            try {
+                val existingNames = try {
+                    executeAuthenticated { activeCookies, activePrefix ->
+                        api.getAlbums(server, activeCookies, activePrefix)
+                    }.filter { !it.locked }.map { it.name.trim().lowercase() }.toMutableSet()
+                } catch (_: Exception) {
+                    mutableSetOf()
+                }
+
+                for (backup in selectedAlbums) {
+                    val normalizedName = backup.name.trim().lowercase()
+                    if (!existingNames.contains(normalizedName)) {
+                        executeAuthenticated { activeCookies, activePrefix ->
+                            api.createSavedSearchAlbum(
+                                serverUrl = server,
+                                name = backup.name,
+                                searchQuery = backup.searchQuery,
+                                cookies = activeCookies,
+                                apiPrefix = activePrefix
+                            )
+                        }
+                        existingNames.add(normalizedName)
+                    }
+                    restoredCount++
+                    _albumRestoreState.value = AlbumRestoreUiState.Restoring(restoredCount, selectedAlbums.size)
+                }
+
+                val freshAlbums = executeAuthenticated { activeCookies, activePrefix ->
+                    api.getAlbums(server, activeCookies, activePrefix)
+                }
+                _albumsState.value = AlbumsUiState.Success(sortAlbums(freshAlbums))
+                reconcileAlbumsWithBackup(server, freshAlbums)
+                _albumRestoreState.value = AlbumRestoreUiState.Success(restoredCount)
+            } catch (e: Exception) {
+                handleApiError(e) { msg ->
+                    if (isForbiddenPermissionMessage(msg) && prefs.userRole < com.example.data.UserRoles.ADMIN) {
+                        prefs.albumWriteMinRole = com.example.data.UserRoles.ADMIN
+                        syncPermissionStateFlows()
+                    }
+                    _albumRestoreState.value = AlbumRestoreUiState.Error(
+                        message = msg.ifEmpty { str(R.string.album_restore_failed) },
+                        restoredCount = restoredCount
+                    )
+                    refreshUserPermissions(force = true)
+                }
+            }
+        }
+    }
+
+    fun buildPublicShareUrl(sharingKey: String): String {
+        val rawBase = prefs.serverUrl.ifBlank { getActiveServerUrl() }
+        val base = PiGalleryApi.ensureHttpUrl(rawBase).trimEnd('/')
+        val encodedKey = java.net.URLEncoder.encode(sharingKey, "UTF-8").replace("+", "%20")
+        return "$base/share/$encodedKey"
+    }
+
+    fun resolveShareUrl(share: com.example.data.ApiShareLink): String {
+        val serverProvided = share.shareUrl?.trim().orEmpty()
+        if (serverProvided.startsWith("http://", ignoreCase = true) ||
+            serverProvided.startsWith("https://", ignoreCase = true)
+        ) {
+            return serverProvided
+        }
+        if (serverProvided.startsWith("/")) {
+            val rawBase = prefs.serverUrl.ifBlank { getActiveServerUrl() }
+            val base = PiGalleryApi.ensureHttpUrl(rawBase).trimEnd('/')
+            return "$base$serverProvided"
+        }
+        return buildPublicShareUrl(share.sharingKey)
+    }
+
+    fun resetShareLinkState() {
+        _shareLinkState.value = ShareLinkUiState.Idle
+    }
+
+    internal fun setShareLinkStateForTesting(state: ShareLinkUiState) {
+        _shareLinkState.value = state
+    }
+
+    fun openShareDialog(@Suppress("UNUSED_PARAMETER") target: com.example.data.ShareTarget) {
+        if (!tvCapabilities().allowShareLinks) return
+        if (_shareLinkState.value !is ShareLinkUiState.Creating) {
+            _shareLinkState.value = ShareLinkUiState.Idle
+        }
+        refreshUserPermissions(force = false)
+    }
+
+    fun createShareLink(
+        target: com.example.data.ShareTarget,
+        includeSubfolders: Boolean,
+        validity: com.example.data.ShareValidity,
+        password: String?,
+        preventDownload: Boolean = false
+    ) {
+        if (!tvCapabilities().allowShareLinks) return
+        if (_shareLinkState.value is ShareLinkUiState.Creating) {
+            return
+        }
+        if (!_canCreateShareLink.value) {
+            val message = str(R.string.not_authorized_share)
+            _shareLinkState.value = ShareLinkUiState.Error(message)
+            _shareLinkToastEvents.tryEmit(ShareLinkToastEvent.Failed(message))
+            return
+        }
+        val server = getActiveServerUrl().ifBlank { PiGalleryApi.ensureHttpUrl(prefs.serverUrl) }
+        if (server.isEmpty()) {
+            val message = str(R.string.no_server_configured)
+            _shareLinkState.value = ShareLinkUiState.Error(message)
+            _shareLinkToastEvents.tryEmit(ShareLinkToastEvent.Failed(message))
+            return
+        }
+        if (target is com.example.data.ShareTarget.Search && target.searchQuery.isEmpty()) {
+            val message = str(R.string.search_query_empty)
+            _shareLinkState.value = ShareLinkUiState.Error(message)
+            _shareLinkToastEvents.tryEmit(ShareLinkToastEvent.Failed(message))
+            return
+        }
+
+        val effectivePassword = if (_sharingPasswordProtected.value && !password.isNullOrBlank()) {
+            password.trim()
+        } else {
+            null
+        }
+
+        _shareLinkState.value = ShareLinkUiState.Creating
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val created = executeAuthenticated { activeCookies, activePrefix ->
+                    when (target) {
+                        is com.example.data.ShareTarget.Directory -> {
+                            api.createShareLink(
+                                serverUrl = server,
+                                path = target.path,
+                                includeSubfolders = includeSubfolders,
+                                validity = validity,
+                                password = effectivePassword,
+                                cookies = activeCookies,
+                                apiPrefix = activePrefix,
+                                preventDownload = preventDownload
+                            )
+                        }
+                        is com.example.data.ShareTarget.Search -> {
+                            api.createSearchShareLink(
+                                serverUrl = server,
+                                searchQuery = target.searchQuery,
+                                validity = validity,
+                                password = effectivePassword,
+                                cookies = activeCookies,
+                                apiPrefix = activePrefix,
+                                preventDownload = preventDownload
+                            )
+                        }
+                    }
+                }
+                val shareUrl = resolveShareUrl(created)
+                _shareLinkState.value = ShareLinkUiState.Success(shareUrl, created)
+                viewModelScope.launch(Dispatchers.Main) {
+                    _shareLinkToastEvents.emit(ShareLinkToastEvent.Created(shareUrl))
+                }
+            } catch (e: Exception) {
+                handleApiError(e) { msg ->
+                    val errorMsg = msg.ifEmpty { str(R.string.failed_create_share) }
+                    _shareLinkState.value = ShareLinkUiState.Error(errorMsg)
+                    viewModelScope.launch(Dispatchers.Main) {
+                        _shareLinkToastEvents.emit(ShareLinkToastEvent.Failed(errorMsg))
+                    }
+                    refreshUserPermissions(force = true)
+                }
+            }
+        }
+    }
+
     fun selectAlbum(album: ApiAlbum?) {
+        if (album != null) {
+            _isAlbumsSearchActive.value = false
+        }
         _selectedAlbum.value = album
         if (album != null) {
             loadAlbumContent(album)
@@ -1915,8 +3086,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private fun loadAlbumContent(album: ApiAlbum) {
         val server = prefs.serverUrl
         val query = album.searchQuery ?: return
-
-        _albumContentState.value = GalleryUiState.Loading
+        val cacheKey = "${album.id}_${album.name}"
+        val cached = cachedAlbumDirectories.get(cacheKey)
+        if (cached != null) {
+            _albumContentState.value = GalleryUiState.Success(sortDirectory(cached))
+        } else {
+            _albumContentState.value = GalleryUiState.Loading
+        }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val queryJson = api.serializeQuery(query)
@@ -1924,11 +3100,20 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     api.search(server, queryJson, activeCookies, activePrefix)
                 }
                 val filteredMedia = directory.media.orEmpty().filter { !isMediaFromProtectedFolder(it) }
-                val sortedDirectory = sortDirectory(directory.copy(media = filteredMedia))
-                _albumContentState.value = GalleryUiState.Success(sortedDirectory)
+                val cleanDir = directory.copy(media = filteredMedia)
+                cachedAlbumDirectories.put(cacheKey, cleanDir)
+                if (_selectedAlbum.value?.id == album.id && _selectedAlbum.value?.name == album.name) {
+                    val sortedDirectory = sortDirectory(cleanDir)
+                    val current = _albumContentState.value as? GalleryUiState.Success
+                    if (current == null || current.directory != sortedDirectory) {
+                        _albumContentState.value = GalleryUiState.Success(sortedDirectory)
+                    }
+                }
             } catch (e: Exception) {
-                handleApiError(e) { msg ->
-                    _albumContentState.value = GalleryUiState.Error(msg.ifEmpty { str(R.string.failed_load_album_content) })
+                if (cached == null) {
+                    handleApiError(e) { msg ->
+                        _albumContentState.value = GalleryUiState.Error(msg.ifEmpty { str(R.string.failed_load_album_content) })
+                    }
                 }
             }
         }
@@ -1950,9 +3135,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         api.getAlbums(server, activeCookies, activePrefix)
                     }
                     _albumsState.value = AlbumsUiState.Success(sortAlbums(albums))
+                    reconcileAlbumsWithBackup(server, albums)
                 }
             } catch (e: Exception) {
-                handleApiError(e)
+                handleApiError(e) {}
             } finally {
                 _isAlbumsRefreshing.value = false
             }
@@ -1989,6 +3175,40 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     // --- Rediscover (Top Picks) Functionality ---
+    private suspend fun fetchRediscoverGrouped(server: String, days: Int): Map<Int, List<ApiMedia>> {
+        // Query DatePatternSearch: every_year (frequency = 3)
+        val queryEveryYear = mapOf(
+            "type" to 60,
+            "daysLength" to days,
+            "frequency" to 3
+        )
+        val everyYearDir = executeAuthenticated { activeCookies, activePrefix ->
+            api.search(server, api.serializeQuery(queryEveryYear), activeCookies, activePrefix)
+        }
+
+        // Combine results
+        val allMedia = mutableListOf<ApiMedia>()
+        everyYearDir.media?.let { allMedia.addAll(it) }
+
+        // Deduplicate by name and parent path and filter out protected media
+        val uniqueMedia = com.example.data.LivePhotoHelper.pairLivePhotos(
+            allMedia.distinctBy { getMediaFullPath(it) }
+        ).filter { !isMediaProtected(it) }
+
+        // Group by year, excluding the current year and media with invalid creationDate
+        val currentYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
+        return uniqueMedia
+            .filter { it.metadata?.creationDate != null }
+            .filter { media ->
+                val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+                getYearFromTimestamp(localMs) < currentYear
+            }
+            .groupBy { media ->
+                val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+                getYearFromTimestamp(localMs)
+            }.toSortedMap(compareByDescending { it })
+    }
+
     fun loadRediscover() {
         val server = prefs.serverUrl
         val days = rediscoverDays.value
@@ -2001,43 +3221,38 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         _rediscoverState.value = RediscoverUiState.Loading
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // Query DatePatternSearch: every_year (frequency = 3)
-                val queryEveryYear = mapOf(
-                    "type" to 60,
-                    "daysLength" to days,
-                    "frequency" to 3
-                )
-                val everyYearDir = executeAuthenticated { activeCookies, activePrefix ->
-                    api.search(server, api.serializeQuery(queryEveryYear), activeCookies, activePrefix)
-                }
-
-                // Combine results
-                val allMedia = mutableListOf<ApiMedia>()
-                everyYearDir.media?.let { allMedia.addAll(it) }
-
-                // Deduplicate by name and parent path and filter out protected media
-                val uniqueMedia = com.example.data.LivePhotoHelper.pairLivePhotos(
-                    allMedia.distinctBy { getMediaFullPath(it) }
-                ).filter { !isMediaProtected(it) }
-
-                // Group by year, excluding the current year and media with invalid creationDate
-                val currentYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
-                val grouped = uniqueMedia
-                    .filter { it.metadata?.creationDate != null }
-                    .filter { media ->
-                        val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
-                        getYearFromTimestamp(localMs) < currentYear
-                    }
-                    .groupBy { media ->
-                        val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
-                        getYearFromTimestamp(localMs)
-                    }.toSortedMap(compareByDescending { it })
-
+                val grouped = fetchRediscoverGrouped(server, days)
                 _rediscoverState.value = RediscoverUiState.Success(grouped)
             } catch (e: Exception) {
                 handleApiError(e) { msg ->
                     _rediscoverState.value = RediscoverUiState.Error(msg.ifEmpty { str(R.string.failed_load_rediscover) })
                 }
+            }
+        }
+    }
+
+    fun refreshRediscover() {
+        val server = prefs.serverUrl
+        val days = rediscoverDays.value
+        if (server.isEmpty()) {
+            _isRediscoverRefreshing.value = false
+            return
+        }
+        _isRediscoverRefreshing.value = true
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(12_000L)
+            if (_isRediscoverRefreshing.value) {
+                _isRediscoverRefreshing.value = false
+            }
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val grouped = fetchRediscoverGrouped(server, days)
+                _rediscoverState.value = RediscoverUiState.Success(grouped)
+            } catch (e: Exception) {
+                handleApiError(e)
+            } finally {
+                _isRediscoverRefreshing.value = false
             }
         }
     }
@@ -2115,6 +3330,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         themeMode.value = value
     }
 
+    fun setAppLanguage(value: String) {
+        val normalized = com.example.util.LocaleHelper.normalizeLanguageTag(value)
+        prefs.appLanguage = normalized
+        appLanguage.value = normalized
+    }
+
     fun setMaxBrightnessEnabled(enabled: Boolean) {
         prefs.maxBrightnessEnabled = enabled
         maxBrightnessEnabled.value = enabled
@@ -2131,6 +3352,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun setBiometricLockEnabled(enabled: Boolean) {
+        if (!tvCapabilities().allowItemLocking) {
+            isAppLocked.value = false
+            return
+        }
         prefs.biometricLockEnabled = enabled
         isBiometricLockEnabled.value = enabled
         if (!enabled) {
@@ -2139,6 +3364,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun lockApp() {
+        if (!tvCapabilities().allowItemLocking) {
+            isAppLocked.value = false
+            return
+        }
         if (isBiometricLockEnabled.value) {
             isAppLocked.value = true
         }
@@ -2149,6 +3378,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun toggleProtectedFolder(path: String) {
+        if (!tvCapabilities().allowItemLocking) return
         prefs.toggleProtectedFolder(path)
         protectedFolders.value = prefs.getProtectedFolders()
         loadRediscover()
@@ -2157,15 +3387,18 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun setHideProtectedItems(hide: Boolean) {
+        if (!tvCapabilities().allowItemLocking) return
         prefs.hideProtectedItems = hide
         hideProtectedItems.value = hide
     }
 
     fun isFolderDirectlyProtected(path: String): Boolean {
+        if (!tvCapabilities().allowItemLocking) return false
         return prefs.isFolderDirectlyProtected(path)
     }
 
     fun isFolderProtected(path: String): Boolean {
+        if (!tvCapabilities().allowItemLocking) return false
         val clean = path.replace('\\', '/').trim().trim('/').let {
             if (it == "." || it == "./") "" else it.removePrefix("./").trim('/')
         }
@@ -2185,6 +3418,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun isMediaFromProtectedFolder(media: ApiMedia): Boolean {
+        if (!tvCapabilities().allowItemLocking) return false
         val parent = media.parentPath.orEmpty().replace('\\', '/').trim().trim('/').let {
             if (it == "." || it == "./") "" else it.removePrefix("./").trim('/')
         }
@@ -2192,6 +3426,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun isMediaProtected(media: ApiMedia): Boolean {
+        if (!tvCapabilities().allowItemLocking) return false
         return isMediaFromProtectedFolder(media)
     }
 
@@ -2213,7 +3448,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun setDefaultRootPath(value: String) {
         prefs.defaultRootPath = value
         defaultRootPath.value = value
-        _pathHistory.value = buildInitialPathStack(value)
+        cachedDateRootFolders.evictAll()
+        cachedYearMedia.evictAll()
+        cachedMonthMedia.evictAll()
+        lastDateRootSyncTime.clear()
+        _availableDateYears.value = emptyList()
+        _pathHistory.value = if (galleryViewMode.value == GalleryViewMode.DATE) listOf("") else buildInitialPathStack(value)
         if (_activeTab.value == ActiveTab.GALLERY) {
             loadCurrentDirectory()
         }
@@ -2229,6 +3469,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     // --- Multi-Selection (Share several images) ---
     fun enterSelectMode() {
+        if (!tvCapabilities().allowMultiSelect) return
         _isSelectMode.value = true
         _selectedMediaForShare.value = emptySet()
     }
@@ -2239,6 +3480,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun toggleSelectMedia(media: ApiMedia) {
+        if (!tvCapabilities().allowMultiSelect) return
         if (!_isSelectMode.value) {
             enterSelectMode()
         }
@@ -2256,12 +3498,27 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun toggleSelectAllMedia(mediaList: List<ApiMedia>) {
+        if (!tvCapabilities().allowMultiSelect) return
+        if (mediaList.isEmpty()) return
+        if (!_isSelectMode.value) {
+            enterSelectMode()
+        }
+        val allSet = mediaList.toSet()
+        if (_selectedMediaForShare.value.size == allSet.size && _selectedMediaForShare.value.containsAll(allSet)) {
+            _selectedMediaForShare.value = emptySet()
+        } else {
+            _selectedMediaForShare.value = allSet
+        }
+    }
+
     private val _shareProgress = MutableStateFlow(-1f)
     val shareProgress: StateFlow<Float> = _shareProgress.asStateFlow()
 
     private var shareJob: kotlinx.coroutines.Job? = null
 
     fun shareSingleMedia(context: Context, media: ApiMedia) {
+        if (!tvCapabilities().allowSharing) return
         shareJob?.cancel()
         shareJob = viewModelScope.launch(Dispatchers.IO) {
             _shareProgress.value = 0f
@@ -2301,6 +3558,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun downloadSelectedMedia(context: Context) {
+        if (!tvCapabilities().allowDownloads) return
         val selected = _selectedMediaForShare.value
         if (selected.isEmpty()) return
 
@@ -2335,6 +3593,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun shareSelectedMedia(context: Context) {
+        if (!tvCapabilities().allowSharing) return
         val selected = _selectedMediaForShare.value
         if (selected.isEmpty()) return
 
@@ -2598,8 +3857,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     prefs.cookies = newCookies
                     prefs.apiPrefix = newPrefix
                     prefs.isLoggedIn = true
-                    _userRole.value = prefs.userRole
-                    _canManageAlbums.value = computeCanManageAlbums()
+                    syncPermissionStateFlows()
                     true
                 } else {
                     false
@@ -2671,9 +3929,19 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun logout() {
+        dateIndexJob?.cancel()
+        _isDateIndexLoading.value = false
+        cachedFolderDirectories.evictAll()
+        cachedAlbumDirectories.evictAll()
+        cachedPersonDirectories.evictAll()
         cachedFlattenedMedia.evictAll()
         cachedYearMedia.evictAll()
+        cachedMonthMedia.evictAll()
+        cachedDateRootFolders.evictAll()
+        lastDateRootSyncTime.clear()
+        _availableDateYears.value = emptyList()
         scrollPositions.evictAll()
+        activeScrollKeyOwners.clear()
         prefs.clearSession()
         isLoggedIn.value = false
         savedServerUrl.value = prefs.serverUrl
@@ -2682,18 +3950,31 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         lastPermissionsSyncMs = 0L
         _userRole.value = -1
         _canManageAlbums.value = false
+        _sharingConfig.value = SharingConfigState()
+        _canCreateShareLink.value = false
+        _sharingPasswordProtected.value = true
         _saveAlbumState.value = SaveAlbumUiState.Idle
         _deleteAlbumState.value = DeleteAlbumUiState.Idle
+        _recoverableAlbums.value = emptyList()
+        _albumRestoreState.value = AlbumRestoreUiState.Idle
+        _galleryState.value = GalleryUiState.Loading
+        _albumsState.value = AlbumsUiState.Loading
+        _personsState.value = PersonsUiState.Loading
+        _rediscoverState.value = RediscoverUiState.Loading
+        _shareLinkState.value = ShareLinkUiState.Idle
         _pathHistory.value = buildInitialPathStack(prefs.defaultRootPath)
         _loginState.value = LoginUiState.Idle
         _activeTab.value = ActiveTab.GALLERY
+        _previousNonSettingsTab.value = ActiveTab.GALLERY
         _selectedAlbum.value = null
         _albumContentState.value = null
         _selectedPerson.value = null
         _personContentState.value = null
         _selectedMedia.value = null
         _albumsFilterQuery.value = ""
+        _isAlbumsSearchActive.value = false
         _personsFilterQuery.value = ""
+        _isPersonsSearchActive.value = false
         _rediscoverExpandedYears.value = emptySet()
         _selectedSettingsTab.value = 0
         isSearchActive.value = false
@@ -2776,9 +4057,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 e.printStackTrace()
             }
 
+            dateIndexJob?.cancel()
+            _isDateIndexLoading.value = false
+            cachedFolderDirectories.evictAll()
             cachedFlattenedMedia.evictAll()
             cachedYearMedia.evictAll()
+            cachedMonthMedia.evictAll()
+            cachedDateRootFolders.evictAll()
             lastBackgroundSyncTime.clear()
+            lastDateRootSyncTime.clear()
+            _availableDateYears.value = emptyList()
 
             updateCacheSize()
         }
@@ -2817,26 +4105,29 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         return@launch
                     }
                     val bodyString = response.body?.string() ?: ""
-                    val json = org.json.JSONObject(bodyString)
-                    val tagName = json.optString("tag_name", json.optString("tagName", "v1.0.0"))
-                    val htmlUrl = json.optString("html_url", "https://github.com/dasmaetthes/pigallery2_android/releases")
-                    val releaseNotes = json.optString("body").ifBlank { str(R.string.no_release_notes) }
-
                     val currentVersion = com.example.BuildConfig.VERSION_NAME.ifBlank { "2.7" }
-                    val cleanRemote = tagName.removePrefix("v").trim()
-                    val cleanCurrent = currentVersion.removePrefix("v").trim()
 
                     prefs.lastUpdateCheck = now
-
-                    if (cleanRemote != cleanCurrent && cleanRemote.isNotEmpty()) {
-                        _updateState.value = UpdateState.NewRelease(tagName, htmlUrl, releaseNotes)
-                    } else {
-                        _updateState.value = UpdateState.UpToDate(currentVersion)
-                    }
+                    _updateState.value = evaluateReleaseJson(bodyString, currentVersion)
                 }
             } catch (e: Exception) {
                 _updateState.value = UpdateState.Error(e.localizedMessage ?: str(R.string.network_error_updates))
             }
+        }
+    }
+
+    internal fun evaluateReleaseJson(bodyString: String, currentVersion: String): UpdateState {
+        val json = org.json.JSONObject(bodyString)
+        val tagName = json.optString("tag_name", json.optString("tagName", "")).trim()
+        val isDraft = json.optBoolean("draft", false)
+        val isPrerelease = json.optBoolean("prerelease", false)
+        val htmlUrl = json.optString("html_url", "https://github.com/dasmaetthes/pigallery2_android/releases")
+        val releaseNotes = json.optString("body").ifBlank { str(R.string.no_release_notes) }
+
+        return if (!isDraft && !isPrerelease && VersionComparator.isRemoteNewer(tagName, currentVersion)) {
+            UpdateState.NewRelease(tagName, htmlUrl, releaseNotes)
+        } else {
+            UpdateState.UpToDate(currentVersion)
         }
     }
 

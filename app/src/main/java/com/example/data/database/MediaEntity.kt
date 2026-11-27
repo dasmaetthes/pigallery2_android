@@ -6,7 +6,7 @@ import androidx.room.PrimaryKey
 
 @Entity(
     tableName = "media",
-    indices = [Index(value = ["parentPath"])]
+    indices = [Index(value = ["parentPath"]), Index(value = ["creationDate"])]
 )
 data class MediaEntity(
     @PrimaryKey val id: Int,

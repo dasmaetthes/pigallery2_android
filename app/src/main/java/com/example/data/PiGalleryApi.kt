@@ -64,6 +64,16 @@ object UserRoles {
             else -> role >= albumWriteMinRole
         }
     }
+
+    fun canCreateShareLinks(
+        role: Int,
+        sharingMinRole: Int = USER,
+        sharingFeatureEnabled: Boolean = true
+    ): Boolean {
+        if (!sharingFeatureEnabled) return false
+        if (role < USER) return false
+        return role >= sharingMinRole
+    }
 }
 
 data class ApiDirectory(
@@ -71,7 +81,8 @@ data class ApiDirectory(
     val name: String,
     val path: String,
     val directories: List<ApiSubFolder>?,
-    val media: List<ApiMedia>?
+    val media: List<ApiMedia>?,
+    val resultOverflow: Boolean = false
 )
 
 data class ApiSubFolder(
@@ -194,10 +205,49 @@ data class ApiSize(
     val height: Int?
 )
 
+enum class ShareTargetKind {
+    DIRECTORY,
+    SEARCH,
+    ALBUM,
+    PERSON
+}
+
+sealed class ShareTarget {
+    data class Directory(val path: String) : ShareTarget()
+    data class Search(
+        val label: String,
+        val searchQuery: Map<String, Any?>,
+        val kind: ShareTargetKind
+    ) : ShareTarget()
+}
+
+data class ApiShareLink(
+    val id: Int? = null,
+    val sharingKey: String,
+    val path: String,
+    val shareUrl: String? = null,
+    val searchQuery: Map<String, Any?>? = null,
+    val hasPassword: Boolean = false,
+    val expires: Long = -1L,
+    val includeSubfolders: Boolean = true,
+    val preventDownload: Boolean = false,
+    val timeStamp: Long? = null,
+    val creatorName: String? = null
+)
+
 class PiGalleryApi(private val context: android.content.Context) {
     companion object {
         fun ensureHttpUrl(url: String): String {
-            return url.let { if (it.isNotBlank() && !it.startsWith("http")) "http://$it" else it }.trimEnd('/')
+            val trimmed = url.trim()
+            if (trimmed.isEmpty()) return ""
+            val withScheme = if (trimmed.startsWith("http://", ignoreCase = true) ||
+                trimmed.startsWith("https://", ignoreCase = true)
+            ) {
+                trimmed
+            } else {
+                "http://$trimmed"
+            }
+            return withScheme.trimEnd('/')
         }
 
         fun cleanServerPath(path: String?): String {
@@ -302,26 +352,7 @@ class PiGalleryApi(private val context: android.content.Context) {
 
         val duration = (metaMap["duration"] as? Number ?: metaMap["u"] as? Number)?.toDouble()
 
-        val positionDataMap = metaMap["positionData"] as? Map<*, *> ?: metaMap["p"] as? Map<*, *>
-        val gpsRaw = positionDataMap?.let { it["GPSData"] ?: it["g"] ?: it["gps"] }
-            ?: metaMap["gps"]
-            ?: metaMap["g"]
-
-        val gps = if (gpsRaw is Map<*, *>) {
-            val lat = (gpsRaw["latitude"] as? Number ?: gpsRaw["lat"] as? Number ?: gpsRaw["la"] as? Number)?.toDouble()
-            val lon = (gpsRaw["longitude"] as? Number ?: gpsRaw["lng"] as? Number ?: gpsRaw["lon"] as? Number ?: gpsRaw["lo"] as? Number)?.toDouble()
-            val alt = (gpsRaw["altitude"] as? Number ?: gpsRaw["alt"] as? Number ?: gpsRaw["al"] as? Number)?.toDouble()
-            if (lat != null && lon != null) {
-                ApiGPSData(lat, lon, alt)
-            } else null
-        } else if (gpsRaw is List<*>) {
-            val lat = (gpsRaw.getOrNull(0) as? Number)?.toDouble()
-            val lon = (gpsRaw.getOrNull(1) as? Number)?.toDouble()
-            val alt = (gpsRaw.getOrNull(2) as? Number)?.toDouble()
-            if (lat != null && lon != null) {
-                ApiGPSData(lat, lon, alt)
-            } else null
-        } else null
+        val gps = extractGpsFromMetadata(metaMap)
 
         val fileSize = (metaMap["fileSize"] as? Number ?: metaMap["file_size"] as? Number ?: metaMap["s"] as? Number ?: metaMap["fs"] as? Number)?.toLong()
 
@@ -340,11 +371,58 @@ class PiGalleryApi(private val context: android.content.Context) {
         return ApiMediaMetadata(size, creationDate, creationDateOffset, cameraData, keywords, faces, duration, gps, fileSize, isLivePhoto, liveVideoPath)
     }
 
+    private fun toFiniteDouble(value: Any?): Double? {
+        return when (value) {
+            is Number -> value.toDouble().takeIf { it.isFinite() }
+            is String -> value.trim().toDoubleOrNull()?.takeIf { it.isFinite() }
+            else -> null
+        }
+    }
+
+    private fun extractGpsFromRaw(raw: Any?): ApiGPSData? {
+        return when (raw) {
+            is Map<*, *> -> {
+                val nested = raw["GPSData"] ?: raw["gpsData"] ?: raw["GPS"] ?: raw["gps"] ?: raw["g"] ?: raw["coords"]
+                if (nested != null) {
+                    extractGpsFromRaw(nested)?.let { return it }
+                }
+                val lat = toFiniteDouble(raw["latitude"] ?: raw["lat"] ?: raw["la"])
+                val lon = toFiniteDouble(raw["longitude"] ?: raw["lng"] ?: raw["lon"] ?: raw["long"] ?: raw["lo"])
+                val alt = toFiniteDouble(raw["altitude"] ?: raw["alt"] ?: raw["al"])
+                if (lat != null && lon != null) ApiGPSData(lat, lon, alt) else null
+            }
+            is List<*> -> {
+                val lat = toFiniteDouble(raw.getOrNull(0))
+                val lon = toFiniteDouble(raw.getOrNull(1))
+                val alt = toFiniteDouble(raw.getOrNull(2))
+                if (lat != null && lon != null) ApiGPSData(lat, lon, alt) else null
+            }
+            else -> null
+        }
+    }
+
+    private fun extractGpsFromMetadata(metaMap: Map<*, *>): ApiGPSData? {
+        return extractGpsFromRaw(metaMap["positionData"])
+            ?: extractGpsFromRaw(metaMap["p"])
+            ?: extractGpsFromRaw(metaMap["GPSData"])
+            ?: extractGpsFromRaw(metaMap["gpsData"])
+            ?: extractGpsFromRaw(metaMap["GPS"])
+            ?: extractGpsFromRaw(metaMap["gps"])
+            ?: extractGpsFromRaw(metaMap["g"])
+            ?: run {
+                val lat = toFiniteDouble(metaMap["latitude"])
+                val lon = toFiniteDouble(metaMap["longitude"])
+                val alt = toFiniteDouble(metaMap["altitude"])
+                if (lat != null && lon != null) ApiGPSData(lat, lon, alt) else null
+            }
+    }
+
     private val prefs = PreferencesManager(context)
+    private var currentAllowInsecureSsl: Boolean = prefs.allowInsecureSsl
     var client: OkHttpClient
 
     init {
-        client = buildHttpClient(prefs.allowInsecureSsl)
+        client = buildHttpClient(currentAllowInsecureSsl)
     }
 
     private fun buildHttpClient(allowInsecure: Boolean): OkHttpClient {
@@ -369,7 +447,14 @@ class PiGalleryApi(private val context: android.content.Context) {
     }
 
     fun updateClientSsl(allowInsecure: Boolean) {
-        client = buildHttpClient(allowInsecure)
+        if (allowInsecure == currentAllowInsecureSsl) return
+        currentAllowInsecureSsl = allowInsecure
+        val existingInterceptors = client.interceptors
+        val existingNetworkInterceptors = client.networkInterceptors
+        val builder = buildHttpClient(allowInsecure).newBuilder()
+        existingInterceptors.forEach { builder.addInterceptor(it) }
+        existingNetworkInterceptors.forEach { builder.addNetworkInterceptor(it) }
+        client = builder.build()
     }
 
     fun clearCache() {
@@ -386,6 +471,41 @@ class PiGalleryApi(private val context: android.content.Context) {
 
     private val mapType = Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
     private val mapAdapter = moshi.adapter<Map<String, Any?>>(mapType)
+
+    @Volatile
+    private var cachedShareServiceKey: Pair<OkHttpClient, String>? = null
+    @Volatile
+    private var cachedShareService: ShareApiService? = null
+    internal var shareServiceOverride: ShareApiService? = null
+
+    internal fun getShareApiService(serverUrl: String): ShareApiService {
+        shareServiceOverride?.let { return it }
+        val normalizedBase = ensureHttpUrl(serverUrl)
+        val key = Pair(client, normalizedBase)
+        val existing = cachedShareService
+        if (existing != null && cachedShareServiceKey == key) {
+            return existing
+        }
+        val created = ShareRetrofitFactory.create(normalizedBase, client, moshi)
+        cachedShareServiceKey = key
+        cachedShareService = created
+        return created
+    }
+
+    private fun buildShareHeaders(cookies: String, csrfToken: String = ""): Map<String, String> {
+        val headers = LinkedHashMap<String, String>()
+        if (cookies.isNotEmpty()) headers["Cookie"] = cookies
+        if (csrfToken.isNotEmpty()) headers["CSRF-Token"] = csrfToken
+        return headers
+    }
+
+    private fun readRetrofitBody(response: retrofit2.Response<okhttp3.ResponseBody>): String {
+        return if (response.isSuccessful) {
+            response.body()?.use { it.string() }.orEmpty()
+        } else {
+            response.errorBody()?.use { it.string() }.orEmpty()
+        }
+    }
 
     private fun extractSessionCookies(cookieHeaders: List<String>): String {
         val pairs = cookieHeaders.mapNotNull { header ->
@@ -418,7 +538,14 @@ class PiGalleryApi(private val context: android.content.Context) {
 
     private fun extractErrorMessage(bodyString: String): String? {
         return try {
-            mapAdapter.fromJson(bodyString)?.get("error")?.toString()
+            val errorObj = mapAdapter.fromJson(bodyString)?.get("error") ?: return null
+            when (errorObj) {
+                is Map<*, *> -> (errorObj["message"] ?: errorObj["details"] ?: errorObj["code"])
+                    ?.toString()
+                    ?.takeIf { it.isNotBlank() }
+                    ?: errorObj.toString()
+                else -> errorObj.toString().takeIf { it.isNotBlank() }
+            }
         } catch (_: Exception) {
             null
         }
@@ -572,7 +699,9 @@ class PiGalleryApi(private val context: android.content.Context) {
         }
 
         var overrideFound: Int? = null
-        for (map in listOfNotNull(nestedUser, resultMap)) {
+        val nestedPermissions = (userObj["permissions"] as? Map<*, *>)
+            ?: (resultMap["permissions"] as? Map<*, *>)
+        for (map in listOfNotNull(nestedPermissions, nestedUser, resultMap)) {
             for ((k, v) in map) {
                 val key = k?.toString()?.lowercase() ?: continue
                 if ((key.contains("album") || key.contains("savedsearch") || key.contains("savesearch")) &&
@@ -625,8 +754,10 @@ class PiGalleryApi(private val context: android.content.Context) {
                 return null
             }
             if (response.code == 403) {
-                prefs.userRole = -1
-                prefs.userCanCreateAlbumsOverride = -1
+                if (prefs.userRole < UserRoles.LIMITED_GUEST) {
+                    prefs.userRole = -1
+                    prefs.userCanCreateAlbumsOverride = -1
+                }
                 return null
             }
             if (response.isSuccessful) {
@@ -647,12 +778,60 @@ class PiGalleryApi(private val context: android.content.Context) {
             }
         }
 
-        try {
+        val configLoaded = try {
             fetchClientAlbumConfig(sanitizedUrl, cookies, apiPrefix)
         } catch (_: Exception) {
-            // Keep existing config defaults if settings endpoint is unavailable
+            false
+        }
+        if (!configLoaded && !prefs.sharingConfigLoaded && prefs.userRole >= UserRoles.USER) {
+            probeSharingSupport(sanitizedUrl, cookies, apiPrefix)
         }
         return loginResult
+    }
+
+    /**
+     * Fallback probe used only when the server does not expose ClientConfig (/settings or index.html).
+     * Confirms whether the share endpoint is supported and enabled, hiding the UI item on 403/404/405.
+     */
+    internal fun probeSharingSupport(serverUrl: String, cookies: String, apiPrefix: String) {
+        val sanitizedUrl = serverUrl.trimEnd('/')
+        if (sanitizedUrl.isEmpty()) return
+        try {
+            val headers = buildShareHeaders(cookies = cookies)
+            val service = getShareApiService(sanitizedUrl)
+            val response = service.getShareLinks("$sanitizedUrl$apiPrefix/share/list", headers).execute()
+            val bodyString = readRetrofitBody(response)
+            when {
+                response.code() == 403 -> {
+                    prefs.sharingConfigLoaded = true
+                    prefs.sharingSupportedByServer = true
+                    prefs.sharingFeatureEnabled = false
+                }
+                response.code() == 404 || response.code() == 405 -> {
+                    prefs.sharingConfigLoaded = true
+                    prefs.sharingSupportedByServer = false
+                    prefs.sharingFeatureEnabled = false
+                }
+                response.isSuccessful && !isHtmlResponse(bodyString) -> {
+                    val parsed = if (bodyString.isBlank() || response.code() == 204) {
+                        null
+                    } else {
+                        try {
+                            mapAdapter.fromJson(bodyString)
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+                    if (parsed == null || parsed["error"] == null) {
+                        prefs.sharingConfigLoaded = true
+                        prefs.sharingSupportedByServer = true
+                        prefs.sharingFeatureEnabled = true
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            // Keep fail-closed state on transient network failure
+        }
     }
 
     /**
@@ -770,21 +949,36 @@ class PiGalleryApi(private val context: android.content.Context) {
         return null
     }
 
-    private fun applyClientConfigMap(configMap: Map<*, *>): Boolean {
+    internal fun applyClientConfigMap(configMap: Map<*, *>): Boolean {
+        val effectiveMap = (configMap["Client"] as? Map<*, *>)
+            ?: (configMap["client"] as? Map<*, *>)
+            ?: configMap
+
         val recognizedConfigKeys = setOf(
             "album", "albums", "savedsearch", "savedsearches",
-            "search", "users", "user", "faces", "sharing",
+            "search", "users", "user", "faces", "sharing", "share",
             "gallery", "server", "client", "metafile", "media"
         )
         val hasKnownSection = configMap.keys.any { k ->
             val lower = k?.toString()?.lowercase() ?: ""
-            lower in recognizedConfigKeys || lower.contains("album")
+            lower in recognizedConfigKeys || lower.contains("album") || lower.contains("shar")
+        } || effectiveMap.keys.any { k ->
+            val lower = k?.toString()?.lowercase() ?: ""
+            lower in recognizedConfigKeys || lower.contains("album") || lower.contains("shar")
         }
         if (!hasKnownSection) return false
 
-        var parsedMinRole = UserRoles.ADMIN
+        var parsedMinRole = UserRoles.USER
         var albumEnabled = true
         var foundExplicitMinRole = false
+        var albumReadOnly = false
+
+        var sharingEnabled = true
+        var foundExplicitSharingEnabled = false
+        var sharingPasswordProtected = prefs.sharingPasswordProtected
+        var sharingMinRole = UserRoles.USER
+        var foundSharingSection = false
+        var authenticationRequired = true
 
         fun parseAlbumSection(section: Map<*, *>) {
             for ((k, v) in section) {
@@ -794,7 +988,11 @@ class PiGalleryApi(private val context: android.content.Context) {
                         albumEnabled = v
                     }
                     (kLower == "readonly" || kLower == "read_only") && v is Boolean -> {
-                        if (v) parsedMinRole = maxOf(parsedMinRole, UserRoles.ADMIN)
+                        if (v) {
+                            albumReadOnly = true
+                            parsedMinRole = UserRoles.ADMIN
+                            foundExplicitMinRole = true
+                        }
                     }
                     kLower.contains("role") && !kLower.contains("read") -> {
                         UserRoles.fromValue(v)?.let { roleVal ->
@@ -823,38 +1021,84 @@ class PiGalleryApi(private val context: android.content.Context) {
             }
         }
 
-        for ((rawKey, rawValue) in configMap) {
-            val key = rawKey?.toString()?.lowercase() ?: continue
-            val section = rawValue as? Map<*, *>
-            when {
-                section != null && (key == "album" || key == "albums" || key == "savedsearch" || key == "savedsearches") -> {
-                    parseAlbumSection(section)
-                }
-                section != null && (key == "users" || key == "user" || key == "search") -> {
-                    for ((subKeyRaw, subVal) in section) {
-                        val subKey = subKeyRaw?.toString()?.lowercase() ?: continue
-                        if (!subKey.contains("album") && !subKey.contains("savedsearch") && !subKey.contains("savesearch")) {
-                            continue
+        fun parseSharingSection(section: Map<*, *>) {
+            foundSharingSection = true
+            for ((k, v) in section) {
+                val kLower = k?.toString()?.lowercase() ?: continue
+                when {
+                    kLower == "enabled" && v is Boolean -> {
+                        sharingEnabled = v
+                        foundExplicitSharingEnabled = true
+                    }
+                    (kLower == "passwordprotected" || kLower == "password_protected" || kLower == "password") && v is Boolean -> {
+                        sharingPasswordProtected = v
+                    }
+                    kLower.contains("role") -> {
+                        UserRoles.fromValue(v)?.let { roleVal ->
+                            sharingMinRole = maxOf(UserRoles.USER, roleVal)
                         }
-                        if (subKey.contains("role") && !subKey.contains("read")) {
-                            UserRoles.fromValue(subVal)?.let { roleVal ->
+                    }
+                }
+            }
+        }
+
+        for (sourceMap in listOf(effectiveMap, configMap)) {
+            for ((rawKey, rawValue) in sourceMap) {
+                val key = rawKey?.toString()?.lowercase() ?: continue
+                if ((key == "authenticationrequired" || key == "authentication_required") && rawValue is Boolean) {
+                    authenticationRequired = rawValue
+                    continue
+                }
+                val section = rawValue as? Map<*, *>
+                when {
+                    section != null && (key == "album" || key == "albums" || key == "savedsearch" || key == "savedsearches") -> {
+                        parseAlbumSection(section)
+                    }
+                    section != null && (key == "sharing" || key == "share") -> {
+                        parseSharingSection(section)
+                    }
+                    section != null && (key == "users" || key == "user" || key == "search") -> {
+                        for ((subKeyRaw, subVal) in section) {
+                            val subKey = subKeyRaw?.toString()?.lowercase() ?: continue
+                            if ((subKey == "authenticationrequired" || subKey == "authentication_required") && subVal is Boolean) {
+                                authenticationRequired = subVal
+                                continue
+                            }
+                            if (subKey.contains("shar")) {
+                                foundSharingSection = true
+                                if (subKey.contains("role")) {
+                                    UserRoles.fromValue(subVal)?.let { roleVal ->
+                                        sharingMinRole = maxOf(UserRoles.USER, roleVal)
+                                    }
+                                } else if (subVal is Boolean && (subKey.contains("enable") || subKey.contains("allow"))) {
+                                    sharingEnabled = subVal
+                                    foundExplicitSharingEnabled = true
+                                }
+                                continue
+                            }
+                            if (!subKey.contains("album") && !subKey.contains("savedsearch") && !subKey.contains("savesearch")) {
+                                continue
+                            }
+                            if (subKey.contains("role") && !subKey.contains("read")) {
+                                UserRoles.fromValue(subVal)?.let { roleVal ->
+                                    if (!foundExplicitMinRole) {
+                                        parsedMinRole = roleVal
+                                        foundExplicitMinRole = true
+                                    }
+                                }
+                            } else if (subVal is Boolean && (
+                                    subKey.contains("allow") ||
+                                        subKey.contains("create") ||
+                                        subKey.contains("save") ||
+                                        subKey.contains("write") ||
+                                        subKey.contains("manage") ||
+                                        subKey.contains("edit")
+                                    )
+                            ) {
                                 if (!foundExplicitMinRole) {
-                                    parsedMinRole = roleVal
+                                    parsedMinRole = if (subVal) UserRoles.USER else UserRoles.ADMIN
                                     foundExplicitMinRole = true
                                 }
-                            }
-                        } else if (subVal is Boolean && (
-                                subKey.contains("allow") ||
-                                    subKey.contains("create") ||
-                                    subKey.contains("save") ||
-                                    subKey.contains("write") ||
-                                    subKey.contains("manage") ||
-                                    subKey.contains("edit")
-                                )
-                        ) {
-                            if (!foundExplicitMinRole) {
-                                parsedMinRole = if (subVal) UserRoles.USER else UserRoles.ADMIN
-                                foundExplicitMinRole = true
                             }
                         }
                     }
@@ -862,8 +1106,22 @@ class PiGalleryApi(private val context: android.content.Context) {
             }
         }
 
+        if (albumReadOnly) {
+            parsedMinRole = maxOf(parsedMinRole, UserRoles.ADMIN)
+        }
         prefs.albumFeatureEnabled = albumEnabled
         prefs.albumWriteMinRole = parsedMinRole
+        prefs.sharingConfigLoaded = true
+        prefs.sharingAuthenticationRequired = authenticationRequired
+        if (foundSharingSection) {
+            prefs.sharingSupportedByServer = true
+            prefs.sharingFeatureEnabled = (if (foundExplicitSharingEnabled) sharingEnabled else true) && authenticationRequired
+            prefs.sharingPasswordProtected = sharingPasswordProtected
+            prefs.sharingMinRole = sharingMinRole
+        } else {
+            prefs.sharingSupportedByServer = false
+            prefs.sharingFeatureEnabled = false
+        }
         return true
     }
 
@@ -884,6 +1142,23 @@ class PiGalleryApi(private val context: android.content.Context) {
         }
     }
 
+    private fun canonicalizeJsonValue(value: Any?): Any? {
+        return when (value) {
+            is Double -> if (value % 1.0 == 0.0) value.toLong() else value
+            is Map<*, *> -> {
+                val sorted = java.util.TreeMap<String, Any?>()
+                for ((k, v) in value) {
+                    if (k != null) {
+                        sorted[k.toString()] = canonicalizeJsonValue(v)
+                    }
+                }
+                sorted
+            }
+            is List<*> -> value.map { canonicalizeJsonValue(it) }
+            else -> value
+        }
+    }
+
     /**
      * Serializes search query map to JSON string.
      */
@@ -891,6 +1166,12 @@ class PiGalleryApi(private val context: android.content.Context) {
         @Suppress("UNCHECKED_CAST")
         val cleanedQuery = cleanJsonValue(query) as Map<String, Any?>
         return mapAdapter.toJson(cleanedQuery)
+    }
+
+    internal fun serializeCanonicalQuery(query: Map<String, Any?>): String {
+        @Suppress("UNCHECKED_CAST")
+        val canonicalQuery = canonicalizeJsonValue(query) as Map<String, Any?>
+        return mapAdapter.toJson(canonicalQuery)
     }
 
     /**
@@ -1053,11 +1334,11 @@ class PiGalleryApi(private val context: android.content.Context) {
 
     private fun parseSearchResult(map: Map<String, Any?>): ApiDirectory {
         val result = map["result"] as? Map<String, Any?> ?: throw IOException("Invalid response structure")
-        val mapObj = result["map"] as? Map<String, Any?>
-        val mapDirectories = mapObj?.get("directories") as? List<*>
-
         val searchResult = result["searchResult"] as? Map<String, Any?>
             ?: throw IOException("No searchResult found in response")
+        val mapObj = (result["map"] as? Map<String, Any?>)
+            ?: (searchResult["map"] as? Map<String, Any?>)
+        val mapDirectories = mapObj?.get("directories") as? List<*>
 
         val mediaList = searchResult["media"] as? List<*>
         val media = mediaList?.mapNotNull { item ->
@@ -1107,11 +1388,13 @@ class PiGalleryApi(private val context: android.content.Context) {
             val medFileSize = (mediaMap["fileSize"] as? Number ?: mediaMap["file_size"] as? Number ?: mediaMap["s"] as? Number ?: mediaMap["fs"] as? Number)?.toLong()
 
             val metaMap = (mediaMap["metadata"] as? Map<*, *>) ?: (mediaMap["m"] as? Map<*, *>)
+            val fallbackGps = extractGpsFromRaw(mediaMap["positionData"] ?: mediaMap["gps"] ?: mediaMap["GPSData"])
             val metadata = if (metaMap != null) {
                 val parsed = parseMetadata(metaMap, mapObj)
-                if (parsed.fileSize == null && medFileSize != null) parsed.copy(fileSize = medFileSize) else parsed
-            } else if (medFileSize != null) {
-                ApiMediaMetadata(fileSize = medFileSize)
+                val withSize = if (parsed.fileSize == null && medFileSize != null) parsed.copy(fileSize = medFileSize) else parsed
+                if (withSize.gps == null && fallbackGps != null) withSize.copy(gps = fallbackGps) else withSize
+            } else if (medFileSize != null || fallbackGps != null) {
+                ApiMediaMetadata(fileSize = medFileSize, gps = fallbackGps)
             } else {
                 null
             }
@@ -1125,8 +1408,9 @@ class PiGalleryApi(private val context: android.content.Context) {
             parseSubFolder(dirMap, parentDirectoryPath = null)
         } ?: emptyList()
 
+        val resultOverflow = (searchResult["resultOverflow"] as? Boolean) ?: false
         val pairedMedia = LivePhotoHelper.pairLivePhotos(media)
-        return ApiDirectory(-1, "Search Results", "", directories, pairedMedia)
+        return ApiDirectory(-1, "Search Results", "", directories, pairedMedia, resultOverflow = resultOverflow)
     }
 
     private fun parseSubFolder(dirMap: Map<*, *>, parentDirectoryPath: String?): ApiSubFolder {
@@ -1435,7 +1719,7 @@ class PiGalleryApi(private val context: android.content.Context) {
                 }
 
                 if (response.code == 403) {
-                    throw IOException(extractErrorMessage(bodyString) ?: "Not authorized to save albums (Admin role required).")
+                    throw IOException(extractErrorMessage(bodyString) ?: "Not authorized to save albums.")
                 }
 
                 if (response.code == 404 || response.code == 405) {
@@ -1598,5 +1882,571 @@ class PiGalleryApi(private val context: android.content.Context) {
 
         Log.e("PiGalleryApi", "All attempts to sync favorite status with backend failed.")
         return false
+    }
+
+    internal fun parseShareLinkMap(
+        map: Map<*, *>,
+        fallbackPath: String = "",
+        fallbackSearchQuery: Map<String, Any?>? = null,
+        fallbackIncludeSubfolders: Boolean = true,
+        fallbackHasPassword: Boolean = false,
+        fallbackPreventDownload: Boolean = false
+    ): ApiShareLink? {
+        val key = (map["sharingKey"] as? String)?.trim()
+            ?: (map["key"] as? String)?.trim()
+            ?: return null
+        if (key.isEmpty()) return null
+
+        val rawPath = (map["path"] as? String) ?: fallbackPath
+        val normalizedPath = cleanServerPath(rawPath)
+        val serverShareUrl = (map["url"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
+            ?: (map["shareUrl"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
+        val parsedSearchQuery: Map<String, Any?>? = when (val rawQuery = map["searchQuery"]) {
+            is Map<*, *> -> {
+                @Suppress("UNCHECKED_CAST")
+                cleanJsonValue(rawQuery) as? Map<String, Any?>
+            }
+            is String -> {
+                if (rawQuery.isNotBlank()) {
+                    try {
+                        @Suppress("UNCHECKED_CAST")
+                        cleanJsonValue(mapAdapter.fromJson(rawQuery)) as? Map<String, Any?>
+                    } catch (_: Exception) {
+                        null
+                    }
+                } else {
+                    null
+                }
+            }
+            else -> null
+        } ?: fallbackSearchQuery
+
+        val rawPassword = map["password"]
+        val hasPassword = when (rawPassword) {
+            is Boolean -> rawPassword
+            is String -> rawPassword.isNotBlank() && !rawPassword.equals("false", ignoreCase = true)
+            else -> (map["passwordProtected"] as? Boolean) ?: fallbackHasPassword
+        }
+        val expires = (map["expires"] as? Number)?.toLong() ?: -1L
+        val includeSubfolders = (map["includeSubfolders"] as? Boolean) ?: fallbackIncludeSubfolders
+        val preventDownload = (map["preventDownload"] as? Boolean) ?: fallbackPreventDownload
+        val timeStamp = (map["timeStamp"] as? Number)?.toLong()
+        val id = (map["id"] as? Number)?.toInt()
+        val creatorName = when (val creator = map["creator"]) {
+            is Map<*, *> -> (creator["name"] as? String) ?: (creator["username"] as? String)
+            is String -> creator
+            else -> null
+        }
+
+        return ApiShareLink(
+            id = id,
+            sharingKey = key,
+            path = normalizedPath,
+            shareUrl = serverShareUrl,
+            searchQuery = parsedSearchQuery,
+            hasPassword = hasPassword,
+            expires = expires,
+            includeSubfolders = includeSubfolders,
+            preventDownload = preventDownload,
+            timeStamp = timeStamp,
+            creatorName = creatorName
+        )
+    }
+
+    /**
+     * Checks whether a server share link corresponds to the given share target
+     * (directory path or search/album/person SearchQueryDTO).
+     */
+    fun matchesShareTarget(share: ApiShareLink, target: ShareTarget): Boolean {
+        return when (target) {
+            is ShareTarget.Directory -> {
+                val cleanTarget = cleanServerPath(target.path)
+                val query = share.searchQuery
+                if (query == null) {
+                    cleanServerPath(share.path) == cleanTarget
+                } else {
+                    val queryType = (query["type"] as? Number)?.toInt()
+                    val queryVal = query["value"] as? String
+                    queryType == 102 && cleanServerPath(queryVal) == cleanTarget
+                }
+            }
+            is ShareTarget.Search -> {
+                val shareQuery = share.searchQuery ?: return false
+                if (target.searchQuery.isEmpty()) return false
+                try {
+                    serializeCanonicalQuery(shareQuery) == serializeCanonicalQuery(target.searchQuery)
+                } catch (_: Exception) {
+                    false
+                }
+            }
+        }
+    }
+
+    private fun buildValidityPayloads(validity: ShareValidity): List<ShareValidityRequest> {
+        return if (validity.unit == ShareValidityUnit.NONE) {
+            listOf(
+                ShareValidityRequest(amount = 0, type = ShareValidityUnit.NONE.apiType),
+                ShareValidityRequest(amount = 36500, type = ShareValidityUnit.DAYS.apiType)
+            )
+        } else {
+            val safeAmount = validity.amount.coerceAtLeast(1)
+            listOf(ShareValidityRequest(amount = safeAmount, type = validity.unit.apiType))
+        }
+    }
+
+    /**
+     * Creates a PiGallery2 share link for a specific directory path via the Retrofit ShareApiService.
+     * Supports Minutes, Hours, Days, Months, or None (unlimited/forever) validity and preventDownload.
+     */
+    fun createShareLink(
+        serverUrl: String,
+        path: String,
+        includeSubfolders: Boolean,
+        validity: ShareValidity,
+        password: String?,
+        cookies: String,
+        apiPrefix: String,
+        preventDownload: Boolean = false
+    ): ApiShareLink {
+        val sanitizedUrl = ensureHttpUrl(serverUrl).trimEnd('/')
+        if (sanitizedUrl.isEmpty()) throw IOException("No server configured.")
+
+        if (prefs.csrfToken.isBlank()) {
+            try {
+                fetchCurrentUserSession(sanitizedUrl, cookies, apiPrefix)
+            } catch (_: Exception) {
+                // Continue even if /user/me fails
+            }
+        }
+        val headers = buildShareHeaders(cookies = cookies, csrfToken = prefs.csrfToken)
+        val service = getShareApiService(sanitizedUrl)
+        val cleanPath = cleanServerPath(path)
+        val encodedPath = encodeUrlPath(cleanPath)
+
+        val endpoints = if (encodedPath.isEmpty()) {
+            listOf(
+                "POST" to "$sanitizedUrl$apiPrefix/share/",
+                "POST" to "$sanitizedUrl$apiPrefix/share",
+                "PUT" to "$sanitizedUrl$apiPrefix/share/",
+                "PUT" to "$sanitizedUrl$apiPrefix/share"
+            )
+        } else {
+            listOf(
+                "POST" to "$sanitizedUrl$apiPrefix/share/$encodedPath",
+                "PUT" to "$sanitizedUrl$apiPrefix/share/$encodedPath"
+            )
+        }
+
+        val payloads = buildValidityPayloads(validity)
+        var lastError: IOException? = null
+        var allPathEndpointsUnsupported = true
+
+        for (validObj in payloads) {
+            val requestBody = CreateSharingRequestBody(
+                createSharing = CreateSharingPayload(
+                    includeSubfolders = includeSubfolders,
+                    password = password?.takeIf { it.isNotEmpty() },
+                    preventDownload = preventDownload,
+                    valid = validObj
+                )
+            )
+            var shouldRetryFallbackPayload = false
+
+            for ((method, endpoint) in endpoints) {
+                val call = if (method == "PUT") {
+                    service.putShare(endpoint, headers, requestBody)
+                } else {
+                    service.postShare(endpoint, headers, requestBody)
+                }
+                val response = call.execute()
+                val bodyString = readRetrofitBody(response)
+
+                if (response.code() == 401) {
+                    throw UnauthorizedSessionException(
+                        extractErrorMessage(bodyString) ?: "Unauthorized. Session might have expired."
+                    )
+                }
+
+                if (response.code() == 403) {
+                    prefs.sharingConfigLoaded = true
+                    prefs.sharingFeatureEnabled = false
+                    throw IOException(
+                        extractErrorMessage(bodyString) ?: "Sharing is disabled or not permitted for this user."
+                    )
+                }
+
+                if (response.code() == 400 && validObj == payloads.first() && payloads.size > 1) {
+                    allPathEndpointsUnsupported = false
+                    lastError = IOException(extractErrorMessage(bodyString) ?: "Invalid share validity parameter.")
+                    shouldRetryFallbackPayload = true
+                    break
+                }
+
+                if (response.code() == 404 || response.code() == 405) {
+                    lastError = IOException("Endpoint $method $endpoint not available (${response.code()})")
+                    continue
+                }
+
+                allPathEndpointsUnsupported = false
+
+                if (!response.isSuccessful) {
+                    throw IOException(extractErrorMessage(bodyString) ?: "Server returned error code: ${response.code()}")
+                }
+
+                if (bodyString.isBlank()) {
+                    throw IOException("Server returned empty response while creating share link.")
+                }
+
+                if (isHtmlResponse(bodyString)) {
+                    throw IOException("Server returned HTML instead of JSON. Check your API prefix or session.")
+                }
+
+                val responseMap = try {
+                    mapAdapter.fromJson(bodyString)
+                } catch (e: Exception) {
+                    throw IOException("Failed to parse server response as JSON: ${e.message}")
+                }
+
+                val errorObj = responseMap?.get("error")
+                if (errorObj != null) {
+                    val msg = (errorObj as? Map<*, *>)?.get("message")?.toString() ?: errorObj.toString()
+                    throw IOException(msg)
+                }
+
+                val shareMap = (responseMap?.get("result") as? Map<*, *>) ?: responseMap
+                val parsed = shareMap?.let {
+                    parseShareLinkMap(
+                        map = it,
+                        fallbackPath = cleanPath,
+                        fallbackIncludeSubfolders = includeSubfolders,
+                        fallbackHasPassword = !password.isNullOrEmpty(),
+                        fallbackPreventDownload = preventDownload
+                    )
+                }
+                if (parsed != null) return parsed
+                throw IOException("Server did not return a valid sharingKey.")
+            }
+
+            if (!shouldRetryFallbackPayload && !allPathEndpointsUnsupported) break
+        }
+
+        // Fallback for PiGallery2 versions that treat directory shares strictly as search queries
+        if (allPathEndpointsUnsupported) {
+            val directoryQuery = mapOf<String, Any?>(
+                "type" to 102, // SearchQueryTypes.DIRECTORY
+                "value" to if (cleanPath.isEmpty()) "/" else "/$cleanPath",
+                "matchType" to if (includeSubfolders) 2 else 1
+            )
+            return createSearchShareLink(
+                serverUrl = serverUrl,
+                searchQuery = directoryQuery,
+                validity = validity,
+                password = password,
+                cookies = cookies,
+                apiPrefix = apiPrefix,
+                preventDownload = preventDownload
+            )
+        }
+
+        throw lastError ?: IOException("Failed to create share link.")
+    }
+
+    /**
+     * Creates a PiGallery2 share link for a SearchQueryDTO (active search, saved album, or person)
+     * via the Retrofit ShareApiService.
+     * Includes a safety guard against older server versions that ignore searchQuery on POST /share/
+     * and accidentally create a root-gallery share: any such accidental root share is immediately revoked.
+     */
+    fun createSearchShareLink(
+        serverUrl: String,
+        searchQuery: Map<String, Any?>,
+        validity: ShareValidity,
+        password: String?,
+        cookies: String,
+        apiPrefix: String,
+        preventDownload: Boolean = false
+    ): ApiShareLink {
+        val sanitizedUrl = ensureHttpUrl(serverUrl).trimEnd('/')
+        if (sanitizedUrl.isEmpty()) throw IOException("No server configured.")
+        if (searchQuery.isEmpty()) throw IOException("Search query cannot be empty.")
+
+        if (prefs.csrfToken.isBlank()) {
+            try {
+                fetchCurrentUserSession(sanitizedUrl, cookies, apiPrefix)
+            } catch (_: Exception) {
+                // Continue even if /user/me fails
+            }
+        }
+        val headers = buildShareHeaders(cookies = cookies, csrfToken = prefs.csrfToken)
+        val service = getShareApiService(sanitizedUrl)
+
+        @Suppress("UNCHECKED_CAST")
+        val cleanedQuery = cleanJsonValue(searchQuery) as Map<String, Any?>
+        val queryJson = mapAdapter.toJson(cleanedQuery)
+        val encodedQueryJson = URLEncoder.encode(queryJson, "UTF-8").replace("+", "%20")
+
+        // Triple of (HTTP method, URL, isGenericRootFallback)
+        val endpoints = listOf(
+            Triple("POST", "$sanitizedUrl$apiPrefix/share/search/$encodedQueryJson", false),
+            Triple("PUT", "$sanitizedUrl$apiPrefix/share/search/$encodedQueryJson", false),
+            Triple("POST", "$sanitizedUrl$apiPrefix/share/search", false),
+            Triple("PUT", "$sanitizedUrl$apiPrefix/share/search", false),
+            Triple("POST", "$sanitizedUrl$apiPrefix/share/", true)
+        )
+
+        val payloads = buildValidityPayloads(validity)
+        var lastError: IOException? = null
+
+        for (validObj in payloads) {
+            val requestBody = CreateSharingRequestBody(
+                createSharing = CreateSharingPayload(
+                    searchQuery = cleanedQuery,
+                    password = password?.takeIf { it.isNotEmpty() },
+                    preventDownload = preventDownload,
+                    valid = validObj
+                )
+            )
+            var shouldRetryFallbackPayload = false
+
+            for ((method, endpoint, isGenericRootFallback) in endpoints) {
+                val call = if (method == "PUT") {
+                    service.putShare(endpoint, headers, requestBody)
+                } else {
+                    service.postShare(endpoint, headers, requestBody)
+                }
+                val response = call.execute()
+                val bodyString = readRetrofitBody(response)
+
+                if (response.code() == 401) {
+                    throw UnauthorizedSessionException(
+                        extractErrorMessage(bodyString) ?: "Unauthorized. Session might have expired."
+                    )
+                }
+
+                if (response.code() == 403) {
+                    prefs.sharingConfigLoaded = true
+                    prefs.sharingFeatureEnabled = false
+                    throw IOException(
+                        extractErrorMessage(bodyString) ?: "Sharing is disabled or not permitted for this user."
+                    )
+                }
+
+                if (response.code() == 400 && validObj == payloads.first() && payloads.size > 1) {
+                    lastError = IOException(extractErrorMessage(bodyString) ?: "Invalid share validity parameter.")
+                    shouldRetryFallbackPayload = true
+                    break
+                }
+
+                if (response.code() == 404 || response.code() == 405) {
+                    lastError = IOException("Endpoint $method $endpoint not available (${response.code()})")
+                    continue
+                }
+
+                if (!response.isSuccessful) {
+                    throw IOException(extractErrorMessage(bodyString) ?: "Server returned error code: ${response.code()}")
+                }
+
+                if (bodyString.isBlank()) {
+                    throw IOException("Server returned empty response while creating share link.")
+                }
+
+                if (isHtmlResponse(bodyString)) {
+                    throw IOException("Server returned HTML instead of JSON. Check your API prefix or session.")
+                }
+
+                val responseMap = try {
+                    mapAdapter.fromJson(bodyString)
+                } catch (e: Exception) {
+                    throw IOException("Failed to parse server response as JSON: ${e.message}")
+                }
+
+                val errorObj = responseMap?.get("error")
+                if (errorObj != null) {
+                    val msg = (errorObj as? Map<*, *>)?.get("message")?.toString() ?: errorObj.toString()
+                    throw IOException(msg)
+                }
+
+                val shareMap = (responseMap?.get("result") as? Map<*, *>) ?: responseMap
+                val parsed = shareMap?.let {
+                    parseShareLinkMap(
+                        map = it,
+                        fallbackPath = "",
+                        // On the generic /share/ fallback, do NOT supply fallbackSearchQuery so we can detect
+                        // older servers that ignored searchQuery and created a root-directory share instead.
+                        fallbackSearchQuery = if (isGenericRootFallback) null else cleanedQuery,
+                        fallbackIncludeSubfolders = false,
+                        fallbackHasPassword = !password.isNullOrEmpty(),
+                        fallbackPreventDownload = preventDownload
+                    )
+                } ?: throw IOException("Server did not return a valid sharingKey.")
+
+                if (isGenericRootFallback && parsed.searchQuery == null && cleanServerPath(parsed.path).isEmpty()) {
+                    // CRITICAL SAFETY GUARD: Older PiGallery2 server ignored searchQuery and created a root share!
+                    // Immediately revoke it so we never leak the entire gallery.
+                    try {
+                        deleteShareLink(
+                            serverUrl = sanitizedUrl,
+                            sharingKey = parsed.sharingKey,
+                            cookies = cookies,
+                            apiPrefix = apiPrefix
+                        )
+                    } catch (revokeErr: Exception) {
+                        Log.w("PiGalleryApi", "Failed to auto-revoke accidental root share: ${revokeErr.message}")
+                    }
+                    throw IOException(context.getString(com.example.R.string.share_search_unsupported_server))
+                }
+
+                return parsed
+            }
+
+            if (!shouldRetryFallbackPayload) break
+        }
+
+        throw lastError ?: IOException(context.getString(com.example.R.string.share_search_unsupported_server))
+    }
+
+    /**
+     * Fetches active share links visible to the current user from the PiGallery2 server
+     * via the Retrofit ShareApiService.
+     */
+    fun listShareLinks(
+        serverUrl: String,
+        cookies: String,
+        apiPrefix: String
+    ): List<ApiShareLink> {
+        val sanitizedUrl = ensureHttpUrl(serverUrl).trimEnd('/')
+        if (sanitizedUrl.isEmpty()) return emptyList()
+
+        val headers = buildShareHeaders(cookies = cookies)
+        val service = getShareApiService(sanitizedUrl)
+        val endpoints = listOf(
+            "$sanitizedUrl$apiPrefix/share/list",
+            "$sanitizedUrl$apiPrefix/share"
+        )
+        var lastError: IOException? = null
+
+        for (endpoint in endpoints) {
+            val response = service.getShareLinks(endpoint, headers).execute()
+            val bodyString = readRetrofitBody(response)
+
+            if (response.code() == 401) {
+                throw UnauthorizedSessionException(
+                    extractErrorMessage(bodyString) ?: "Unauthorized. Session might have expired."
+                )
+            }
+
+            if (response.code() == 403) {
+                prefs.sharingConfigLoaded = true
+                prefs.sharingFeatureEnabled = false
+                throw IOException(
+                    extractErrorMessage(bodyString) ?: "Sharing is disabled or not permitted for this user."
+                )
+            }
+
+            if (response.code() == 404 || response.code() == 405) {
+                lastError = IOException("Endpoint GET $endpoint not available (${response.code()})")
+                continue
+            }
+
+            if (!response.isSuccessful) {
+                throw IOException(extractErrorMessage(bodyString) ?: "Server returned error code: ${response.code()}")
+            }
+
+            if (bodyString.isBlank() || response.code() == 204) {
+                return emptyList()
+            }
+
+            if (isHtmlResponse(bodyString)) {
+                throw IOException("Server returned HTML instead of JSON. Check your API prefix or session.")
+            }
+
+            val responseMap = try {
+                mapAdapter.fromJson(bodyString)
+            } catch (e: Exception) {
+                throw IOException("Failed to parse server response as JSON: ${e.message}")
+            }
+
+            val errorObj = responseMap?.get("error")
+            if (errorObj != null) {
+                val msg = (errorObj as? Map<*, *>)?.get("message")?.toString() ?: errorObj.toString()
+                throw IOException(msg)
+            }
+
+            val resultList = responseMap?.get("result") as? List<*> ?: emptyList<Any>()
+            return resultList.mapNotNull { item ->
+                (item as? Map<*, *>)?.let { parseShareLinkMap(it) }
+            }
+        }
+
+        prefs.sharingConfigLoaded = true
+        prefs.sharingSupportedByServer = false
+        prefs.sharingFeatureEnabled = false
+        throw lastError ?: IOException("Failed to load active share links.")
+    }
+
+    /**
+     * Revokes/deletes an active share link by its sharingKey on the PiGallery2 server
+     * via the Retrofit ShareApiService.
+     */
+    fun deleteShareLink(
+        serverUrl: String,
+        sharingKey: String,
+        cookies: String,
+        apiPrefix: String
+    ) {
+        val sanitizedUrl = ensureHttpUrl(serverUrl).trimEnd('/')
+        if (sanitizedUrl.isEmpty()) throw IOException("No server configured.")
+
+        if (prefs.csrfToken.isBlank()) {
+            try {
+                fetchCurrentUserSession(sanitizedUrl, cookies, apiPrefix)
+            } catch (_: Exception) {
+                // Continue even if /user/me fails
+            }
+        }
+        val headers = buildShareHeaders(cookies = cookies, csrfToken = prefs.csrfToken)
+        val service = getShareApiService(sanitizedUrl)
+        val encodedKey = URLEncoder.encode(sharingKey, "UTF-8").replace("+", "%20")
+        val endpoint = "$sanitizedUrl$apiPrefix/share/$encodedKey"
+
+        val response = service.deleteShareLink(endpoint, headers).execute()
+        val bodyString = readRetrofitBody(response)
+
+        if (response.code() == 401) {
+            throw UnauthorizedSessionException(
+                extractErrorMessage(bodyString) ?: "Unauthorized. Session might have expired."
+            )
+        }
+
+        if (response.code() == 403) {
+            throw IOException(
+                extractErrorMessage(bodyString) ?: "Not authorized to revoke share links."
+            )
+        }
+
+        if (!response.isSuccessful) {
+            throw IOException(
+                extractErrorMessage(bodyString) ?: "Server returned error code: ${response.code()}"
+            )
+        }
+
+        if (bodyString.isBlank() || response.code() == 204) {
+            return
+        }
+
+        if (isHtmlResponse(bodyString)) {
+            throw IOException("Server returned HTML instead of JSON. Check your API prefix or session.")
+        }
+
+        val responseMap = try {
+            mapAdapter.fromJson(bodyString)
+        } catch (_: Exception) {
+            null
+        }
+        val errorObj = responseMap?.get("error")
+        if (errorObj != null) {
+            val msg = (errorObj as? Map<*, *>)?.get("message")?.toString() ?: errorObj.toString()
+            throw IOException(msg)
+        }
     }
 }

@@ -39,15 +39,24 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
 import androidx.fragment.app.FragmentActivity
+import androidx.compose.ui.platform.testTag
 import com.example.R
 import com.example.findActivity
 import com.example.util.BiometricHelper
+import com.example.util.rememberTvCapabilities
 
 @Composable
 fun AppLockScreen(
     viewModel: GalleryViewModel,
     onUnlockSuccess: () -> Unit
 ) {
+    val tvCapabilities = rememberTvCapabilities()
+    if (!tvCapabilities.allowItemLocking) {
+        LaunchedEffect(Unit) {
+            onUnlockSuccess()
+        }
+        return
+    }
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() as? FragmentActivity }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -78,7 +87,9 @@ fun AppLockScreen(
     }
 
     Surface(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .testTag("app_lock_screen"),
         color = MaterialTheme.colorScheme.background
     ) {
         Box(

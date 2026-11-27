@@ -14,10 +14,13 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
@@ -32,10 +35,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.LinkAnnotation
@@ -43,6 +49,8 @@ import androidx.compose.ui.text.LinkInteractionListener
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -51,12 +59,29 @@ import androidx.fragment.app.FragmentActivity
 import com.example.R
 import com.example.findActivity
 import com.example.util.BiometricHelper
+import com.example.util.LocaleHelper
+import com.example.util.rememberTvCapabilities
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun SettingsTabContent(viewModel: GalleryViewModel) {
+fun SettingsTabContent(
+    viewModel: GalleryViewModel,
+    onOpenAbout: (() -> Unit)? = null,
+    firstItemFocusRequester: FocusRequester = remember { FocusRequester() }
+) {
     val context = LocalContext.current
+    val tvCapabilities = rememberTvCapabilities()
+    if (tvCapabilities.isTvMode) {
+        TvSettingsTabContent(
+            viewModel = viewModel,
+            onOpenAbout = onOpenAbout,
+            firstItemFocusRequester = firstItemFocusRequester
+        )
+        return
+    }
+    val isTv = tvCapabilities.isTvMode
 
     // Suffix states
     var thumbnailSuffix by remember { mutableStateOf(viewModel.prefs.thumbnailPathSuffix) }
@@ -93,6 +118,7 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
     val ratioValues = listOf(1.0f, 1.5f, 1.3333333f, 1.7777778f, 0.0f)
 
     val selectedSettingsTab by viewModel.selectedSettingsTab.collectAsState()
+
     val tabTitles = listOf(
         stringResource(R.string.settings_tab_appearance),
         stringResource(R.string.settings_tab_features),
@@ -110,17 +136,26 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                 Tab(
                     selected = selectedSettingsTab == index,
                     onClick = { viewModel.setSelectedSettingsTab(index) },
+                    modifier = Modifier
+                        .tvFocus(shape = RoundedCornerShape(10.dp))
+                        .testTag("settings_tab_$index"),
                     icon = { Icon(imageVector = tabIcons[index], contentDescription = title) },
                     text = {
                         Text(
                             text = title,
                             style = MaterialTheme.typography.titleSmall,
-                            fontWeight = if (selectedSettingsTab == index) FontWeight.Bold else FontWeight.Normal
+                            fontWeight = if (selectedSettingsTab == index) FontWeight.Bold else FontWeight.Normal,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 )
             }
         }
+        HorizontalDivider(
+            thickness = 0.5.dp,
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+        )
 
         val settingsScrollKey = "settings_tab_$selectedSettingsTab"
         val scrollState = remember(settingsScrollKey) {
@@ -133,18 +168,27 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                 }
         }
 
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(scrollState)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .verticalScroll(scrollState),
+            contentAlignment = Alignment.TopCenter
         ) {
-            if (selectedSettingsTab == 0) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 600.dp)
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                if (selectedSettingsTab == 0) {
                 // --- 1. Theme Settings ---
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
+                    shape = RoundedCornerShape(16.dp),
+                    colors = GalleryCardDefaults.sectionCardColors(),
+                    elevation = GalleryCardDefaults.sectionCardElevation(),
+                    border = GalleryCardDefaults.sectionCardBorder()
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
@@ -157,7 +201,11 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
 
                         // Theme Color Picker
                         Column {
-                            Text(text = stringResource(R.string.theme_color), style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                text = stringResource(R.string.theme_color),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
                             Spacer(modifier = Modifier.height(10.dp))
 
                             val colorsList = listOf(
@@ -172,19 +220,21 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                             )
 
                             val selectedThemeColor by viewModel.themeColorOption.collectAsState()
-                            val scrollState = rememberScrollState()
+                            val colorPickerScrollState = rememberScrollState()
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .horizontalScroll(scrollState),
+                                    .horizontalScroll(colorPickerScrollState),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 colorsList.forEach { (name, color, colorLabel) ->
                                     val isSelected = selectedThemeColor == name
+                                    val checkTint = if (color.luminance() > 0.5f) Color.Black else Color.White
                                     Box(
                                         modifier = Modifier
                                             .size(48.dp)
                                             .clip(CircleShape)
+                                            .tvFocus(shape = CircleShape)
                                             .clickable {
                                                 viewModel.setThemeColorOption(name)
                                             },
@@ -213,7 +263,7 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                                 Icon(
                                                     imageVector = Icons.Default.Check,
                                                     contentDescription = colorLabel,
-                                                    tint = Color.Black,
+                                                    tint = checkTint,
                                                     modifier = Modifier.size(20.dp)
                                                 )
                                             }
@@ -222,7 +272,7 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                 }
                             }
 
-                            if (scrollState.maxValue > 0) {
+                            if (colorPickerScrollState.maxValue > 0) {
                                 Spacer(modifier = Modifier.height(6.dp))
                                 Box(
                                     modifier = Modifier
@@ -236,8 +286,8 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                             .fillMaxHeight()
                                             .align(Alignment.CenterStart)
                                             .graphicsLayer {
-                                                val max = scrollState.maxValue
-                                                val value = scrollState.value
+                                                val max = colorPickerScrollState.maxValue
+                                                val value = colorPickerScrollState.value
                                                 val fraction = if (max > 0) value.toFloat() / max.toFloat() else 0f
                                                 translationX = fraction * (size.width * 4f)
                                             }
@@ -248,12 +298,19 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                         }
 
                         Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
+                        HorizontalDivider(
+                            thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                        )
                         Spacer(modifier = Modifier.height(16.dp))
 
                         // Theme Mode Selector
                         Column {
-                            Text(text = stringResource(R.string.theme_mode), style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                text = stringResource(R.string.theme_mode),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
                             Spacer(modifier = Modifier.height(10.dp))
 
                             val selectedThemeMode by viewModel.themeMode.collectAsState()
@@ -276,7 +333,8 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                     FilterChip(
                                         selected = isSelected,
                                         onClick = { viewModel.setThemeMode(mode) },
-                                        label = { Text(label) }
+                                        label = { Text(label) },
+                                        modifier = Modifier.tvFocus(shape = RoundedCornerShape(8.dp))
                                     )
                                 }
                             }
@@ -284,10 +342,82 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                     }
                 }
 
-                // --- 2. View Settings ---
+                // --- 2. Language Settings ---
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("settings_language_card"),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = GalleryCardDefaults.sectionCardColors(),
+                    elevation = GalleryCardDefaults.sectionCardElevation(),
+                    border = GalleryCardDefaults.sectionCardBorder()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = stringResource(R.string.language),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(R.string.language_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        val selectedLanguage by viewModel.appLanguage.collectAsState()
+                        val languageOptions = listOf(
+                            LocaleHelper.LANGUAGE_SYSTEM to stringResource(R.string.language_system),
+                            LocaleHelper.LANGUAGE_ENGLISH to stringResource(R.string.language_english),
+                            LocaleHelper.LANGUAGE_GERMAN to stringResource(R.string.language_german),
+                            LocaleHelper.LANGUAGE_UKRAINIAN to stringResource(R.string.language_ukrainian)
+                        )
+
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            languageOptions.forEach { (code, label) ->
+                                val isSelected = selectedLanguage == code
+                                FilterChip(
+                                    selected = isSelected,
+                                    onClick = {
+                                        if (!isSelected) {
+                                            viewModel.setAppLanguage(code)
+                                            LocaleHelper.applyLanguage(context, code)
+                                        }
+                                    },
+                                    label = { Text(label) },
+                                    leadingIcon = if (isSelected) {
+                                        {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    } else {
+                                        null
+                                    },
+                                    modifier = Modifier
+                                        .testTag("language_option_$code")
+                                        .tvFocus(shape = RoundedCornerShape(8.dp))
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // --- 3. View Settings ---
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
+                    shape = RoundedCornerShape(16.dp),
+                    colors = GalleryCardDefaults.sectionCardColors(),
+                    elevation = GalleryCardDefaults.sectionCardElevation(),
+                    border = GalleryCardDefaults.sectionCardBorder()
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
@@ -299,12 +429,25 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                         Spacer(modifier = Modifier.height(12.dp))
 
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .tvFocus(shape = RoundedCornerShape(12.dp))
+                                .clickable {
+                                    val next = !showItemCount
+                                    showItemCount = next
+                                    viewModel.setShowDirectoryItemCount(next)
+                                }
+                                .padding(vertical = 4.dp, horizontal = 4.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(text = stringResource(R.string.show_folder_item_count), style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    text = stringResource(R.string.show_folder_item_count),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
                                 Text(text = stringResource(R.string.show_folder_item_count_desc), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             Switch(
@@ -316,64 +459,89 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                             )
                         }
 
-                        Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
-                        Spacer(modifier = Modifier.height(16.dp))
+                        if (!isTv) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            HorizontalDivider(
+                                thickness = 0.5.dp,
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
 
-                        val maxBrightnessEnabled by viewModel.maxBrightnessEnabled.collectAsState()
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(text = stringResource(R.string.max_brightness), style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    text = stringResource(R.string.max_brightness_desc),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                            val maxBrightnessEnabled by viewModel.maxBrightnessEnabled.collectAsState()
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .tvFocus(shape = RoundedCornerShape(12.dp))
+                                    .clickable { viewModel.setMaxBrightnessEnabled(!maxBrightnessEnabled) }
+                                    .padding(vertical = 4.dp, horizontal = 4.dp)
+                                    .testTag("settings_max_brightness_row"),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = stringResource(R.string.max_brightness),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = stringResource(R.string.max_brightness_desc),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = maxBrightnessEnabled,
+                                    onCheckedChange = { viewModel.setMaxBrightnessEnabled(it) }
                                 )
                             }
-                            Switch(
-                                checked = maxBrightnessEnabled,
-                                onCheckedChange = { viewModel.setMaxBrightnessEnabled(it) }
+
+                            Spacer(modifier = Modifier.height(16.dp))
+                            HorizontalDivider(
+                                thickness = 0.5.dp,
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
                             )
-                        }
+                            Spacer(modifier = Modifier.height(16.dp))
 
-                        Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        Column {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(text = stringResource(R.string.items_per_row_portrait), style = MaterialTheme.typography.bodyMedium)
-                                Text(text = "${itemsPerRowPortrait.toInt()}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                            }
-                            Slider(
-                                value = itemsPerRowPortrait,
-                                onValueChange = {
-                                    itemsPerRowPortrait = it
-                                    viewModel.setItemsPerRowPortrait(it.toInt())
-                                },
-                                valueRange = 1f..6f,
-                                steps = 4,
-                                modifier = Modifier.tvSlider(
+                            Column(modifier = Modifier.testTag("settings_items_per_row_portrait")) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.items_per_row_portrait),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(text = "${itemsPerRowPortrait.toInt()}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                }
+                                Slider(
                                     value = itemsPerRowPortrait,
                                     onValueChange = {
                                         itemsPerRowPortrait = it
                                         viewModel.setItemsPerRowPortrait(it.toInt())
                                     },
                                     valueRange = 1f..6f,
-                                    steps = 4
+                                    steps = 4,
+                                    modifier = Modifier.tvSlider(
+                                        value = itemsPerRowPortrait,
+                                        onValueChange = {
+                                            itemsPerRowPortrait = it
+                                            viewModel.setItemsPerRowPortrait(it.toInt())
+                                        },
+                                        valueRange = 1f..6f,
+                                        steps = 4
+                                    )
                                 )
-                            )
+                            }
                         }
 
                         Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
+                        HorizontalDivider(
+                            thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                        )
                         Spacer(modifier = Modifier.height(16.dp))
 
                         Column {
@@ -381,7 +549,11 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text(text = stringResource(R.string.items_per_row_landscape), style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    text = stringResource(R.string.items_per_row_landscape),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
                                 Text(text = "${itemsPerRowLandscape.toInt()}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                             }
                             Slider(
@@ -405,7 +577,10 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                         }
 
                         Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
+                        HorizontalDivider(
+                            thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                        )
                         Spacer(modifier = Modifier.height(16.dp))
 
                         Column {
@@ -413,7 +588,11 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text(text = stringResource(R.string.spacing), style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    text = stringResource(R.string.spacing),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
                                 Text(text = stringResource(R.string.dp_value, spacing.toInt()), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                             }
                             Slider(
@@ -437,7 +616,10 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                         }
 
                         Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
+                        HorizontalDivider(
+                            thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                        )
                         Spacer(modifier = Modifier.height(16.dp))
 
                         Column {
@@ -445,7 +627,11 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text(text = stringResource(R.string.corner_radius), style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    text = stringResource(R.string.corner_radius),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
                                 Text(text = stringResource(R.string.dp_value, cornerRadius.toInt()), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                             }
                             Slider(
@@ -469,11 +655,18 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                         }
 
                         Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
+                        HorizontalDivider(
+                            thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                        )
                         Spacer(modifier = Modifier.height(16.dp))
 
                         Column {
-                            Text(text = stringResource(R.string.aspect_ratio), style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                text = stringResource(R.string.aspect_ratio),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
                             Spacer(modifier = Modifier.height(8.dp))
 
                             Row(
@@ -485,9 +678,27 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                 Box(modifier = Modifier.fillMaxWidth()) {
                                     OutlinedButton(
                                         onClick = { expanded = true },
-                                        modifier = Modifier.fillMaxWidth()
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .defaultMinSize(minHeight = 48.dp)
+                                            .tvFocus(shape = RoundedCornerShape(12.dp))
                                     ) {
-                                        Text(ratioOptions[selectedRatioIndex])
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = ratioOptions[selectedRatioIndex],
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Icon(
+                                                imageVector = Icons.Default.ArrowDropDown,
+                                                contentDescription = null
+                                            )
+                                        }
                                     }
                                     DropdownMenu(
                                         expanded = expanded,
@@ -497,6 +708,7 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                         ratioOptions.forEachIndexed { index, option ->
                                             DropdownMenuItem(
                                                 text = { Text(option) },
+                                                modifier = Modifier.tvFocus(shape = RoundedCornerShape(8.dp)),
                                                 onClick = {
                                                     if (expanded) {
                                                         expanded = false
@@ -517,62 +729,90 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                     }
                 }
 
-                // --- 3. Gestures Settings ---
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = stringResource(R.string.gestures),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
+                // --- 3. Gestures Settings (Touch devices only) ---
+                if (tvCapabilities.allowTouchGestures) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("settings_gestures_card"),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = GalleryCardDefaults.sectionCardColors(),
+                        elevation = GalleryCardDefaults.sectionCardElevation(),
+                        border = GalleryCardDefaults.sectionCardBorder()
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = stringResource(R.string.gestures),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
 
-                        val dismissGestureEnabled by viewModel.dismissGestureEnabled.collectAsState()
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(text = stringResource(R.string.swipe_down_dismiss), style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    text = stringResource(R.string.swipe_down_dismiss_desc),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                            val dismissGestureEnabled by viewModel.dismissGestureEnabled.collectAsState()
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .tvFocus(shape = RoundedCornerShape(12.dp))
+                                    .clickable { viewModel.setDismissGestureEnabled(!dismissGestureEnabled) }
+                                    .padding(vertical = 4.dp, horizontal = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = stringResource(R.string.swipe_down_dismiss),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = stringResource(R.string.swipe_down_dismiss_desc),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = dismissGestureEnabled,
+                                    onCheckedChange = { viewModel.setDismissGestureEnabled(it) }
                                 )
                             }
-                            Switch(
-                                checked = dismissGestureEnabled,
-                                onCheckedChange = { viewModel.setDismissGestureEnabled(it) }
+
+                            Spacer(modifier = Modifier.height(16.dp))
+                            HorizontalDivider(
+                                thickness = 0.5.dp,
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
                             )
-                        }
+                            Spacer(modifier = Modifier.height(16.dp))
 
-                        Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        val showMetadataGestureEnabled by viewModel.showMetadataGestureEnabled.collectAsState()
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(text = stringResource(R.string.swipe_up_details), style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    text = stringResource(R.string.swipe_up_details_desc),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                            val showMetadataGestureEnabled by viewModel.showMetadataGestureEnabled.collectAsState()
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .tvFocus(shape = RoundedCornerShape(12.dp))
+                                    .clickable { viewModel.setShowMetadataGestureEnabled(!showMetadataGestureEnabled) }
+                                    .padding(vertical = 4.dp, horizontal = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = stringResource(R.string.swipe_up_details),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = stringResource(R.string.swipe_up_details_desc),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = showMetadataGestureEnabled,
+                                    onCheckedChange = { viewModel.setShowMetadataGestureEnabled(it) }
                                 )
                             }
-                            Switch(
-                                checked = showMetadataGestureEnabled,
-                                onCheckedChange = { viewModel.setShowMetadataGestureEnabled(it) }
-                            )
                         }
                     }
                 }
@@ -580,7 +820,10 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                 // --- 3. Features Settings ---
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
+                    shape = RoundedCornerShape(16.dp),
+                    colors = GalleryCardDefaults.sectionCardColors(),
+                    elevation = GalleryCardDefaults.sectionCardElevation(),
+                    border = GalleryCardDefaults.sectionCardBorder()
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
@@ -592,13 +835,25 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                         Spacer(modifier = Modifier.height(12.dp))
 
                         Column {
-                            Text(text = stringResource(R.string.rediscover_range), style = MaterialTheme.typography.bodyMedium)
-                            Spacer(modifier = Modifier.height(8.dp))
                             val daysRange by viewModel.rediscoverDays.collectAsState()
-                            Text(
-                                text = if (daysRange == 1) stringResource(R.string.day_singular, daysRange)
-                                else stringResource(R.string.day_plural, daysRange)
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.rediscover_range),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = if (daysRange == 1) stringResource(R.string.day_singular, daysRange)
+                                    else stringResource(R.string.day_plural, daysRange),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
                             Slider(
                                 value = daysRange.toFloat(),
                                 onValueChange = { viewModel.setRediscoverDays(it.toInt()) },
@@ -614,17 +869,32 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                         }
 
                         Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
+                        HorizontalDivider(
+                            thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                        )
                         Spacer(modifier = Modifier.height(16.dp))
 
                         Column {
-                            Text(text = stringResource(R.string.slideshow_duration), style = MaterialTheme.typography.bodyMedium)
-                            Spacer(modifier = Modifier.height(8.dp))
                             val slideDuration by viewModel.slideshowDuration.collectAsState()
-                            Text(
-                                text = if (slideDuration == 1) stringResource(R.string.second_singular, slideDuration)
-                                else stringResource(R.string.second_plural, slideDuration)
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = stringResource(if (isTv) R.string.slideshow_duration_tv else R.string.slideshow_duration),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = if (slideDuration == 1) stringResource(R.string.second_singular, slideDuration)
+                                    else stringResource(R.string.second_plural, slideDuration),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
                             Slider(
                                 value = slideDuration.toFloat(),
                                 onValueChange = { viewModel.setSlideshowDuration(it.toInt()) },
@@ -640,17 +910,29 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                         }
 
                         Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
+                        HorizontalDivider(
+                            thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                        )
                         Spacer(modifier = Modifier.height(16.dp))
 
                         val peopleFallback by viewModel.peopleFallbackToKeywords.collectAsState()
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .tvFocus(shape = RoundedCornerShape(12.dp))
+                                .clickable { viewModel.setPeopleFallbackToKeywords(!peopleFallback) }
+                                .padding(vertical = 4.dp, horizontal = 4.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(text = stringResource(R.string.keyword_fallback_persons), style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    text = stringResource(R.string.keyword_fallback_persons),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
                                 Text(
                                     text = stringResource(R.string.keyword_fallback_persons_desc),
                                     style = MaterialTheme.typography.bodySmall,
@@ -662,101 +944,120 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                 onCheckedChange = { viewModel.setPeopleFallbackToKeywords(it) }
                             )
                         }
-
-                        Spacer(modifier = Modifier.height(16.dp))
                     }
                 }
 
-                // Security & App Protection Card
-                val isBiometricEnabled by viewModel.isBiometricLockEnabled.collectAsState()
-                val hideProtected by viewModel.hideProtectedItems.collectAsState()
-                val activity = remember(context) { context.findActivity() as? FragmentActivity }
-                val biometricStatus = remember(context) { BiometricHelper.getStatusMessage(context) }
-                val isBiometricAvailable = remember(context) { BiometricHelper.isBiometricAvailable(context) }
+                // Security & App Protection Card (hidden completely on Android TV — no lock item feature)
+                if (tvCapabilities.allowItemLocking) {
+                    val isBiometricEnabled by viewModel.isBiometricLockEnabled.collectAsState()
+                    val hideProtected by viewModel.hideProtectedItems.collectAsState()
+                    val activity = remember(context) { context.findActivity() as? FragmentActivity }
+                    val biometricStatus = remember(context) { BiometricHelper.getStatusMessage(context) }
+                    val isBiometricAvailable = remember(context) { BiometricHelper.isBiometricAvailable(context) }
 
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = stringResource(R.string.security_app_protection),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("settings_security_protection_card"),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = GalleryCardDefaults.sectionCardColors(),
+                        elevation = GalleryCardDefaults.sectionCardElevation(),
+                        border = GalleryCardDefaults.sectionCardBorder()
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = stringResource(R.string.security_app_protection),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = stringResource(R.string.fingerprint_device_lock),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = if (isBiometricAvailable) {
-                                        stringResource(R.string.fingerprint_device_lock_desc)
-                                    } else {
-                                        stringResource(R.string.biometric_status_format, biometricStatus)
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Switch(
-                                checked = isBiometricEnabled,
-                                onCheckedChange = { targetState ->
-                                    if (activity != null) {
-                                        BiometricHelper.authenticate(
-                                            activity = activity,
-                                            title = if (targetState) context.getString(R.string.enable_app_lock) else context.getString(R.string.disable_app_lock),
-                                            subtitle = context.getString(R.string.confirm_biometric_subtitle),
-                                            onSuccess = { viewModel.setBiometricLockEnabled(targetState) },
-                                            onError = { err ->
-                                                if (err != BiometricHelper.ERROR_CANCELED) {
-                                                    Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
-                                                }
+                            val onToggleBiometric: (Boolean) -> Unit = { targetState ->
+                                if (activity != null) {
+                                    BiometricHelper.authenticate(
+                                        activity = activity,
+                                        title = if (targetState) context.getString(R.string.enable_app_lock) else context.getString(R.string.disable_app_lock),
+                                        subtitle = context.getString(R.string.confirm_biometric_subtitle),
+                                        onSuccess = { viewModel.setBiometricLockEnabled(targetState) },
+                                        onError = { err ->
+                                            if (err != BiometricHelper.ERROR_CANCELED) {
+                                                Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
                                             }
-                                        )
-                                    } else {
-                                        viewModel.setBiometricLockEnabled(targetState)
-                                    }
+                                        }
+                                    )
+                                } else {
+                                    viewModel.setBiometricLockEnabled(targetState)
                                 }
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = stringResource(R.string.hide_protected_items),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = stringResource(R.string.hide_protected_items_desc),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .tvFocus(shape = RoundedCornerShape(12.dp))
+                                    .clickable { onToggleBiometric(!isBiometricEnabled) }
+                                    .padding(vertical = 4.dp, horizontal = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = stringResource(R.string.fingerprint_device_lock),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = if (isBiometricAvailable) {
+                                            stringResource(R.string.fingerprint_device_lock_desc)
+                                        } else {
+                                            stringResource(R.string.biometric_status_format, biometricStatus)
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = isBiometricEnabled,
+                                    onCheckedChange = onToggleBiometric
                                 )
                             }
-                            Switch(
-                                checked = hideProtected,
-                                onCheckedChange = { viewModel.setHideProtectedItems(it) }
+
+                            Spacer(modifier = Modifier.height(16.dp))
+                            HorizontalDivider(
+                                thickness = 0.5.dp,
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
                             )
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .tvFocus(shape = RoundedCornerShape(12.dp))
+                                    .clickable { viewModel.setHideProtectedItems(!hideProtected) }
+                                    .padding(vertical = 4.dp, horizontal = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = stringResource(R.string.hide_protected_items),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = stringResource(R.string.hide_protected_items_desc),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = hideProtected,
+                                    onCheckedChange = { viewModel.setHideProtectedItems(it) }
+                                )
+                            }
                         }
                     }
                 }
@@ -770,7 +1071,10 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
 
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
+                    shape = RoundedCornerShape(16.dp),
+                    colors = GalleryCardDefaults.sectionCardColors(),
+                    elevation = GalleryCardDefaults.sectionCardElevation(),
+                    border = GalleryCardDefaults.sectionCardBorder()
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Row(
@@ -788,12 +1092,12 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                             val (activeText, activeColor, activeIcon) = when (netInfo.activeRoute) {
                                 ActiveRouteType.LOCAL_WIFI -> Triple(
                                     stringResource(R.string.local_server_active),
-                                    Color(0xFF4CAF50),
+                                    MaterialTheme.colorScheme.primary,
                                     Icons.Default.Wifi
                                 )
                                 ActiveRouteType.REMOTE_PRIMARY -> Triple(
                                     stringResource(R.string.primary_server_active),
-                                    Color(0xFF2196F3),
+                                    MaterialTheme.colorScheme.tertiary,
                                     Icons.Default.Cloud
                                 )
                                 ActiveRouteType.NONE -> Triple(
@@ -805,7 +1109,7 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
 
                             Surface(
                                 shape = RoundedCornerShape(20.dp),
-                                color = activeColor.copy(alpha = 0.15f),
+                                color = activeColor.copy(alpha = 0.14f),
                                 contentColor = activeColor
                             ) {
                                 Row(
@@ -822,7 +1126,9 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                     Text(
                                         text = activeText,
                                         style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.Bold
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
                             }
@@ -833,7 +1139,8 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                         val displayUsername = if (viewModel.prefs.username.isEmpty()) stringResource(R.string.demo_public_user) else viewModel.prefs.username
                         Text(
                             text = stringResource(R.string.logged_in_as, displayUsername),
-                            style = MaterialTheme.typography.bodyMedium
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(modifier = Modifier.height(12.dp))
 
@@ -847,27 +1154,49 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                             },
                             label = { Text(stringResource(R.string.local_server_label)) },
                             placeholder = { Text(stringResource(R.string.local_server_placeholder)) },
-                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Uri,
+                                imeAction = ImeAction.Done
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .tvFocus(shape = RoundedCornerShape(12.dp))
+                                .testTag("settings_local_server_input"),
                             singleLine = true
                         )
                         Spacer(modifier = Modifier.height(12.dp))
 
                         Button(
                             onClick = { viewModel.logout() },
-                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .defaultMinSize(minHeight = 48.dp)
+                                .tvFocus(shape = RoundedCornerShape(16.dp))
+                                .testTag("settings_disconnect_button"),
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                         ) {
                             Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(stringResource(R.string.disconnect_server))
+                            Text(
+                                text = stringResource(R.string.disconnect_server),
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold
+                            )
                         }
                     }
                 }
 
                 // --- Path Configuration ---
                 Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("settings_path_config_card"),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = GalleryCardDefaults.sectionCardColors(),
+                    elevation = GalleryCardDefaults.sectionCardElevation(),
+                    border = GalleryCardDefaults.sectionCardBorder()
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
@@ -885,9 +1214,14 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                 viewModel.setDefaultRootPath(it)
                             },
                             label = { Text(stringResource(R.string.default_root_path_label)) },
-                            modifier = Modifier.fillMaxWidth()
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .tvFocus(shape = RoundedCornerShape(12.dp))
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
                         Text(
                             text = stringResource(R.string.leave_empty_root_hint),
                             style = MaterialTheme.typography.bodySmall,
@@ -898,8 +1232,13 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
 
                 // --- API Suffix Settings ---
                 Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("settings_api_suffix_card"),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = GalleryCardDefaults.sectionCardColors(),
+                    elevation = GalleryCardDefaults.sectionCardElevation(),
+                    border = GalleryCardDefaults.sectionCardBorder()
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
@@ -917,9 +1256,14 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                 viewModel.prefs.thumbnailPathSuffix = it
                             },
                             label = { Text(stringResource(R.string.thumb_suffix_label)) },
-                            modifier = Modifier.fillMaxWidth()
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .tvFocus(shape = RoundedCornerShape(12.dp))
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         OutlinedTextField(
                             value = preloadSuffix,
                             onValueChange = {
@@ -927,9 +1271,14 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                 viewModel.prefs.preloadPathSuffix = it
                             },
                             label = { Text(stringResource(R.string.preload_suffix_label)) },
-                            modifier = Modifier.fillMaxWidth()
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .tvFocus(shape = RoundedCornerShape(12.dp))
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         OutlinedTextField(
                             value = videoSuffix,
                             onValueChange = {
@@ -937,7 +1286,12 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                 viewModel.prefs.videoPathSuffix = it
                             },
                             label = { Text(stringResource(R.string.video_suffix_label)) },
-                            modifier = Modifier.fillMaxWidth()
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .tvFocus(shape = RoundedCornerShape(12.dp))
                         )
                     }
                 }
@@ -945,7 +1299,10 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                 // --- Storage Settings ---
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
+                    shape = RoundedCornerShape(16.dp),
+                    colors = GalleryCardDefaults.sectionCardColors(),
+                    elevation = GalleryCardDefaults.sectionCardElevation(),
+                    border = GalleryCardDefaults.sectionCardBorder()
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
@@ -968,26 +1325,90 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column {
-                                Text(text = stringResource(R.string.cache), style = MaterialTheme.typography.bodyMedium)
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(R.string.cache),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
                                 Text(
                                     text = stringResource(R.string.currently_used, cacheSize),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                            Button(
+                            FilledTonalButton(
                                 onClick = {
                                     viewModel.clearCaches()
                                     Toast.makeText(context, context.getString(R.string.cache_cleared_toast), Toast.LENGTH_SHORT).show()
                                 },
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier
+                                    .defaultMinSize(minHeight = 48.dp)
+                                    .tvFocus(shape = RoundedCornerShape(16.dp))
                             ) {
                                 Text(stringResource(R.string.clear))
                             }
                         }
                     }
                 }
+
+                if (onOpenAbout != null) {
+                    Card(
+                        onClick = onOpenAbout,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .tvFocus(shape = RoundedCornerShape(16.dp))
+                            .testTag("settings_about_card"),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = GalleryCardDefaults.sectionCardColors(),
+                        elevation = GalleryCardDefaults.sectionCardElevation(),
+                        border = GalleryCardDefaults.sectionCardBorder()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .defaultMinSize(minHeight = 64.dp)
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Info,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(R.string.about_pigallery2),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = stringResource(R.string.about_app_desc),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
             }
         }
     }
@@ -1000,6 +1421,7 @@ fun AboutScreen(viewModel: GalleryViewModel, onBack: () -> Unit) {
 
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
+    val tvCapabilities = rememberTvCapabilities()
 
     val version = remember {
         try {
@@ -1021,425 +1443,496 @@ fun AboutScreen(viewModel: GalleryViewModel, onBack: () -> Unit) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.about_pigallery2), fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.back)
+            Column {
+                TopAppBar(
+                    modifier = Modifier.testTag("about_top_app_bar"),
+                    title = {
+                        Text(
+                            text = stringResource(R.string.about_pigallery2),
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    },
+                    navigationIcon = {
+                        IconButton(
+                            onClick = onBack,
+                            modifier = Modifier
+                                .tvFocus(shape = CircleShape)
+                                .testTag("about_back_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = stringResource(R.string.back)
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    )
                 )
-            )
+                HorizontalDivider(
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                )
+            }
         },
         contentWindowInsets = WindowInsets.systemBars
     ) { innerPadding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .verticalScroll(rememberScrollState()),
+            contentAlignment = Alignment.TopCenter
         ) {
-            // Hero App Header Card
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
-                ),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 600.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                // Hero App Header Card
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                    ),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
                 ) {
-                    Surface(
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        shadowElevation = 4.dp,
-                        modifier = Modifier.size(80.dp)
-                    ) {
-                        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                            Icon(
-                                painter = painterResource(id = R.drawable.ic_launcher_foreground),
-                                contentDescription = stringResource(R.string.app_logo_cd),
-                                modifier = Modifier.size(64.dp),
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Text(
-                        text = stringResource(R.string.app_name),
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-                    ) {
-                        Text(
-                            text = stringResource(R.string.version_format, version),
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Text(
-                        text = stringResource(R.string.about_description),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            }
-
-            // Software Updates Section
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                )
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Info,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Text(
-                            text = stringResource(R.string.software_updates),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(MaterialTheme.colorScheme.surface)
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
+                        Surface(
+                            shape = RoundedCornerShape(24.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            tonalElevation = 4.dp,
+                            shadowElevation = 4.dp,
+                            border = BorderStroke(
+                                width = 1.dp,
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
+                            ),
+                            modifier = Modifier
+                                .size(84.dp)
+                                .testTag("about_hero_logo")
+                        ) {
+                            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_launcher_foreground),
+                                    contentDescription = stringResource(R.string.app_logo_cd),
+                                    modifier = Modifier.size(64.dp),
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Text(
+                            text = stringResource(R.string.app_name),
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                        ) {
                             Text(
-                                text = stringResource(R.string.auto_check_updates),
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Text(
-                                text = stringResource(R.string.auto_check_updates_desc),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                text = stringResource(R.string.version_format, version),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                             )
                         }
-                        Switch(
-                            checked = autoCheckUpdates,
-                            onCheckedChange = { viewModel.setAutoCheckUpdates(it) }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Text(
+                            text = stringResource(R.string.about_description),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
                         )
                     }
+                }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                // Software Updates Section
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = GalleryCardDefaults.sectionCardColors(),
+                    elevation = GalleryCardDefaults.sectionCardElevation(),
+                    border = GalleryCardDefaults.sectionCardBorder()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                text = stringResource(R.string.software_updates),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
 
-                    when (val state = updateState) {
-                        is GalleryViewModel.UpdateState.Idle -> {
-                            Button(
-                                onClick = { viewModel.checkForUpdates(force = true) },
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(stringResource(R.string.check_for_updates))
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .tvFocus(shape = RoundedCornerShape(12.dp))
+                                .clickable { viewModel.setAutoCheckUpdates(!autoCheckUpdates) }
+                                .padding(vertical = 4.dp, horizontal = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(R.string.auto_check_updates),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = stringResource(R.string.auto_check_updates_desc),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
+                            Switch(
+                                checked = autoCheckUpdates,
+                                onCheckedChange = { viewModel.setAutoCheckUpdates(it) }
+                            )
                         }
-                        is GalleryViewModel.UpdateState.Checking -> {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.Center
-                            ) {
-                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Text(stringResource(R.string.checking_updates), style = MaterialTheme.typography.bodyMedium)
-                            }
-                        }
-                        is GalleryViewModel.UpdateState.UpToDate -> {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.CheckCircle,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = stringResource(R.string.up_to_date_format, state.currentVersion),
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Medium,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(8.dp))
-                                OutlinedButton(
+
+                        Spacer(modifier = Modifier.height(16.dp))
+                        HorizontalDivider(
+                            thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        when (val state = updateState) {
+                            is GalleryViewModel.UpdateState.Idle -> {
+                                Button(
                                     onClick = { viewModel.checkForUpdates(force = true) },
-                                    shape = RoundedCornerShape(12.dp)
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .defaultMinSize(minHeight = 48.dp)
+                                        .tvFocus(shape = RoundedCornerShape(16.dp))
+                                        .testTag("about_check_updates_button"),
+                                    shape = RoundedCornerShape(16.dp)
                                 ) {
-                                    Text(stringResource(R.string.check_again))
+                                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(stringResource(R.string.check_for_updates))
                                 }
                             }
-                        }
-                        is GalleryViewModel.UpdateState.NewRelease -> {
-                            Card(
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-                                shape = RoundedCornerShape(16.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
+                            is GalleryViewModel.UpdateState.Checking -> {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Text(stringResource(R.string.checking_updates), style = MaterialTheme.typography.bodyMedium)
+                                }
+                            }
+                            is GalleryViewModel.UpdateState.UpToDate -> {
                                 Column(
-                                    modifier = Modifier.padding(16.dp),
-                                    horizontalAlignment = Alignment.Start
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Icon(
-                                            imageVector = Icons.Default.Download,
+                                            imageVector = Icons.Default.CheckCircle,
                                             contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(20.dp)
                                         )
-                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
                                         Text(
-                                            text = stringResource(R.string.new_update_available_tag, state.tagName),
-                                            fontWeight = FontWeight.Bold,
-                                            style = MaterialTheme.typography.titleMedium,
-                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                            text = stringResource(R.string.up_to_date_format, state.currentVersion),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Medium,
+                                            color = MaterialTheme.colorScheme.primary
                                         )
                                     }
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Text(
-                                        text = state.releaseNotes,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                        maxLines = 4,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Spacer(modifier = Modifier.height(12.dp))
-                                    Button(
-                                        onClick = {
-                                            val intent = Intent(Intent.ACTION_VIEW, state.releaseUrl.toUri())
-                                            context.startActivity(intent)
-                                        },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        shape = RoundedCornerShape(12.dp)
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    OutlinedButton(
+                                        onClick = { viewModel.checkForUpdates(force = true) },
+                                        shape = RoundedCornerShape(16.dp),
+                                        modifier = Modifier
+                                            .defaultMinSize(minHeight = 48.dp)
+                                            .tvFocus(shape = RoundedCornerShape(16.dp))
+                                            .testTag("about_check_updates_button")
                                     ) {
-                                        Text(stringResource(R.string.view_download_release))
+                                        Text(stringResource(R.string.check_again))
+                                    }
+                                }
+                            }
+                            is GalleryViewModel.UpdateState.NewRelease -> {
+                                Card(
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                                    shape = RoundedCornerShape(16.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(16.dp),
+                                        horizontalAlignment = Alignment.Start
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                imageVector = Icons.Default.Download,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = stringResource(R.string.new_update_available_tag, state.tagName),
+                                                fontWeight = FontWeight.Bold,
+                                                style = MaterialTheme.typography.titleMedium,
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Text(
+                                            text = state.releaseNotes,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            maxLines = 4,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (!tvCapabilities.isTvMode) {
+                                            Spacer(modifier = Modifier.height(12.dp))
+                                            Button(
+                                                onClick = {
+                                                    runCatching {
+                                                        val intent = Intent(Intent.ACTION_VIEW, state.releaseUrl.toUri())
+                                                        context.startActivity(intent)
+                                                    }
+                                                },
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .defaultMinSize(minHeight = 48.dp)
+                                                    .tvFocus(shape = RoundedCornerShape(16.dp)),
+                                                shape = RoundedCornerShape(16.dp)
+                                            ) {
+                                                Text(stringResource(R.string.view_download_release))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            is GalleryViewModel.UpdateState.Error -> {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.error_prefix, state.message),
+                                        color = MaterialTheme.colorScheme.error,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        textAlign = TextAlign.Center
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Button(
+                                        onClick = { viewModel.checkForUpdates(force = true) },
+                                        shape = RoundedCornerShape(16.dp),
+                                        modifier = Modifier
+                                            .defaultMinSize(minHeight = 48.dp)
+                                            .tvFocus(shape = RoundedCornerShape(16.dp))
+                                            .testTag("about_check_updates_button")
+                                    ) {
+                                        Text(stringResource(R.string.retry))
                                     }
                                 }
                             }
                         }
-                        is GalleryViewModel.UpdateState.Error -> {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally
+                    }
+                }
+
+                // Links & Resources Card (omitted on Android TV where web browsers are typically unavailable)
+                if (!tvCapabilities.isTvMode) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = GalleryCardDefaults.sectionCardColors(),
+                        elevation = GalleryCardDefaults.sectionCardElevation(),
+                        border = GalleryCardDefaults.sectionCardBorder()
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp)
+                        ) {
+                            Text(
+                                text = stringResource(R.string.links_resources),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            FilledTonalButton(
+                                onClick = { uriHandler.openUri("https://github.com/dasmaetthes/pigallery2_android") },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .defaultMinSize(minHeight = 48.dp)
+                                    .tvFocus(shape = RoundedCornerShape(16.dp))
+                                    .testTag("about_github_button"),
+                                shape = RoundedCornerShape(16.dp)
                             ) {
-                                Text(
-                                    text = stringResource(R.string.error_prefix, state.message),
-                                    color = MaterialTheme.colorScheme.error,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    textAlign = TextAlign.Center
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_github),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp)
                                 )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Button(
-                                    onClick = { viewModel.checkForUpdates(force = true) },
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Text(stringResource(R.string.retry))
-                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(stringResource(R.string.view_source_github), fontWeight = FontWeight.SemiBold)
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            OutlinedButton(
+                                onClick = { uriHandler.openUri("https://github.com/dasmaetthes/pigallery2_android/issues") },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .defaultMinSize(minHeight = 48.dp)
+                                    .tvFocus(shape = RoundedCornerShape(16.dp))
+                                    .testTag("about_issues_button"),
+                                shape = RoundedCornerShape(16.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Info,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(stringResource(R.string.report_issue_feedback))
                             }
                         }
                     }
                 }
-            }
 
-            // Links & Resources Card
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                )
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
+                // Open Source Software Licenses Card
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = GalleryCardDefaults.sectionCardColors(),
+                    elevation = GalleryCardDefaults.sectionCardElevation(),
+                    border = GalleryCardDefaults.sectionCardBorder()
                 ) {
-                    Text(
-                        text = stringResource(R.string.links_resources),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    FilledTonalButton(
-                        onClick = { uriHandler.openUri("https://github.com/dasmaetthes/pigallery2_android") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
                     ) {
-                        Icon(
-                            painter = painterResource(id = R.drawable.ic_github),
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp)
+                        Text(
+                            text = stringResource(R.string.open_source_licenses),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(stringResource(R.string.view_source_github), fontWeight = FontWeight.SemiBold)
-                    }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
 
-                    OutlinedButton(
-                        onClick = { uriHandler.openUri("https://github.com/dasmaetthes/pigallery2_android/issues") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Info,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
+                        val introPrefix = stringResource(R.string.open_source_intro_prefix)
+                        val licenseName = stringResource(R.string.license_name)
+                        val openSourceMiddle = stringResource(R.string.open_source_middle)
+                        val apacheLicenseName = stringResource(R.string.apache_license_name)
+                        val annotatedString = buildAnnotatedString {
+                            append(introPrefix)
+                            append(" ")
+
+                            val licenseStartIndex = length
+                            append(licenseName)
+                            val licenseEndIndex = length
+
+                            addStyle(
+                                style = SpanStyle(
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textDecoration = TextDecoration.Underline
+                                ),
+                                start = licenseStartIndex,
+                                end = licenseEndIndex
+                            )
+                            addLink(
+                                LinkAnnotation.Url(
+                                    url = "https://github.com/dasmaetthes/pigallery2_android/tree/main?tab=MIT-1-ov-file#MIT-1-ov-file",
+                                    linkInteractionListener = LinkInteractionListener {
+                                        uriHandler.openUri("https://github.com/dasmaetthes/pigallery2_android/tree/main?tab=MIT-1-ov-file#MIT-1-ov-file")
+                                    }
+                                ),
+                                start = licenseStartIndex,
+                                end = licenseEndIndex
+                            )
+
+                            append(openSourceMiddle)
+                            append(" ")
+
+                            val startIndex = length
+                            append(apacheLicenseName)
+                            val endIndex = length
+
+                            addStyle(
+                                style = SpanStyle(
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textDecoration = TextDecoration.Underline
+                                ),
+                                start = startIndex,
+                                end = endIndex
+                            )
+                            addLink(
+                                LinkAnnotation.Url(
+                                    url = "https://www.apache.org/licenses/LICENSE-2.0",
+                                    linkInteractionListener = LinkInteractionListener {
+                                        uriHandler.openUri("https://www.apache.org/licenses/LICENSE-2.0")
+                                    }
+                                ),
+                                start = startIndex,
+                                end = endIndex
+                            )
+                            append(".")
+                        }
+
+                        Text(
+                            text = annotatedString,
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(stringResource(R.string.report_issue_feedback))
                     }
                 }
+
+                Spacer(modifier = Modifier.height(16.dp))
             }
-
-            // Open Source Software Licenses Card
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                )
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                ) {
-                    Text(
-                        text = stringResource(R.string.open_source_licenses),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    val introPrefix = stringResource(R.string.open_source_intro_prefix)
-                    val licenseName = stringResource(R.string.license_name)
-                    val openSourceMiddle = stringResource(R.string.open_source_middle)
-                    val apacheLicenseName = stringResource(R.string.apache_license_name)
-                    val annotatedString = buildAnnotatedString {
-                        append(introPrefix)
-                        append(" ")
-
-                        val licenseStartIndex = length
-                        append(licenseName)
-                        val licenseEndIndex = length
-
-                        addStyle(
-                            style = SpanStyle(
-                                color = MaterialTheme.colorScheme.primary,
-                                textDecoration = TextDecoration.Underline
-                            ),
-                            start = licenseStartIndex,
-                            end = licenseEndIndex
-                        )
-                        addLink(
-                            LinkAnnotation.Url(
-                                url = "https://github.com/dasmaetthes/pigallery2_android/tree/main?tab=MIT-1-ov-file#MIT-1-ov-file",
-                                linkInteractionListener = LinkInteractionListener {
-                                    uriHandler.openUri("https://github.com/dasmaetthes/pigallery2_android/tree/main?tab=MIT-1-ov-file#MIT-1-ov-file")
-                                }
-                            ),
-                            start = licenseStartIndex,
-                            end = licenseEndIndex
-                        )
-
-                        append(openSourceMiddle)
-                        append(" ")
-
-                        val startIndex = length
-                        append(apacheLicenseName)
-                        val endIndex = length
-
-                        addStyle(
-                            style = SpanStyle(
-                                color = MaterialTheme.colorScheme.primary,
-                                textDecoration = TextDecoration.Underline
-                            ),
-                            start = startIndex,
-                            end = endIndex
-                        )
-                        addLink(
-                            LinkAnnotation.Url(
-                                url = "https://www.apache.org/licenses/LICENSE-2.0",
-                                linkInteractionListener = LinkInteractionListener {
-                                    uriHandler.openUri("https://www.apache.org/licenses/LICENSE-2.0")
-                                }
-                            ),
-                            start = startIndex,
-                            end = endIndex
-                        )
-                        append(".")
-                    }
-
-                    Text(
-                        text = annotatedString,
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }
@@ -1452,6 +1945,7 @@ fun NewUpdateDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
         icon = {
             Icon(
                 imageVector = Icons.Default.Download,
@@ -1505,12 +1999,22 @@ fun NewUpdateDialog(
             }
         },
         confirmButton = {
-            Button(onClick = onUpdate) {
+            Button(
+                onClick = onUpdate,
+                modifier = Modifier
+                    .defaultMinSize(minHeight = 48.dp)
+                    .tvFocus(shape = RoundedCornerShape(20.dp))
+            ) {
                 Text(stringResource(R.string.update_now))
             }
         },
         dismissButton = {
-            OutlinedButton(onClick = onDismiss) {
+            OutlinedButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .defaultMinSize(minHeight = 48.dp)
+                    .tvFocus(shape = RoundedCornerShape(20.dp))
+            ) {
                 Text(stringResource(R.string.later))
             }
         }

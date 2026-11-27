@@ -116,6 +116,22 @@
     <string name="clear_search">Clear search</string>
     <string name="no_saved_albums">No saved albums</string>
     <string name="no_saved_albums_subtitle">Create smart query albums in PiGallery2 web app to view them here.</string>
+    <string name="album_restore_banner_title">Restore saved albums (%1$d)</string>
+    <string name="album_restore_banner_subtitle">No saved albums were found on the server. If they were lost during a PiGallery2 update or reinstall, you can restore them from this device\'s local backup.</string>
+    <string name="album_restore_preview_more">%1$s (+%2$d more)</string>
+    <string name="album_restore_action">Restore</string>
+    <string name="album_restore_dismiss_action">Dismiss</string>
+    <string name="album_restore_dialog_title">Select albums to restore</string>
+    <string name="album_restore_select_all">Select all</string>
+    <string name="album_restore_deselect_all">Deselect all</string>
+    <string name="album_restore_confirm_count">Restore (%1$d)</string>
+    <string name="album_restore_progress">Restoring %1$d of %2$d albums…</string>
+    <string name="album_restore_saved_date">Backed up: %1$s</string>
+    <string name="album_restore_success_toast">Restored %1$d album(s)</string>
+    <string name="album_restore_failed">Failed to restore albums</string>
+    <string name="album_backup_dismiss_dialog_title">Discard album backup?</string>
+    <string name="album_backup_dismiss_dialog_message">This permanently deletes the local backup of %1$d album(s) for this server. Choose this if you intentionally deleted all albums in PiGallery2.</string>
+    <string name="album_backup_dismiss_confirm">Discard backup</string>
     <string name="no_matching_albums">No matching albums</string>
     <string name="try_different_search">Try a different search term.</string>
     <string name="no_items_for_person">No items for this person</string>
@@ -228,13 +244,21 @@
     <string name="meta_gps_coordinates">GPS Coordinates</string>
     <string name="meta_keywords">Keywords</string>
     <string name="meta_people">People</string>
+    <string name="meta_section_file">File &amp; Capture</string>
+    <string name="meta_section_camera">Camera &amp; Exposure</string>
+    <string name="meta_section_location">Location</string>
+    <string name="meta_section_tags">Tags &amp; People</string>
+    <string name="slideshow_duration_tv">Slideshow Duration</string>
     <string name="download_description">Downloading file from PiGallery2</string>
     <string name="download_started_single">Download started: %1$s</string>
     <string name="download_failed_single">Download failed: %1$s</string>
 
     <!-- Map Browser -->
     <string name="map_menu">Map Menu</string>
+    <string name="map_layers">Map Layers</string>
     <string name="travel_track">Travel Track</string>
+    <string name="show_travel_track">Show Travel Track</string>
+    <string name="hide_travel_track">Hide Travel Track</string>
     <string name="map_style">Map Style</string>
     <string name="map_provider_base">Base</string>
     <string name="map_provider_dark_matter">Dark Matter</string>
@@ -404,4 +428,138 @@
     <string name="failed_check_updates">Failed to check for updates (%1$d)</string>
     <string name="no_release_notes">No release notes provided.</string>
     <string name="network_error_updates">Network error checking for updates</string>
+
+    <!-- Share-Link Feature -->
+    <string name="create_share_link">Create Share Link</string>
+    <string name="share_link_dialog_subtitle">Share this folder via a public PiGallery2 link</string>
+    <string name="share_link_subtitle_search">Share these search results via a public PiGallery2 link</string>
+    <string name="share_link_subtitle_album">Share this album via a public PiGallery2 link</string>
+    <string name="share_link_subtitle_person">Share photos of this person via a public PiGallery2 link</string>
+    <string name="share_folder_root">Root Gallery</string>
+    <string name="share_include_subfolders">Include subfolders</string>
+    <string name="share_validity_label">Validity</string>
+    <string name="share_validity_1_day">1 day</string>
+    <string name="share_validity_7_days">7 days</string>
+    <string name="share_validity_30_days">30 days</string>
+    <string name="share_validity_unlimited">Unlimited</string>
+    <string name="share_password_label">Password (optional)</string>
+    <string name="share_password_placeholder">Leave empty for no password</string>
+    <string name="share_show_password">Show password</string>
+    <string name="share_hide_password">Hide password</string>
+    <string name="share_generate_button">Create Share Link</string>
+    <string name="share_creating_button">Creating…</string>
+    <string name="share_created_header">Share Link Ready</string>
+    <string name="share_copy_link">Copy link</string>
+    <string name="share_link_action">Share</string>
+    <string name="share_link_via">Share link via</string>
+    <string name="share_link_copied">Share link copied to clipboard</string>
+    <string name="share_active_links_header">Active Links for This Folder</string>
+    <string name="share_no_active_links">No active share links for this folder.</string>
+    <string name="share_active_links_target_header">Active Links for This View</string>
+    <string name="share_no_active_links_target">No active share links for this view.</string>
+    <string name="share_expires_on">Expires: %1$s</string>
+    <string name="share_expired_label">Expired</string>
+    <string name="share_password_protected_badge">Password protected</string>
+    <string name="share_subfolders_included">With subfolders</string>
+    <string name="share_subfolders_excluded">This folder only</string>
+    <string name="share_revoke_link_cd">Revoke share link</string>
+    <string name="share_revoked_toast">Share link revoked</string>
+    <string name="not_authorized_share">Sharing is disabled or not permitted for this account.</string>
+    <string name="failed_create_share">Failed to create share link</string>
+    <string name="failed_load_shares">Failed to load active share links</string>
+    <string name="failed_revoke_share">Failed to revoke share link</string>
+    <string name="share_search_unsupported_server">Your PiGallery2 server version does not support sharing search results, albums, or persons.</string>
+    <string name="manage_active_shares">Manage Active Shares</string>
+    <string name="manage_active_shares_desc">View, copy, share, or delete active share links retrieved from the server.</string>
+    <string name="share_refresh_links_cd">Refresh active share links</string>
+    <string name="share_no_active_links_server">No active share links on this server.</string>
+    <string name="share_no_active_links_hint">Create a link from the 3-dot menu inside any folder, album, person, or search.</string>
+    <string name="share_details_dialog_title">Share Link Options</string>
+    <string name="share_details_open_cd">Open share link options</string>
+    <string name="share_target_search_label">Search: %1$s</string>
+    <string name="share_target_person_label">Person: %1$s</string>
+    <string name="share_target_query_fallback">Search share</string>
+    <string name="share_delete_link_action">Delete Link</string>
+    <string name="share_deleting_link">Deleting…</string>
+    <string name="share_active_count_badge">%1$d active</string>
+    <string name="share_link_created_toast">Share link created</string>
+    <string name="share_no_app_fallback_copied">No sharing app available. Link copied to clipboard.</string>
+    <string name="share_in_progress_cd">Creating share link</string>
+    <string name="share_prevent_download">Prevent downloading</string>
+    <string name="share_prevent_download_desc">Disable image and ZIP downloads for this link</string>
+    <string name="share_validity_amount_label">Duration</string>
+    <string name="share_validity_unit_label">Unit</string>
+    <string name="share_unit_minutes">Minutes</string>
+    <string name="share_unit_hours">Hours</string>
+    <string name="share_unit_days">Days</string>
+    <string name="share_unit_months">Months</string>
+    <string name="share_unit_none">None</string>
+    <string name="share_validity_invalid_amount">Enter a value of at least 1</string>
+
+    <!-- Unified UI & Contextual Actions -->
+    <string name="refresh">Refresh</string>
+    <string name="select_items">Select items</string>
+    <string name="select_all">Select all</string>
+    <string name="deselect_all">Deselect all</string>
+    <string name="reset_filter">Reset filter</string>
+    <string name="active_filter_label">Filter: %1$s</string>
+    <string name="folders_and_items_count">%1$d folders · %2$d items</string>
+    <string name="folders_count">%1$d folders</string>
+    <string name="albums_count">%1$d albums</string>
+    <string name="albums_filtered_count">%1$d of %2$d albums</string>
+    <string name="persons_count">%1$d persons</string>
+    <string name="persons_filtered_count">%1$d of %2$d persons</string>
+    <string name="memories_count">%1$d memories</string>
+    <string name="results_count">%1$d results</string>
+    <string name="about_app_desc">Version, updates &amp; open-source licenses</string>
+
+    <!-- Language Settings -->
+    <string name="language">Language</string>
+    <string name="language_desc">Choose the display language for the app</string>
+    <string name="language_system">System Default</string>
+    <string name="language_english">English</string>
+    <string name="language_german">Deutsch</string>
+    <string name="language_ukrainian">Українська</string>
+
+    <!-- Empty State Guidance & Actions -->
+    <string name="empty_guidance_search">Tip: Try shorter keywords, check spelling, or use Advanced Search to combine filters.</string>
+    <string name="empty_guidance_albums">Tip: Search for photos in the Gallery and choose \"Save Search as Album\" from the menu.</string>
+    <string name="empty_guidance_album_detail">Tip: Pull down to refresh or update this album\'s saved query in PiGallery2.</string>
+    <string name="empty_guidance_people">Tip: Enable \"Keyword Fallback for Persons\" in Settings → Features if face detection is disabled.</string>
+    <string name="empty_guidance_person_detail">Tip: Pull down to refresh or check if protected folders are hidden in Settings.</string>
+    <string name="empty_guidance_folder">Tip: Pull down to refresh or switch between Folder and Date view in the menu.</string>
+    <string name="empty_guidance_rediscover">Tip: Expand the Rediscover day range in Settings → Features to uncover more memories.</string>
+    <string name="empty_action_open_settings">Open Settings</string>
+    <string name="empty_action_advanced_search">Advanced Search</string>
+    <string name="empty_action_clear_search">Clear Search</string>
+
+    <!-- View by Date Quick Jump & Search -->
+    <string name="year_label">Year</string>
+    <string name="month_label">Month</string>
+    <string name="all_years">All years</string>
+    <string name="all_months">All months</string>
+    <string name="search_in_period">Search in period</string>
+    <string name="empty_date_period_title">No media for this period</string>
+    <string name="empty_date_period_subtitle">No photos or videos matched the selected date range.</string>
+    <string name="empty_guidance_date">Tip: Choose another year or month above, or pull down to refresh.</string>
+
+    <!-- Android TV Settings -->
+    <string name="tv_settings_category_display">Display &amp; Theme</string>
+    <string name="tv_settings_category_playback">Slideshow &amp; Gallery</string>
+    <string name="tv_settings_category_server">Server &amp; Storage</string>
+    <string name="tv_settings_grid_layout">TV Grid Layout</string>
+    <string name="tv_settings_items_per_row">Items per row</string>
+    <string name="tv_settings_connected_server">Connected Server</string>
+    <string name="tv_settings_server_not_configured">Not connected</string>
+
+    <!-- Android TV Video Controls -->
+    <string name="tv_video_seek_back_10">Rewind 10 seconds</string>
+    <string name="tv_video_seek_forward_10">Forward 10 seconds</string>
+    <string name="tv_video_restart">Restart video</string>
+    <string name="tv_video_mute">Mute audio</string>
+    <string name="tv_video_unmute">Unmute audio</string>
+    <string name="tv_video_seek_bar_cd">Video playback progress</string>
+    <string name="tv_video_seek_back_badge">-10s</string>
+    <string name="tv_video_seek_forward_badge">+10s</string>
+    <string name="tv_video_restart_badge">0:00</string>
 </resources>

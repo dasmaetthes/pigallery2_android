@@ -3,7 +3,7 @@ package com.example.data.database
 import androidx.room.Database
 import androidx.room.RoomDatabase
 
-@Database(entities = [MediaEntity::class, DirectoryEntity::class], version = 5, exportSchema = false)
+@Database(entities = [MediaEntity::class, DirectoryEntity::class], version = 6, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun mediaDao(): MediaDao
     abstract fun directoryDao(): DirectoryDao

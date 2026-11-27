@@ -2,7 +2,6 @@ package com.example.ui
 
 import android.app.DownloadManager
 import android.content.Context
-import android.content.pm.PackageManager
 import android.os.Environment
 import android.view.ViewGroup
 import android.widget.Toast
@@ -11,7 +10,9 @@ import com.example.findActivity
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -27,7 +28,10 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -39,6 +43,7 @@ import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.*
@@ -85,6 +90,8 @@ import coil.request.ImageRequest
 import com.example.R
 import com.example.data.ApiMedia
 import com.example.data.PreferencesManager
+import com.example.util.DeviceUtils
+import com.example.util.rememberTvCapabilities
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.filter
@@ -183,12 +190,14 @@ interface VideoPlayerController {
     val duration: Long
     val currentPosition: Long
     val isPlaying: Boolean
+    val isMuted: Boolean
     fun play()
     fun pause()
     fun seekTo(positionMs: Long)
+    fun setMuted(muted: Boolean)
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
 fun MediaViewerDialog(
     media: ApiMedia,
@@ -198,25 +207,39 @@ fun MediaViewerDialog(
     isMapOpen: Boolean = false
 ) {
     val context = LocalContext.current
-    val isTv = context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
-    val configuration = LocalConfiguration.current
+    val tvCapabilities = rememberTvCapabilities()
+    val isTv = tvCapabilities.isTvMode
+    val isLegacyOrLowRamTv = remember(context) { DeviceUtils.isLegacyOrLowRamTv(context) }
     val cookies = viewModel.getCookiesHeader()
     val activeMediaList by viewModel.activeMediaList.collectAsState()
 
     val displayMetrics = LocalContext.current.resources.displayMetrics
     val maxScreenDim = maxOf(displayMetrics.widthPixels, displayMetrics.heightPixels)
-    val safeMaxDimension = minOf(maxScreenDim * 2, 4096).coerceAtLeast(1920)
+    val safeMaxDimension = when {
+        isLegacyOrLowRamTv -> minOf(maxScreenDim, 1920).coerceAtLeast(1280)
+        isTv -> minOf(maxScreenDim, 2560).coerceAtLeast(1920)
+        else -> minOf(maxScreenDim * 2, 4096).coerceAtLeast(1920)
+    }
 
     val coroutineScope = rememberCoroutineScope()
-    val scope = coroutineScope
     val focusRequester = remember { FocusRequester() }
     val topBarFocusRequester = remember { FocusRequester() }
+    val topBarRightmostFocusRequester = remember { FocusRequester() }
+    val bottomBarFocusRequester = remember { FocusRequester() }
+    val metadataCloseFocusRequester = remember { FocusRequester() }
+    val firstMetadataSectionFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
         try {
             kotlinx.coroutines.delay(100)
-            focusRequester.requestFocus()
-        } catch (e: Exception) {}
+            if (isTv && media.isVideo) {
+                bottomBarFocusRequester.requestFocus()
+            } else {
+                focusRequester.requestFocus()
+            }
+        } catch (_: Exception) {
+            runCatching { focusRequester.requestFocus() }
+        }
     }
 
     // Decouple list for robust swiping
@@ -420,10 +443,20 @@ fun MediaViewerDialog(
     var showBars by remember { mutableStateOf(true) }
     var showFaceRegions by remember { mutableStateOf(false) }
     var isVideoPlaying by remember(currentMedia) { mutableStateOf(true) }
+    var isVideoMuted by remember(currentMedia) { mutableStateOf(false) }
     var isLivePhotoPlaying by remember(currentMedia) { mutableStateOf(false) }
     var videoCurrentPosition by remember(currentMedia) { mutableIntStateOf(0) }
     var isDraggingVideoSlider by remember(currentMedia) { mutableStateOf(false) }
     var videoSliderValue by remember(currentMedia) { mutableFloatStateOf(0f) }
+    var seekFeedbackLabel by remember(currentMedia) { mutableStateOf<String?>(null) }
+    var seekFeedbackToken by remember(currentMedia) { mutableIntStateOf(0) }
+
+    LaunchedEffect(seekFeedbackToken) {
+        if (seekFeedbackToken > 0) {
+            kotlinx.coroutines.delay(1200L)
+            seekFeedbackLabel = null
+        }
+    }
 
     LaunchedEffect(pagerState.isScrollInProgress) {
         if (pagerState.isScrollInProgress) {
@@ -435,11 +468,51 @@ fun MediaViewerDialog(
     val videoDurations = remember { mutableStateMapOf<Int, Int>() }
 
     val activeVideoPlayer = preparedVideoPlayers[pagerState.currentPage]
-    val videoDuration = videoDurations[pagerState.currentPage] ?: activeVideoPlayer?.duration?.toInt() ?: 0
+    val metadataDurationMs = currentMedia.metadata?.duration?.toInt()?.takeIf { it > 0 } ?: 0
+    val videoDuration = (videoDurations[pagerState.currentPage] ?: activeVideoPlayer?.duration?.toInt() ?: 0)
+        .takeIf { it > 0 } ?: metadataDurationMs
+
+    val seekBackBadge = stringResource(R.string.tv_video_seek_back_badge)
+    val seekForwardBadge = stringResource(R.string.tv_video_seek_forward_badge)
+    val restartBadge = stringResource(R.string.tv_video_restart_badge)
+
+    val triggerSeekFeedback: (String) -> Unit = { label ->
+        seekFeedbackLabel = label
+        seekFeedbackToken++
+    }
+
+    val seekVideoBy: (Long, String?) -> Unit = { deltaMs, feedback ->
+        val basePos = activeVideoPlayer?.currentPosition ?: videoCurrentPosition.toLong()
+        val maxDur = videoDuration.toLong().coerceAtLeast(0L)
+        val target = if (maxDur > 0L) {
+            (basePos + deltaMs).coerceIn(0L, maxDur)
+        } else {
+            (basePos + deltaMs).coerceAtLeast(0L)
+        }
+        activeVideoPlayer?.seekTo(target)
+        videoCurrentPosition = target.toInt()
+        videoSliderValue = target.toFloat()
+        if (!feedback.isNullOrBlank()) {
+            triggerSeekFeedback(feedback)
+        }
+    }
+
+    val restartVideo: () -> Unit = {
+        activeVideoPlayer?.seekTo(0L)
+        videoCurrentPosition = 0
+        videoSliderValue = 0f
+        isVideoPlaying = true
+        triggerSeekFeedback(restartBadge)
+    }
+
+    LaunchedEffect(activeVideoPlayer, isVideoMuted) {
+        activeVideoPlayer?.setMuted(isVideoMuted)
+    }
 
     LaunchedEffect(isVideoPlaying, activeVideoPlayer, pagerState.currentPage, pagerState.isScrollInProgress) {
         val player = activeVideoPlayer
         if (player != null) {
+            player.setMuted(isVideoMuted)
             if (isVideoPlaying && !pagerState.isScrollInProgress) {
                 if (player.duration > 0 && player.currentPosition >= player.duration - 500) {
                     player.seekTo(0)
@@ -478,6 +551,7 @@ fun MediaViewerDialog(
     var interactionCount by remember { mutableIntStateOf(0) }
     var topBarFocused by remember { mutableStateOf(false) }
     var bottomBarFocused by remember { mutableStateOf(false) }
+    var sidePanelFocused by remember { mutableStateOf(false) }
     val isControlsFocused = topBarFocused || bottomBarFocused || showMoreMenu
 
     // Auto-hide bars after 4 seconds of inactivity
@@ -585,10 +659,13 @@ fun MediaViewerDialog(
     val rotationMap = remember { mutableStateMapOf<Int, Float>() }
 
     androidx.activity.compose.BackHandler {
-        if (showMoreMenu) {
-            showMoreMenu = false
-        } else {
-            onDismiss()
+        when {
+            showMoreMenu -> showMoreMenu = false
+            showMetadata -> {
+                showMetadata = false
+                try { focusRequester.requestFocus() } catch (_: Exception) {}
+            }
+            else -> onDismiss()
         }
     }
 
@@ -605,44 +682,49 @@ fun MediaViewerDialog(
 
     DisposableEffect(window) {
         window?.let { win ->
-            WindowCompat.setDecorFitsSystemWindows(win, false)
+            try {
+                WindowCompat.setDecorFitsSystemWindows(win, false)
+            } catch (_: Exception) {}
         }
         onDispose {
             window?.let { win ->
-                WindowInsetsControllerCompat(win, win.decorView).let { controller ->
-                    controller.show(WindowInsetsCompat.Type.systemBars())
-                }
+                try {
+                    WindowInsetsControllerCompat(win, win.decorView).let { controller ->
+                        controller.show(WindowInsetsCompat.Type.systemBars())
+                    }
+                } catch (_: Exception) {}
             }
         }
     }
 
     DisposableEffect(showBars, window, isMapOpen) {
         window?.let { win ->
-            val controller = WindowInsetsControllerCompat(win, win.decorView)
-            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            if (isMapOpen) {
-                controller.show(WindowInsetsCompat.Type.systemBars())
-            } else {
-                if (showBars) {
+            try {
+                val controller = WindowInsetsControllerCompat(win, win.decorView)
+                controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                if (isMapOpen) {
                     controller.show(WindowInsetsCompat.Type.systemBars())
                 } else {
-                    controller.hide(WindowInsetsCompat.Type.systemBars())
+                    if (showBars) {
+                        controller.show(WindowInsetsCompat.Type.systemBars())
+                    } else {
+                        controller.hide(WindowInsetsCompat.Type.systemBars())
+                    }
                 }
-            }
+            } catch (_: Exception) {}
         }
         onDispose { }
     }
 
-    val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
     val dismissGestureEnabled by viewModel.dismissGestureEnabled.collectAsState()
     val showMetadataGestureEnabled by viewModel.showMetadataGestureEnabled.collectAsState()
 
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
             .then(
-                if (dismissGestureEnabled || showMetadataGestureEnabled) {
+                if (!isTv && (dismissGestureEnabled || showMetadataGestureEnabled)) {
                     Modifier.pointerInput(showMetadata, dismissGestureEnabled, showMetadataGestureEnabled) {
                         var totalDragY = 0f
                         detectVerticalDragGestures(
@@ -677,13 +759,43 @@ fun MediaViewerDialog(
                 }
             )
     ) {
-            Row(modifier = Modifier.fillMaxSize()) {
+        val useSideMetadataPanel = isTv || maxWidth >= 600.dp
+        val sidePanelWidth = if (maxWidth >= 960.dp) {
+            (maxWidth * 0.34f).coerceIn(340.dp, 460.dp)
+        } else {
+            (maxWidth * 0.38f).coerceIn(280.dp, 360.dp)
+        }
+
+        var wasMetadataOpen by remember { mutableStateOf(false) }
+        LaunchedEffect(showMetadata, useSideMetadataPanel, isTv) {
+            if (isTv) {
+                kotlinx.coroutines.delay(80)
+                if (showMetadata && useSideMetadataPanel) {
+                    runCatching { metadataCloseFocusRequester.requestFocus() }
+                } else if (wasMetadataOpen && !showMetadata) {
+                    if (currentMedia.isVideo && showBars) {
+                        runCatching { bottomBarFocusRequester.requestFocus() }
+                    } else {
+                        runCatching { focusRequester.requestFocus() }
+                    }
+                }
+            }
+            wasMetadataOpen = showMetadata
+        }
+
+        Row(modifier = Modifier.fillMaxSize()) {
+            // Left Pane: Full media canvas + viewer overlays (never overlaps right metadata panel)
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .testTag("media_viewer_media_pane")
+            ) {
                 Box(
                     modifier = Modifier
-                        .weight(if (showMetadata && isLandscape) 0.6f else 1f)
-                        .fillMaxHeight()
+                        .fillMaxSize()
                         .focusRequester(focusRequester)
-                        .focusable()
+                        .testTag("media_viewer_canvas_focus_target")
                         .onKeyEvent { keyEvent ->
                             if (keyEvent.type == KeyEventType.KeyDown) {
                                 interactionCount++
@@ -693,10 +805,9 @@ fun MediaViewerDialog(
                                             coroutineScope.launch {
                                                 pagerState.animateScrollToPage(pagerState.currentPage - 1)
                                             }
-                                            true
-                                        } else {
-                                            false
                                         }
+                                        // Always consume on TV so focus never leaks off the first media item
+                                        true
                                     }
                                     Key.DirectionRight -> {
                                         if (pagerState.currentPage < mediaList.size - 1) {
@@ -704,24 +815,131 @@ fun MediaViewerDialog(
                                                 pagerState.animateScrollToPage(pagerState.currentPage + 1)
                                             }
                                             true
+                                        } else if (showMetadata && useSideMetadataPanel) {
+                                            runCatching { metadataCloseFocusRequester.requestFocus() }
+                                            true
                                         } else {
-                                            false
+                                            // Consume at last item so focus stays cleanly on media canvas
+                                            true
                                         }
                                     }
                                     Key.DirectionUp -> {
-                                        if (showBars) {
-                                            try {
-                                                topBarFocusRequester.requestFocus()
-                                            } catch (e: Exception) {
-                                                // Ignore if not attached
+                                        if (!showBars) {
+                                            showBars = true
+                                            coroutineScope.launch {
+                                                kotlinx.coroutines.delay(80)
+                                                runCatching { topBarFocusRequester.requestFocus() }
+                                            }
+                                        } else {
+                                            runCatching { topBarFocusRequester.requestFocus() }
+                                        }
+                                        true
+                                    }
+                                    Key.DirectionDown -> {
+                                        if (currentMedia.isVideo) {
+                                            if (!showBars) {
+                                                showBars = true
+                                                coroutineScope.launch {
+                                                    kotlinx.coroutines.delay(80)
+                                                    runCatching { bottomBarFocusRequester.requestFocus() }
+                                                }
+                                            } else {
+                                                runCatching { bottomBarFocusRequester.requestFocus() }
+                                            }
+                                            true
+                                        } else if (showMetadata && useSideMetadataPanel) {
+                                            val moved = runCatching {
+                                                firstMetadataSectionFocusRequester.requestFocus()
+                                                true
+                                            }.getOrDefault(false)
+                                            if (!moved) {
+                                                runCatching { metadataCloseFocusRequester.requestFocus() }
                                             }
                                             true
                                         } else {
-                                            false
+                                            // Consume so focus never leaks out of the viewer on non-video items
+                                            true
                                         }
                                     }
                                     Key.DirectionCenter, Key.Enter, Key.Spacebar -> {
-                                        showBars = !showBars
+                                        if (currentMedia.isVideo) {
+                                            if (isTv) {
+                                                if (!showBars) {
+                                                    isVideoPlaying = !isVideoPlaying
+                                                    showBars = true
+                                                    coroutineScope.launch {
+                                                        kotlinx.coroutines.delay(80)
+                                                        runCatching { bottomBarFocusRequester.requestFocus() }
+                                                    }
+                                                } else {
+                                                    runCatching { bottomBarFocusRequester.requestFocus() }
+                                                }
+                                            } else if (!showBars) {
+                                                isVideoPlaying = !isVideoPlaying
+                                                showBars = true
+                                            } else {
+                                                showBars = false
+                                            }
+                                        } else {
+                                            showBars = !showBars
+                                        }
+                                        true
+                                    }
+                                    Key.MediaPlayPause -> {
+                                        if (currentMedia.isVideo) {
+                                            isVideoPlaying = !isVideoPlaying
+                                            showBars = true
+                                        } else {
+                                            isSlideshowPlaying = !isSlideshowPlaying
+                                            if (isSlideshowPlaying) showBars = false
+                                        }
+                                        true
+                                    }
+                                    Key.MediaPlay -> {
+                                        if (currentMedia.isVideo) {
+                                            isVideoPlaying = true
+                                        } else {
+                                            isSlideshowPlaying = true
+                                            showBars = false
+                                        }
+                                        true
+                                    }
+                                    Key.MediaPause -> {
+                                        if (currentMedia.isVideo) {
+                                            isVideoPlaying = false
+                                            showBars = true
+                                        } else {
+                                            isSlideshowPlaying = false
+                                            showBars = true
+                                        }
+                                        true
+                                    }
+                                    Key.MediaFastForward -> {
+                                        if (currentMedia.isVideo) {
+                                            seekVideoBy(10_000L, seekForwardBadge)
+                                            showBars = true
+                                            true
+                                        } else if (pagerState.currentPage < mediaList.size - 1) {
+                                            coroutineScope.launch {
+                                                pagerState.animateScrollToPage(pagerState.currentPage + 1)
+                                            }
+                                            true
+                                        } else false
+                                    }
+                                    Key.MediaRewind -> {
+                                        if (currentMedia.isVideo) {
+                                            seekVideoBy(-10_000L, seekBackBadge)
+                                            showBars = true
+                                            true
+                                        } else if (pagerState.currentPage > 0) {
+                                            coroutineScope.launch {
+                                                pagerState.animateScrollToPage(pagerState.currentPage - 1)
+                                            }
+                                            true
+                                        } else false
+                                    }
+                                    Key.Info, Key.Menu -> {
+                                        showMetadata = !showMetadata
                                         true
                                     }
                                     else -> false
@@ -774,440 +992,637 @@ fun MediaViewerDialog(
                     }
                 }
 
-                if (showMetadata && isLandscape) {
-                    Card(
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .weight(0.4f)
-                            .windowInsetsPadding(WindowInsets.safeDrawing)
-                            .padding(
-                                top = if (showBars) 70.dp else 16.dp,
-                                bottom = 16.dp,
-                                start = 8.dp,
-                                end = 16.dp
-                            ),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color.Black.copy(alpha = 0.85f)
-                        ),
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f))
+                // Slide-up Metadata Overlay Sheet (Compact Phones only)
+                if (!useSideMetadataPanel) {
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = showMetadata,
+                        enter = slideInVertically { it },
+                        exit = slideOutVertically { it },
+                        modifier = Modifier.align(Alignment.BottomCenter)
                     ) {
-                        MetadataContent(
-                            media = currentMedia,
-                            viewModel = viewModel,
-                            onClose = { showMetadata = false }
-                        )
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 380.dp)
+                                .windowInsetsPadding(WindowInsets.safeDrawing)
+                                .padding(16.dp)
+                                .testTag("metadata_bottom_sheet"),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color(0xEB14161A)
+                            ),
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f))
+                        ) {
+                            MetadataContent(
+                                media = currentMedia,
+                                viewModel = viewModel,
+                                isSidePanel = false,
+                                isTv = isTv,
+                                closeFocusRequester = metadataCloseFocusRequester,
+                                onNavigateBackToMedia = {
+                                    try { focusRequester.requestFocus() } catch (_: Exception) {}
+                                },
+                                onClose = { showMetadata = false }
+                            )
+                        }
                     }
                 }
-            }
 
-            // Slide-up Metadata Overlay Sheet (Portrait only)
-            if (!isLandscape) {
-                AnimatedVisibility(
-                    visible = showMetadata,
+                // Top Bar Overlay (scoped to Left Pane so it never collides with Right Metadata Panel)
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = showBars || keepTopBarForMenu,
+                    enter = slideInVertically { -it },
+                    exit = slideOutVertically { -it },
+                    modifier = Modifier.align(Alignment.TopCenter)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color.Black.copy(alpha = 0.55f))
+                            .windowInsetsPadding(WindowInsets.statusBars)
+                            .padding(
+                                horizontal = if (isTv) 20.dp else 8.dp,
+                                vertical = if (isTv) 8.dp else 4.dp
+                            )
+                            .focusGroup()
+                            .onFocusChanged { topBarFocused = it.hasFocus },
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = onDismiss,
+                                modifier = Modifier
+                                    .focusRequester(topBarFocusRequester)
+                                    .focusProperties {
+                                        up = FocusRequester.Cancel
+                                        left = FocusRequester.Cancel
+                                        down = focusRequester
+                                    }
+                                    .tvFocus(shape = CircleShape)
+                                    .testTag("viewer_close_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = stringResource(R.string.close),
+                                    tint = Color.White
+                                )
+                            }
+
+                            if (currentMedia.isLivePhoto && !currentMedia.isVideo) {
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Surface(
+                                    onClick = { isLivePhotoPlaying = !isLivePhotoPlaying },
+                                    shape = RoundedCornerShape(20.dp),
+                                    color = if (isLivePhotoPlaying) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        Color.White.copy(alpha = 0.16f)
+                                    },
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (isLivePhotoPlaying) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.45f)
+                                    ),
+                                    modifier = Modifier
+                                        .defaultMinSize(minWidth = 48.dp, minHeight = 36.dp)
+                                        .focusProperties {
+                                            up = FocusRequester.Cancel
+                                            down = focusRequester
+                                        }
+                                        .testTag("live_photo_toggle")
+                                        .tvFocus(shape = RoundedCornerShape(20.dp))
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isLivePhotoPlaying) Icons.Default.MotionPhotosAuto else Icons.Default.MotionPhotosOn,
+                                            contentDescription = if (isLivePhotoPlaying) stringResource(R.string.stop_live_photo) else stringResource(R.string.play_live_photo),
+                                            tint = if (isLivePhotoPlaying) MaterialTheme.colorScheme.onPrimary else Color.White,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = if (isLivePhotoPlaying) "LIVE ●" else "LIVE",
+                                            color = if (isLivePhotoPlaying) MaterialTheme.colorScheme.onPrimary else Color.White,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            letterSpacing = 0.6.sp
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (isTv) {
+                                IconButton(
+                                    onClick = {
+                                        val willPlay = !isSlideshowPlaying
+                                        isSlideshowPlaying = willPlay
+                                        if (willPlay) showBars = false
+                                    },
+                                    modifier = Modifier
+                                        .focusProperties {
+                                            up = FocusRequester.Cancel
+                                            down = focusRequester
+                                        }
+                                        .tvFocus(shape = CircleShape)
+                                        .testTag("viewer_slideshow_button")
+                                ) {
+                                    Icon(
+                                        imageVector = if (isSlideshowPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                        contentDescription = if (isSlideshowPlaying) stringResource(R.string.slideshow_stop) else stringResource(R.string.slideshow_start),
+                                        tint = if (isSlideshowPlaying) MaterialTheme.colorScheme.primary else Color.White
+                                    )
+                                }
+                            }
+
+                            IconButton(
+                                onClick = {
+                                    showMetadata = !showMetadata
+                                },
+                                modifier = Modifier
+                                    .focusProperties {
+                                        up = FocusRequester.Cancel
+                                        down = focusRequester
+                                    }
+                                    .tvFocus(shape = CircleShape)
+                                    .testTag("viewer_metadata_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Info,
+                                    contentDescription = stringResource(R.string.metadata_cd),
+                                    tint = if (showMetadata) MaterialTheme.colorScheme.primary else Color.White
+                                )
+                            }
+
+                            if (tvCapabilities.allowMapView && currentMedia.metadata?.gps != null && onOpenMap != null) {
+                                IconButton(
+                                    onClick = {
+                                        onOpenMap(currentMedia)
+                                    },
+                                    modifier = Modifier
+                                        .focusProperties {
+                                            up = FocusRequester.Cancel
+                                            down = focusRequester
+                                        }
+                                        .tvFocus(shape = CircleShape)
+                                        .testTag("viewer_map_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Map,
+                                        contentDescription = stringResource(R.string.show_on_map),
+                                        tint = Color.White
+                                    )
+                                }
+                            }
+
+                            if (tvCapabilities.allowSharing) {
+                                IconButton(
+                                    onClick = {
+                                        viewModel.shareSingleMedia(context, currentMedia)
+                                    },
+                                    modifier = Modifier
+                                        .focusProperties {
+                                            up = FocusRequester.Cancel
+                                            down = focusRequester
+                                        }
+                                        .tvFocus(shape = CircleShape)
+                                        .testTag("viewer_share_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Share,
+                                        contentDescription = stringResource(R.string.share),
+                                        tint = Color.White
+                                    )
+                                }
+                            }
+
+                            if (tvCapabilities.allowDownloads) {
+                                IconButton(
+                                    onClick = {
+                                        downloadFile(context, mediaUrl, currentMedia.name, cookies)
+                                    },
+                                    modifier = Modifier
+                                        .focusProperties {
+                                            up = FocusRequester.Cancel
+                                            down = focusRequester
+                                        }
+                                        .tvFocus(shape = CircleShape)
+                                        .testTag("viewer_download_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Download,
+                                        contentDescription = stringResource(R.string.download),
+                                        tint = Color.White
+                                    )
+                                }
+                            }
+
+                            Box {
+                                IconButton(
+                                    onClick = { showMoreMenu = true },
+                                    modifier = Modifier
+                                        .focusRequester(topBarRightmostFocusRequester)
+                                        .focusProperties {
+                                            up = FocusRequester.Cancel
+                                            down = focusRequester
+                                            right = if (showMetadata && useSideMetadataPanel) {
+                                                metadataCloseFocusRequester
+                                            } else {
+                                                FocusRequester.Cancel
+                                            }
+                                        }
+                                        .tvFocus(shape = CircleShape)
+                                        .testTag("viewer_more_button")
+                                ) {
+                                    Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.more_options), tint = Color.White)
+                                }
+                                DropdownMenu(
+                                    expanded = showMoreMenu,
+                                    onDismissRequest = { showMoreMenu = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        modifier = Modifier.tvFocus(shape = RoundedCornerShape(8.dp)),
+                                        text = {
+                                            Text(
+                                                if (isSlideshowPlaying) stringResource(R.string.slideshow_stop)
+                                                else stringResource(R.string.slideshow_start)
+                                            )
+                                        },
+                                        onClick = {
+                                            if (showMoreMenu) {
+                                                showMoreMenu = false
+                                                val willPlay = !isSlideshowPlaying
+                                                coroutineScope.launch {
+                                                    kotlinx.coroutines.delay(200)
+                                                    isSlideshowPlaying = willPlay
+                                                    if (willPlay && !showMoreMenu) {
+                                                        showBars = false
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = if (isSlideshowPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                                contentDescription = null
+                                            )
+                                        }
+                                    )
+                                    if (!currentMedia.isVideo) {
+                                        DropdownMenuItem(
+                                            modifier = Modifier.tvFocus(shape = RoundedCornerShape(8.dp)),
+                                            text = { Text(stringResource(R.string.rotate)) },
+                                            onClick = {
+                                                if (showMoreMenu) {
+                                                    showMoreMenu = false
+                                                    val page = pagerState.currentPage
+                                                    coroutineScope.launch {
+                                                        kotlinx.coroutines.delay(200)
+                                                        rotationMap[page] = ((rotationMap[page] ?: 0f) + 90f) % 360f
+                                                    }
+                                                }
+                                            },
+                                            leadingIcon = {
+                                                Icon(
+                                                    imageVector = Icons.AutoMirrored.Filled.RotateRight,
+                                                    contentDescription = null
+                                                )
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            modifier = Modifier.tvFocus(shape = RoundedCornerShape(8.dp)),
+                                            text = {
+                                                Text(
+                                                    if (showFaceRegions) stringResource(R.string.hide_face_regions)
+                                                    else stringResource(R.string.show_face_regions)
+                                                )
+                                            },
+                                            onClick = {
+                                                if (showMoreMenu) {
+                                                    showMoreMenu = false
+                                                    val nextShowFaceRegions = !showFaceRegions
+                                                    coroutineScope.launch {
+                                                        kotlinx.coroutines.delay(200)
+                                                        showFaceRegions = nextShowFaceRegions
+                                                    }
+                                                }
+                                            },
+                                            leadingIcon = {
+                                                Icon(
+                                                    imageVector = Icons.Default.Face,
+                                                    contentDescription = null
+                                                )
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Bottom Bar Overlay (scoped to Left Pane)
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = showBars,
                     enter = slideInVertically { it },
                     exit = slideOutVertically { it },
                     modifier = Modifier.align(Alignment.BottomCenter)
                 ) {
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 360.dp)
-                            .windowInsetsPadding(WindowInsets.safeDrawing)
-                            .padding(16.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color.Black.copy(alpha = 0.85f)
-                        ),
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f))
-                    ) {
-                        MetadataContent(
-                            media = currentMedia,
-                            viewModel = viewModel,
-                            onClose = { showMetadata = false }
-                        )
-                    }
-                }
-            }
-
-            // Top Bar Overlay
-            AnimatedVisibility(
-                visible = showBars || keepTopBarForMenu,
-                enter = slideInVertically { -it },
-                exit = slideOutVertically { -it },
-                modifier = Modifier.align(Alignment.TopCenter)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color.Black.copy(alpha = 0.5f))
-                        .windowInsetsPadding(WindowInsets.statusBars)
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                        .focusGroup()
-                        .onFocusChanged { topBarFocused = it.hasFocus },
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(
-                            onClick = onDismiss,
-                            modifier = Modifier
-                                .focusRequester(topBarFocusRequester)
-                                .focusProperties { down = focusRequester; right = FocusRequester.Default }
-                                .tvFocus(shape = androidx.compose.foundation.shape.CircleShape)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = stringResource(R.string.close),
-                                tint = Color.White
-                            )
+                    if (isTv && currentMedia.isVideo) {
+                        if (!isDraggingVideoSlider) {
+                            videoSliderValue = videoCurrentPosition.toFloat()
                         }
-
-                        if (currentMedia.isLivePhoto && !currentMedia.isVideo) {
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Surface(
-                                onClick = { isLivePhotoPlaying = !isLivePhotoPlaying },
-                                shape = RoundedCornerShape(20.dp),
-                                color = if (isLivePhotoPlaying) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    Color.White.copy(alpha = 0.16f)
-                                },
-                                border = BorderStroke(
-                                    1.dp,
-                                    if (isLivePhotoPlaying) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.45f)
-                                ),
-                                modifier = Modifier
-                                    .defaultMinSize(minWidth = 48.dp, minHeight = 36.dp)
-                                    .testTag("live_photo_toggle")
-                                    .tvFocus(shape = RoundedCornerShape(20.dp))
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = if (isLivePhotoPlaying) Icons.Default.MotionPhotosAuto else Icons.Default.MotionPhotosOn,
-                                        contentDescription = if (isLivePhotoPlaying) stringResource(R.string.stop_live_photo) else stringResource(R.string.play_live_photo),
-                                        tint = if (isLivePhotoPlaying) MaterialTheme.colorScheme.onPrimary else Color.White,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Text(
-                                        text = if (isLivePhotoPlaying) "LIVE ●" else "LIVE",
-                                        color = if (isLivePhotoPlaying) MaterialTheme.colorScheme.onPrimary else Color.White,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        letterSpacing = 0.6.sp
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(
-                            onClick = {
-                                showMetadata = !showMetadata
+                        TvVideoControlsBar(
+                            title = currentMedia.name,
+                            pageIndicator = "${pagerState.currentPage + 1} / ${mediaList.size}",
+                            isPlaying = isVideoPlaying,
+                            isMuted = isVideoMuted,
+                            currentPositionMs = videoCurrentPosition,
+                            durationMs = videoDuration,
+                            sliderValue = videoSliderValue,
+                            isDraggingSlider = isDraggingVideoSlider,
+                            seekFeedbackLabel = seekFeedbackLabel,
+                            playPauseFocusRequester = bottomBarFocusRequester,
+                            mediaCanvasFocusRequester = focusRequester,
+                            sidePanelFocusRequester = if (showMetadata && useSideMetadataPanel) {
+                                metadataCloseFocusRequester
+                            } else {
+                                null
                             },
-                            modifier = Modifier
-                                .focusProperties { down = focusRequester; left = FocusRequester.Default }
-                                .tvFocus(shape = androidx.compose.foundation.shape.CircleShape)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Info,
-                                contentDescription = stringResource(R.string.metadata_cd),
-                                tint = Color.White
-                            )
-                        }
-
-                        if (currentMedia.metadata?.gps != null && onOpenMap != null && !isTv) {
-                            IconButton(
-                                onClick = {
-                                    onOpenMap(currentMedia)
-                                },
-                                modifier = Modifier
-                                    .focusProperties { down = focusRequester }
-                                    .tvFocus(shape = androidx.compose.foundation.shape.CircleShape)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Map,
-                                    contentDescription = stringResource(R.string.show_on_map),
-                                    tint = Color.White
-                                )
-                            }
-                        }
-
-                        if (!isTv) {
-                            IconButton(
-                                onClick = {
-                                    viewModel.shareSingleMedia(context, currentMedia)
-                                },
-                                modifier = Modifier
-                                    .focusProperties { down = focusRequester }
-                                    .tvFocus(shape = androidx.compose.foundation.shape.CircleShape)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Share,
-                                    contentDescription = stringResource(R.string.share),
-                                    tint = Color.White
-                                )
-                            }
-                            IconButton(
-                                onClick = {
-                                    downloadFile(context, mediaUrl, currentMedia.name, cookies)
-                                },
-                                modifier = Modifier
-                                    .focusProperties { down = focusRequester }
-                                    .tvFocus(shape = androidx.compose.foundation.shape.CircleShape)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Download,
-                                    contentDescription = stringResource(R.string.download),
-                                    tint = Color.White
-                                )
-                            }
-                        }
-                        
-                        Box {
-                            IconButton(
-                                onClick = { showMoreMenu = true },
-                                modifier = Modifier
-                                    .focusProperties { down = focusRequester }
-                                    .tvFocus(shape = androidx.compose.foundation.shape.CircleShape)
-                            ) {
-                                Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.more_options), tint = Color.White)
-                            }
-                            androidx.compose.material3.DropdownMenu(
-                                expanded = showMoreMenu,
-                                onDismissRequest = { showMoreMenu = false }
-                            ) {
-                                androidx.compose.material3.DropdownMenuItem(
-                                    modifier = Modifier.tvFocus(),
-                                    text = {
-                                        androidx.compose.material3.Text(
-                                            if (isSlideshowPlaying) stringResource(R.string.slideshow_stop)
-                                            else stringResource(R.string.slideshow_start)
-                                        )
-                                    },
-                                    onClick = {
-                                        if (showMoreMenu) {
-                                            showMoreMenu = false
-                                            val willPlay = !isSlideshowPlaying
-                                            coroutineScope.launch {
-                                                kotlinx.coroutines.delay(200)
-                                                isSlideshowPlaying = willPlay
-                                                if (willPlay && !showMoreMenu) {
-                                                    showBars = false
-                                                }
-                                            }
-                                        }
-                                    },
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = if (isSlideshowPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                            contentDescription = null
-                                        )
-                                    }
-                                )
-                                if (!currentMedia.isVideo) {
-                                    androidx.compose.material3.DropdownMenuItem(
-                                        modifier = Modifier.tvFocus(),
-                                        text = { androidx.compose.material3.Text(stringResource(R.string.rotate)) },
-                                        onClick = {
-                                            if (showMoreMenu) {
-                                                showMoreMenu = false
-                                                val page = pagerState.currentPage
-                                                coroutineScope.launch {
-                                                    kotlinx.coroutines.delay(200)
-                                                    rotationMap[page] = ((rotationMap[page] ?: 0f) + 90f) % 360f
-                                                }
-                                            }
-                                        },
-                                        leadingIcon = {
-                                            Icon(
-                                                imageVector = Icons.AutoMirrored.Filled.RotateRight,
-                                                contentDescription = null
-                                            )
-                                        }
-                                    )
-                                    androidx.compose.material3.DropdownMenuItem(
-                                        modifier = Modifier.tvFocus(),
-                                        text = {
-                                            androidx.compose.material3.Text(
-                                                if (showFaceRegions) stringResource(R.string.hide_face_regions)
-                                                else stringResource(R.string.show_face_regions)
-                                            )
-                                        },
-                                        onClick = {
-                                            if (showMoreMenu) {
-                                                showMoreMenu = false
-                                                val nextShowFaceRegions = !showFaceRegions
-                                                coroutineScope.launch {
-                                                    kotlinx.coroutines.delay(200)
-                                                    showFaceRegions = nextShowFaceRegions
-                                                }
-                                            }
-                                        },
-                                        leadingIcon = {
-                                            Icon(
-                                                imageVector = Icons.Default.Face,
-                                                contentDescription = null
-                                            )
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Bottom Bar Overlay
-            AnimatedVisibility(
-                visible = showBars,
-                enter = slideInVertically { it },
-                exit = slideOutVertically { it },
-                modifier = Modifier.align(Alignment.BottomCenter)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color.Black.copy(alpha = 0.75f))
-                        .windowInsetsPadding(WindowInsets.safeDrawing)
-                        .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 16.dp)
-                        .onFocusChanged { bottomBarFocused = it.hasFocus }
-                ) {
-                    if (currentMedia.isVideo) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            IconButton(
-                                onClick = { isVideoPlaying = !isVideoPlaying }
-                            ) {
-                                Icon(
-                                    imageVector = if (isVideoPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                    contentDescription = if (isVideoPlaying) stringResource(R.string.pause) else stringResource(R.string.play),
-                                    tint = Color.White
-                                )
-                            }
-                            
-                            val displayPos = if (isDraggingVideoSlider) videoSliderValue.toInt() else videoCurrentPosition
-                            Text(
-                                text = formatTime(displayPos),
-                                color = Color.White,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                            
-                            Spacer(modifier = Modifier.width(8.dp))
-                            
-                            if (!isDraggingVideoSlider) {
-                                videoSliderValue = videoCurrentPosition.toFloat()
-                            }
-                            Slider(
-                                value = videoSliderValue,
-                                onValueChange = { newValue ->
-                                    isDraggingVideoSlider = true
-                                    videoSliderValue = newValue
-                                },
-                                onValueChangeFinished = {
-                                    isDraggingVideoSlider = false
-                                    activeVideoPlayer?.seekTo(videoSliderValue.toLong())
-                                    videoCurrentPosition = videoSliderValue.toInt()
-                                },
-                                valueRange = 0f..videoDuration.toFloat().coerceAtLeast(1f),
-                                colors = SliderDefaults.colors(
-                                    thumbColor = MaterialTheme.colorScheme.primary,
-                                    activeTrackColor = MaterialTheme.colorScheme.primary,
-                                    inactiveTrackColor = Color.White.copy(alpha = 0.24f)
-                                ),
-                                modifier = Modifier.weight(1f)
-                            )
-                            
-                            Spacer(modifier = Modifier.width(8.dp))
-                            
-                            Text(
-                                text = formatTime(videoDuration),
-                                color = Color.White,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
-                        
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = currentMedia.name,
-                            color = Color.White,
-                            style = MaterialTheme.typography.titleMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f).padding(end = 16.dp)
-                        )
-                        Text(
-                            text = "${pagerState.currentPage + 1} / ${mediaList.size}",
-                            color = Color.White.copy(alpha = 0.8f),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-                }
-            }
-
-            // Compact Diashow "x/y" indicator when playing with bars hidden
-            if (isSlideshowPlaying && !showBars && mediaList.isNotEmpty()) {
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = Color.Black.copy(alpha = 0.55f),
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .windowInsetsPadding(WindowInsets.safeDrawing)
-                        .padding(16.dp)
-                        .testTag("diashow_counter_indicator")
-                ) {
-                    Text(
-                        text = "${pagerState.currentPage + 1}/${mediaList.size}",
-                        color = Color.White.copy(alpha = 0.9f),
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                    )
-                }
-            }
-
-            // Share/Download Progress Indicator Overlay
-            val shareProgress by viewModel.shareProgress.collectAsState()
-            if (shareProgress >= 0f) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .align(Alignment.TopCenter)
-                        .padding(top = if (showBars) 64.dp else 0.dp)
-                ) {
-                    if (shareProgress == 0f) {
-                        androidx.compose.material3.LinearProgressIndicator(
-                            modifier = Modifier.fillMaxWidth().height(4.dp),
-                            color = MaterialTheme.colorScheme.primary,
-                            trackColor = Color.Transparent
+                            onTogglePlayPause = { isVideoPlaying = !isVideoPlaying },
+                            onSeekBackward = { seekVideoBy(-10_000L, seekBackBadge) },
+                            onSeekForward = { seekVideoBy(10_000L, seekForwardBadge) },
+                            onRestart = restartVideo,
+                            onToggleMute = { isVideoMuted = !isVideoMuted },
+                            onSliderChange = { newValue ->
+                                isDraggingVideoSlider = true
+                                videoSliderValue = newValue
+                            },
+                            onSliderChangeFinished = {
+                                isDraggingVideoSlider = false
+                                activeVideoPlayer?.seekTo(videoSliderValue.toLong())
+                                videoCurrentPosition = videoSliderValue.toInt()
+                            },
+                            onTvSliderStep = { newValue ->
+                                videoSliderValue = newValue
+                                activeVideoPlayer?.seekTo(newValue.toLong())
+                                videoCurrentPosition = newValue.toInt()
+                            },
+                            onUserInteraction = { interactionCount++ },
+                            onFocusChanged = { bottomBarFocused = it }
                         )
                     } else {
-                        androidx.compose.material3.LinearProgressIndicator(
-                            progress = { shareProgress },
-                            modifier = Modifier.fillMaxWidth().height(4.dp),
-                            color = MaterialTheme.colorScheme.primary,
-                            trackColor = Color.Transparent
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color.Black.copy(alpha = 0.75f))
+                                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Start))
+                                .padding(
+                                    horizontal = if (isTv) 24.dp else 16.dp,
+                                    vertical = 16.dp
+                                )
+                                .focusGroup()
+                                .onFocusChanged { bottomBarFocused = it.hasFocus }
+                        ) {
+                            if (currentMedia.isVideo) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    IconButton(
+                                        onClick = { isVideoPlaying = !isVideoPlaying },
+                                        modifier = Modifier
+                                            .focusRequester(bottomBarFocusRequester)
+                                            .focusProperties {
+                                                up = focusRequester
+                                                down = FocusRequester.Cancel
+                                                left = FocusRequester.Cancel
+                                            }
+                                            .tvFocus(shape = CircleShape)
+                                            .testTag("viewer_video_play_pause_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isVideoPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                            contentDescription = if (isVideoPlaying) stringResource(R.string.pause) else stringResource(R.string.play),
+                                            tint = Color.White
+                                        )
+                                    }
+
+                                    val displayPos = if (isDraggingVideoSlider) videoSliderValue.toInt() else videoCurrentPosition
+                                    Text(
+                                        text = formatTime(displayPos),
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+
+                                    Spacer(modifier = Modifier.width(8.dp))
+
+                                    if (!isDraggingVideoSlider) {
+                                        videoSliderValue = videoCurrentPosition.toFloat()
+                                    }
+                                    val maxDurationFloat = videoDuration.toFloat().coerceAtLeast(1f)
+                                    val seekStep = (maxDurationFloat / 20f).coerceIn(5_000f, 30_000f)
+                                    val seekSteps = ((maxDurationFloat / seekStep).toInt() - 1).coerceIn(1, 50)
+                                    Slider(
+                                        value = videoSliderValue.coerceIn(0f, maxDurationFloat),
+                                        onValueChange = { newValue ->
+                                            isDraggingVideoSlider = true
+                                            videoSliderValue = newValue
+                                        },
+                                        onValueChangeFinished = {
+                                            isDraggingVideoSlider = false
+                                            activeVideoPlayer?.seekTo(videoSliderValue.toLong())
+                                            videoCurrentPosition = videoSliderValue.toInt()
+                                        },
+                                        valueRange = 0f..maxDurationFloat,
+                                        colors = SliderDefaults.colors(
+                                            thumbColor = MaterialTheme.colorScheme.primary,
+                                            activeTrackColor = MaterialTheme.colorScheme.primary,
+                                            inactiveTrackColor = Color.White.copy(alpha = 0.24f)
+                                        ),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .tvFocus(shape = RoundedCornerShape(12.dp))
+                                            .padding(horizontal = 4.dp)
+                                            .focusProperties {
+                                                up = focusRequester
+                                                down = FocusRequester.Cancel
+                                                right = if (showMetadata && useSideMetadataPanel) {
+                                                    metadataCloseFocusRequester
+                                                } else {
+                                                    FocusRequester.Cancel
+                                                }
+                                            }
+                                            .tvSlider(
+                                                value = videoSliderValue.coerceIn(0f, maxDurationFloat),
+                                                onValueChange = { newValue ->
+                                                    interactionCount++
+                                                    videoSliderValue = newValue
+                                                    activeVideoPlayer?.seekTo(newValue.toLong())
+                                                    videoCurrentPosition = newValue.toInt()
+                                                },
+                                                valueRange = 0f..maxDurationFloat,
+                                                steps = seekSteps
+                                            )
+                                            .testTag("viewer_video_seek_slider")
+                                    )
+
+                                    Spacer(modifier = Modifier.width(8.dp))
+
+                                    Text(
+                                        text = formatTime(videoDuration),
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = currentMedia.name,
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f).padding(end = 16.dp)
+                                )
+                                Text(
+                                    text = "${pagerState.currentPage + 1} / ${mediaList.size}",
+                                    color = Color.White.copy(alpha = 0.8f),
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Compact Diashow "x/y" indicator when playing with bars hidden
+                if (isSlideshowPlaying && !showBars && mediaList.isNotEmpty()) {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = Color.Black.copy(alpha = 0.55f),
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .windowInsetsPadding(WindowInsets.safeDrawing)
+                            .padding(16.dp)
+                            .testTag("diashow_counter_indicator")
+                    ) {
+                        Text(
+                            text = "${pagerState.currentPage + 1}/${mediaList.size}",
+                            color = Color.White.copy(alpha = 0.9f),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                         )
                     }
                 }
+
+                // Share/Download Progress Indicator Overlay
+                val shareProgress by viewModel.shareProgress.collectAsState()
+                if (!isTv && shareProgress >= 0f) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.TopCenter)
+                            .padding(top = if (showBars) 64.dp else 0.dp)
+                    ) {
+                        if (shareProgress == 0f) {
+                            LinearProgressIndicator(
+                                modifier = Modifier.fillMaxWidth().height(4.dp),
+                                color = MaterialTheme.colorScheme.primary,
+                                trackColor = Color.Transparent
+                            )
+                        } else {
+                            LinearProgressIndicator(
+                                progress = { shareProgress },
+                                modifier = Modifier.fillMaxWidth().height(4.dp),
+                                color = MaterialTheme.colorScheme.primary,
+                                trackColor = Color.Transparent
+                            )
+                        }
+                    }
+                }
             }
-            
+
+            // Right Pane: Docked Full-Height Metadata Panel on Android TV & Tablet
+            AnimatedVisibility(
+                visible = showMetadata && useSideMetadataPanel,
+                enter = slideInHorizontally { it } + fadeIn(),
+                exit = slideOutHorizontally { it } + fadeOut()
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .width(sidePanelWidth)
+                        .fillMaxHeight()
+                        .focusGroup()
+                        .onFocusChanged { sidePanelFocused = it.hasFocus }
+                        .testTag("metadata_side_panel"),
+                    color = Color(0xFF14161A),
+                    contentColor = Color.White
+                ) {
+                    Row(modifier = Modifier.fillMaxSize()) {
+                        VerticalDivider(
+                            thickness = 1.dp,
+                            color = Color.White.copy(alpha = 0.14f)
+                        )
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .windowInsetsPadding(
+                                    WindowInsets.safeDrawing.only(
+                                        WindowInsetsSides.Top + WindowInsetsSides.Bottom + WindowInsetsSides.End
+                                    )
+                                )
+                                .then(
+                                    if (isTv) Modifier.padding(end = 12.dp, top = 8.dp, bottom = 8.dp) else Modifier
+                                )
+                        ) {
+                            MetadataContent(
+                                media = currentMedia,
+                                viewModel = viewModel,
+                                isSidePanel = true,
+                                isTv = isTv,
+                                closeFocusRequester = metadataCloseFocusRequester,
+                                firstSectionFocusRequester = firstMetadataSectionFocusRequester,
+                                onNavigateLeftFromClose = {
+                                    val movedToTopBar = if (showBars || keepTopBarForMenu) {
+                                        runCatching {
+                                            topBarRightmostFocusRequester.requestFocus()
+                                            true
+                                        }.getOrDefault(false)
+                                    } else {
+                                        false
+                                    }
+                                    if (!movedToTopBar) {
+                                        runCatching { focusRequester.requestFocus() }
+                                    }
+                                },
+                                onNavigateBackToMedia = {
+                                    runCatching { focusRequester.requestFocus() }
+                                },
+                                onClose = {
+                                    showMetadata = false
+                                    runCatching { focusRequester.requestFocus() }
+                                }
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
+}
 
 fun formatFileSize(bytes: Long, unknownLabel: String = "Unknown"): String {
     if (bytes <= 0) return unknownLabel
@@ -1222,15 +1637,28 @@ fun formatFileSize(bytes: Long, unknownLabel: String = "Unknown"): String {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
-fun MetadataContent(media: ApiMedia, viewModel: GalleryViewModel, onClose: () -> Unit) {
+fun MetadataContent(
+    media: ApiMedia,
+    viewModel: GalleryViewModel,
+    isSidePanel: Boolean = false,
+    isTv: Boolean = false,
+    closeFocusRequester: FocusRequester = remember { FocusRequester() },
+    firstSectionFocusRequester: FocusRequester = remember { FocusRequester() },
+    onNavigateLeftFromClose: () -> Unit = {},
+    onNavigateBackToMedia: () -> Unit = {},
+    onClose: () -> Unit
+) {
     var currentFileSize by remember(media.id) { mutableStateOf(media.metadata?.fileSize) }
+    val scrollState = rememberScrollState()
+    val coroutineScope = rememberCoroutineScope()
 
     LaunchedEffect(media.id, currentFileSize) {
         if (currentFileSize == null || currentFileSize == 0L) {
             val mediaUrl = viewModel.getOriginalMediaUrl(media)
             if (mediaUrl.startsWith("http")) {
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                withContext(Dispatchers.IO) {
                     try {
                         val req = Request.Builder()
                             .url(mediaUrl)
@@ -1246,7 +1674,7 @@ fun MetadataContent(media: ApiMedia, viewModel: GalleryViewModel, onClose: () ->
                                 currentFileSize = len
                             }
                         }
-                    } catch (e: Exception) {
+                    } catch (_: Exception) {
                         // Ignore
                     }
                 }
@@ -1255,112 +1683,337 @@ fun MetadataContent(media: ApiMedia, viewModel: GalleryViewModel, onClose: () ->
     }
 
     val unknownLabel = stringResource(R.string.unknown)
+    val size = media.metadata?.size
+    val dateStr = DateUtils.formatMediaDate(media.metadata?.creationDate, media.metadata?.creationDateOffset, unknownLabel)
+    val mediaTypeLabel = when {
+        media.isVideo -> stringResource(R.string.type_video)
+        media.isLivePhoto -> stringResource(R.string.type_live_photo)
+        else -> stringResource(R.string.type_image)
+    }
+    val camera = media.metadata?.cameraData
+    val cameraName = camera?.let { listOfNotNull(it.make, it.model).joinToString(" ") }.orEmpty()
+    val hasCameraDetails = camera != null && (
+        cameraName.isNotBlank() ||
+            !camera.lens.isNullOrBlank() ||
+            camera.focalLength != null ||
+            camera.ISO != null ||
+            camera.fStop != null ||
+            camera.exposure != null
+        )
+    val gps = media.metadata?.gps
+    val keywords = media.metadata?.keywords?.distinct().orEmpty()
+    val faceNames = media.metadata?.faces?.mapNotNull { it.name }?.filter { it.isNotBlank() }.orEmpty()
+    val hasTagsOrPeople = keywords.isNotEmpty() || faceNames.isNotEmpty()
+
+    val isLastFileSection = !hasCameraDetails && gps == null && !hasTagsOrPeople
+    val isLastCameraSection = hasCameraDetails && gps == null && !hasTagsOrPeople
+    val isLastLocationSection = gps != null && !hasTagsOrPeople
+
     Column(
         modifier = Modifier
-            .padding(16.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+            .fillMaxSize()
+            .padding(horizontal = if (isSidePanel) 20.dp else 16.dp, vertical = if (isSidePanel) 16.dp else 14.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = stringResource(R.string.metadata_info),
-                color = Color.White,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.metadata_info),
+                    color = Color.White,
+                    style = if (isSidePanel) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                if (isSidePanel) {
+                    Text(
+                        text = media.name,
+                        color = Color.White.copy(alpha = 0.65f),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
             IconButton(
                 onClick = onClose,
                 modifier = Modifier
                     .size(48.dp)
-                    .tvFocus(shape = androidx.compose.foundation.shape.CircleShape)
+                    .focusRequester(closeFocusRequester)
+                    .then(
+                        if (isSidePanel) {
+                            Modifier
+                                .focusProperties {
+                                    up = FocusRequester.Cancel
+                                    right = FocusRequester.Cancel
+                                    down = firstSectionFocusRequester
+                                }
+                                .onPreviewKeyEvent { event ->
+                                    if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft) {
+                                        onNavigateLeftFromClose()
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                }
+                        } else {
+                            Modifier
+                        }
+                    )
+                    .tvFocus(shape = CircleShape)
+                    .testTag(if (isSidePanel) "metadata_side_panel_close_button" else "metadata_bottom_sheet_close_button")
             ) {
                 Icon(
                     imageVector = Icons.Default.Close,
                     contentDescription = stringResource(R.string.close),
-                    tint = Color.White.copy(alpha = 0.7f),
-                    modifier = Modifier.size(18.dp)
+                    tint = Color.White.copy(alpha = 0.8f),
+                    modifier = Modifier.size(20.dp)
                 )
             }
         }
 
-        HorizontalDivider(color = Color.White.copy(alpha = 0.15f))
-
-        MetadataRow(icon = Icons.AutoMirrored.Outlined.InsertDriveFile, label = stringResource(R.string.meta_filename), value = media.name)
-        media.parentPath?.let {
-            val cleanedPath = it.replace(Regex("/{2,}"), "/")
-            MetadataRow(icon = Icons.Outlined.Folder, label = stringResource(R.string.meta_folder), value = cleanedPath)
-        }
-
-        currentFileSize?.let { bytes ->
-            if (bytes > 0) {
-                MetadataRow(icon = Icons.Outlined.SdCard, label = stringResource(R.string.meta_file_size), value = formatFileSize(bytes, unknownLabel))
-            }
-        }
-
-        val size = media.metadata?.size
-        if (size != null && size.width != null && size.height != null) {
-            MetadataRow(icon = Icons.Outlined.AspectRatio, label = stringResource(R.string.meta_dimensions), value = "${size.width} × ${size.height} px")
-        }
-
-        val dateStr = DateUtils.formatMediaDate(media.metadata?.creationDate, media.metadata?.creationDateOffset, unknownLabel)
-        MetadataRow(icon = Icons.Outlined.DateRange, label = stringResource(R.string.meta_date_taken), value = dateStr)
-
-        MetadataRow(
-            icon = when {
-                media.isVideo -> Icons.Outlined.Videocam
-                media.isLivePhoto -> Icons.Outlined.MotionPhotosOn
-                else -> Icons.Outlined.Image
-            },
-            label = stringResource(R.string.meta_type),
-            value = when {
-                media.isVideo -> stringResource(R.string.type_video)
-                media.isLivePhoto -> stringResource(R.string.type_live_photo)
-                else -> stringResource(R.string.type_image)
-            }
+        HorizontalDivider(
+            color = Color.White.copy(alpha = 0.14f),
+            modifier = Modifier.padding(vertical = 8.dp)
         )
-        
-        media.metadata?.cameraData?.let { camera ->
-            val cameraName = listOfNotNull(camera.make, camera.model).joinToString(" ")
-            if (cameraName.isNotBlank()) {
-                MetadataRow(icon = Icons.Outlined.CameraAlt, label = stringResource(R.string.meta_camera), value = cameraName)
-            }
-            camera.lens?.let { lens ->
-                if (lens.isNotBlank()) {
-                    MetadataRow(icon = CameraLensSide, label = stringResource(R.string.meta_lens), value = lens)
+
+        Column(
+            modifier = Modifier
+                .weight(1f, fill = isSidePanel)
+                .fillMaxWidth()
+                .verticalScroll(scrollState),
+            verticalArrangement = Arrangement.spacedBy(if (isSidePanel) 14.dp else 10.dp)
+        ) {
+            if (isSidePanel) {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    MetadataQuickChip(label = mediaTypeLabel)
+                    if (size != null && size.width != null && size.height != null) {
+                        MetadataQuickChip(label = "${size.width} × ${size.height}")
+                    }
+                    currentFileSize?.let { bytes ->
+                        if (bytes > 0) {
+                            MetadataQuickChip(label = formatFileSize(bytes, unknownLabel))
+                        }
+                    }
                 }
             }
-            camera.focalLength?.let { focal ->
-                val focalLengthStr = if (focal % 1.0 == 0.0) "${focal.toInt()} mm" else "${focal} mm"
-                MetadataRow(icon = Icons.Outlined.Straighten, label = stringResource(R.string.meta_focal_length), value = focalLengthStr)
+
+            MetadataSectionContainer(
+                title = if (isSidePanel) stringResource(R.string.meta_section_file) else null,
+                isSidePanel = isSidePanel,
+                sectionTag = "metadata_section_file",
+                sectionFocusRequester = firstSectionFocusRequester,
+                upFocusRequester = closeFocusRequester,
+                isLastSection = isLastFileSection,
+                scrollState = scrollState,
+                onNavigateBackToMedia = onNavigateBackToMedia
+            ) {
+                MetadataRow(icon = Icons.AutoMirrored.Outlined.InsertDriveFile, label = stringResource(R.string.meta_filename), value = media.name)
+                media.parentPath?.let {
+                    val cleanedPath = it.replace(Regex("/{2,}"), "/")
+                    MetadataRow(icon = Icons.Outlined.Folder, label = stringResource(R.string.meta_folder), value = cleanedPath)
+                }
+                currentFileSize?.let { bytes ->
+                    if (bytes > 0) {
+                        MetadataRow(icon = Icons.Outlined.SdCard, label = stringResource(R.string.meta_file_size), value = formatFileSize(bytes, unknownLabel))
+                    }
+                }
+                if (size != null && size.width != null && size.height != null) {
+                    MetadataRow(icon = Icons.Outlined.AspectRatio, label = stringResource(R.string.meta_dimensions), value = "${size.width} × ${size.height} px")
+                }
+                MetadataRow(icon = Icons.Outlined.DateRange, label = stringResource(R.string.meta_date_taken), value = dateStr)
+                MetadataRow(
+                    icon = when {
+                        media.isVideo -> Icons.Outlined.Videocam
+                        media.isLivePhoto -> Icons.Outlined.MotionPhotosOn
+                        else -> Icons.Outlined.Image
+                    },
+                    label = stringResource(R.string.meta_type),
+                    value = mediaTypeLabel
+                )
             }
-            camera.ISO?.let { MetadataRow(icon = Icons.Outlined.Iso, label = stringResource(R.string.meta_iso), value = it.toString()) }
-            camera.fStop?.let { MetadataRow(icon = ApertureIcon, label = stringResource(R.string.meta_aperture), value = "f/${it}") }
-            camera.exposure?.let { 
-                val exposureStr = if (it < 1.0 && it > 0.0) "1/${(1.0 / it).toInt()}s" else "${it}s"
-                MetadataRow(icon = Icons.Outlined.Timer, label = stringResource(R.string.meta_exposure_time), value = exposureStr) 
+
+            if (hasCameraDetails) {
+                val cameraDetails = camera!!
+                MetadataSectionContainer(
+                    title = if (isSidePanel) stringResource(R.string.meta_section_camera) else null,
+                    isSidePanel = isSidePanel,
+                    sectionTag = "metadata_section_camera",
+                    isLastSection = isLastCameraSection,
+                    scrollState = scrollState,
+                    onNavigateBackToMedia = onNavigateBackToMedia
+                ) {
+                    if (cameraName.isNotBlank()) {
+                        MetadataRow(icon = Icons.Outlined.CameraAlt, label = stringResource(R.string.meta_camera), value = cameraName)
+                    }
+                    cameraDetails.lens?.let { lens ->
+                        if (lens.isNotBlank()) {
+                            MetadataRow(icon = CameraLensSide, label = stringResource(R.string.meta_lens), value = lens)
+                        }
+                    }
+                    cameraDetails.focalLength?.let { focal ->
+                        val focalLengthStr = if (focal % 1.0 == 0.0) "${focal.toInt()} mm" else "$focal mm"
+                        MetadataRow(icon = Icons.Outlined.Straighten, label = stringResource(R.string.meta_focal_length), value = focalLengthStr)
+                    }
+                    cameraDetails.ISO?.let { MetadataRow(icon = Icons.Outlined.Iso, label = stringResource(R.string.meta_iso), value = it.toString()) }
+                    cameraDetails.fStop?.let { MetadataRow(icon = ApertureIcon, label = stringResource(R.string.meta_aperture), value = "f/$it") }
+                    cameraDetails.exposure?.let {
+                        val exposureStr = if (it < 1.0 && it > 0.0) "1/${(1.0 / it).toInt()}s" else "${it}s"
+                        MetadataRow(icon = Icons.Outlined.Timer, label = stringResource(R.string.meta_exposure_time), value = exposureStr)
+                    }
+                }
+            }
+
+            if (gps != null) {
+                MetadataSectionContainer(
+                    title = if (isSidePanel) stringResource(R.string.meta_section_location) else null,
+                    isSidePanel = isSidePanel,
+                    sectionTag = "metadata_section_location",
+                    isLastSection = isLastLocationSection,
+                    scrollState = scrollState,
+                    onNavigateBackToMedia = onNavigateBackToMedia
+                ) {
+                    val gpsStr = String.format(java.util.Locale.US, "%.6f, %.6f", gps.latitude, gps.longitude)
+                    MetadataRow(icon = Icons.Outlined.LocationOn, label = stringResource(R.string.meta_gps_coordinates), value = gpsStr)
+                }
+            }
+
+            if (hasTagsOrPeople) {
+                MetadataSectionContainer(
+                    title = if (isSidePanel) stringResource(R.string.meta_section_tags) else null,
+                    isSidePanel = isSidePanel,
+                    sectionTag = "metadata_section_tags",
+                    isLastSection = true,
+                    scrollState = scrollState,
+                    onNavigateBackToMedia = onNavigateBackToMedia
+                ) {
+                    if (keywords.isNotEmpty()) {
+                        MetadataRow(icon = Icons.AutoMirrored.Outlined.Label, label = stringResource(R.string.meta_keywords), value = keywords.joinToString(", "))
+                    }
+                    if (faceNames.isNotEmpty()) {
+                        MetadataRow(icon = Icons.Outlined.Person, label = stringResource(R.string.meta_people), value = faceNames.joinToString(", "))
+                    }
+                }
             }
         }
-        
-        media.metadata?.gps?.let { gps ->
-            val gpsStr = String.format(java.util.Locale.US, "%.6f, %.6f", gps.latitude, gps.longitude)
-            MetadataRow(icon = Icons.Outlined.LocationOn, label = stringResource(R.string.meta_gps_coordinates), value = gpsStr)
+    }
+}
+
+@Composable
+private fun MetadataQuickChip(label: String) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = Color.White.copy(alpha = 0.09f),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.14f))
+    ) {
+        Text(
+            text = label,
+            color = Color.White.copy(alpha = 0.92f),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
+@Composable
+private fun MetadataSectionContainer(
+    title: String?,
+    isSidePanel: Boolean,
+    sectionTag: String,
+    sectionFocusRequester: FocusRequester? = null,
+    upFocusRequester: FocusRequester? = null,
+    isLastSection: Boolean = false,
+    scrollState: androidx.compose.foundation.ScrollState? = null,
+    onNavigateBackToMedia: () -> Unit = {},
+    content: @Composable ColumnScope.() -> Unit
+) {
+    if (!isSidePanel) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp), content = content)
+        return
+    }
+    var isFocused by remember { mutableStateOf(false) }
+    val bringIntoViewRequester = remember { BringIntoViewRequester() }
+    val coroutineScope = rememberCoroutineScope()
+
+    Column(
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.bringIntoViewRequester(bringIntoViewRequester)
+    ) {
+        if (!title.isNullOrBlank()) {
+            Text(
+                text = title.uppercase(),
+                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 0.8.sp
+            )
         }
-        
-        val keywords = media.metadata?.keywords?.distinct()
-        if (!keywords.isNullOrEmpty()) {
-            MetadataRow(icon = Icons.AutoMirrored.Outlined.Label, label = stringResource(R.string.meta_keywords), value = keywords.joinToString(", "))
-        }
-        
-        val faces = media.metadata?.faces
-        if (!faces.isNullOrEmpty()) {
-            val faceNames = faces.mapNotNull { it.name }.filter { it.isNotBlank() }
-            if (faceNames.isNotEmpty()) {
-                MetadataRow(icon = Icons.Outlined.Person, label = stringResource(R.string.meta_people), value = faceNames.joinToString(", "))
-            }
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = if (isFocused) Color.White.copy(alpha = 0.13f) else Color.White.copy(alpha = 0.06f),
+            border = BorderStroke(
+                width = if (isFocused) 2.dp else 1.dp,
+                color = if (isFocused) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.09f)
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(if (sectionFocusRequester != null) Modifier.focusRequester(sectionFocusRequester) else Modifier)
+                .focusProperties {
+                    right = FocusRequester.Cancel
+                    if (upFocusRequester != null) {
+                        up = upFocusRequester
+                    }
+                }
+                .onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown) {
+                        when (event.key) {
+                            Key.DirectionLeft -> {
+                                onNavigateBackToMedia()
+                                true
+                            }
+                            Key.DirectionDown -> {
+                                if (isLastSection) {
+                                    if (scrollState != null && scrollState.value < scrollState.maxValue) {
+                                        coroutineScope.launch {
+                                            scrollState.animateScrollTo((scrollState.value + 160).coerceAtMost(scrollState.maxValue))
+                                        }
+                                    }
+                                    // Keep focus on last section rather than jumping to a dead spot
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                            else -> false
+                        }
+                    } else {
+                        false
+                    }
+                }
+                .tvFocus(shape = RoundedCornerShape(14.dp))
+                .onFocusChanged { focusState ->
+                    isFocused = focusState.isFocused
+                    if (focusState.isFocused) {
+                        coroutineScope.launch {
+                            bringIntoViewRequester.bringIntoView()
+                        }
+                    }
+                }
+                .focusable()
+                .testTag(sectionTag)
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                content = content
+            )
         }
     }
 }
@@ -1385,9 +2038,8 @@ fun MediaViewerItem(
     onVideoPrepared: (duration: Int, controller: VideoPlayerController) -> Unit,
     onDisposeVideo: (() -> Unit)? = null
 ) {
-    val isTv = remember(context) {
-        context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
-    }
+    val isTv = rememberTvCapabilities().isTvMode
+    val isLegacyOrLowRamTv = remember(context) { DeviceUtils.isLegacyOrLowRamTv(context) }
     val mediaUrl = viewModel.getOriginalMediaUrl(media)
 
     // Pinch to Zoom states (for images)
@@ -1412,21 +2064,17 @@ fun MediaViewerItem(
             }
             var videoAspectRatio by remember(media) { mutableStateOf(initialAspectRatio) }
 
-            val exoPlayer = remember(media.id, viewModel.api.client) {
-                // Progressive buffering strategy:
-                // bufferForPlaybackMs = 1,000ms: Starts playback as soon as 1s is buffered — does not wait for all to be buffered!
-                // bufferForPlaybackAfterRebufferMs = 2,500ms: Quick and stable resumption after rebuffering
-                // minBufferMs = 20,000ms: Keeps 20s buffered ahead in the background for smooth continuous playback without stopping
-                // maxBufferMs = 60,000ms: Upper buffer limit (60s)
+            val exoPlayer = remember(media.id, viewModel.api.client, isLegacyOrLowRamTv) {
+                // Lighter memory buffers on older Android 9 / low-RAM TV hardware
                 val loadControl = DefaultLoadControl.Builder()
                     .setBufferDurationsMs(
-                        /* minBufferMs = */ 20_000,
-                        /* maxBufferMs = */ 60_000,
-                        /* bufferForPlaybackMs = */ 1_000,
+                        /* minBufferMs = */ if (isLegacyOrLowRamTv) 10_000 else 20_000,
+                        /* maxBufferMs = */ if (isLegacyOrLowRamTv) 30_000 else 60_000,
+                        /* bufferForPlaybackMs = */ if (isLegacyOrLowRamTv) 1_500 else 1_000,
                         /* bufferForPlaybackAfterRebufferMs = */ 2_500
                     )
                     .setPrioritizeTimeOverSizeThresholds(true)
-                    .setBackBuffer(15_000, true)
+                    .setBackBuffer(if (isLegacyOrLowRamTv) 5_000 else 15_000, true)
                     .build()
 
                 // Reuse shared OkHttpClient pool & SSL config (supports self-signed certs), without HTTP response cache for streaming
@@ -1467,9 +2115,11 @@ fun MediaViewerItem(
                     override val duration: Long get() = exoPlayer.duration.coerceAtLeast(0L)
                     override val currentPosition: Long get() = exoPlayer.currentPosition.coerceAtLeast(0L)
                     override val isPlaying: Boolean get() = exoPlayer.isPlaying
+                    override val isMuted: Boolean get() = exoPlayer.volume == 0f
                     override fun play() { exoPlayer.play() }
                     override fun pause() { exoPlayer.pause() }
                     override fun seekTo(positionMs: Long) { exoPlayer.seekTo(positionMs) }
+                    override fun setMuted(muted: Boolean) { exoPlayer.volume = if (muted) 0f else 1f }
                 }
             }
 
@@ -1659,7 +2309,11 @@ fun MediaViewerItem(
 
             val displayMetrics = LocalContext.current.resources.displayMetrics
             val maxScreenDim = maxOf(displayMetrics.widthPixels, displayMetrics.heightPixels)
-            val safeMaxDimension = minOf(maxScreenDim * 2, 3840).coerceAtLeast(1920)
+            val safeMaxDimension = when {
+                isLegacyOrLowRamTv -> minOf(maxScreenDim, 1920).coerceAtLeast(1280)
+                isTv -> minOf(maxScreenDim, 2560).coerceAtLeast(1920)
+                else -> minOf(maxScreenDim * 2, 3840).coerceAtLeast(1920)
+            }
 
             // Step 1: Minimum thumbnail request (always loaded as baseline, instant from disk cache or small network fetch)
             val thumbnailRequest = remember(thumbnailUrl, cookies) {
@@ -1952,8 +2606,8 @@ fun MediaViewerItem(
                     )
                 }
 
-                // 3. Full Image: rendered on top of preload/thumbnail once loaded
-                if (shouldLoadFullImage && !isTv) {
+                // 3. Full Image: rendered on top of preload/thumbnail once loaded (capped safely on TV)
+                if (shouldLoadFullImage) {
                     AsyncImage(
                         model = fullImageRequest,
                         contentDescription = media.name,
@@ -2178,7 +2832,7 @@ private fun downloadFile(context: Context, url: String, fileName: String, cookie
     }
 }
 
-private fun formatTime(ms: Int): String {
+internal fun formatTime(ms: Int): String {
     val totalSeconds = (ms.coerceAtLeast(0)) / 1000
     val seconds = totalSeconds % 60
     val minutes = (totalSeconds / 60) % 60

@@ -27,10 +27,26 @@ object AppImageLoaderFactory {
 
     fun create(context: Context, allowInsecureSsl: Boolean): ImageLoader {
         val appContext = context.applicationContext ?: context
+        val isTv = DeviceUtils.isAndroidTv(appContext)
+        val isLegacyOrLowRamTv = DeviceUtils.isLegacyOrLowRamTv(appContext)
+        val memoryPercent = when {
+            isLegacyOrLowRamTv -> 0.12
+            isTv -> 0.16
+            else -> 0.20
+        }
+        val diskCacheBytes = when {
+            isLegacyOrLowRamTv -> 192L * 1024L * 1024L // 192MB for older TVs with small eMMC storage
+            isTv -> 384L * 1024L * 1024L
+            else -> 1024L * 1024L * 1024L // 1GB disk cache
+        }
+        // Older Android 8/9 TV GPUs (e.g. MiTV API 28) can crash or OOM with hardware bitmaps
+        // under Compose transforms; disable hardware bitmaps on legacy/low-RAM TVs.
+        val allowHardwareBitmaps = !isLegacyOrLowRamTv && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+
         return ImageLoader.Builder(appContext)
             .memoryCache {
                 MemoryCache.Builder(appContext)
-                    .maxSizePercent(0.20)
+                    .maxSizePercent(memoryPercent)
                     .strongReferencesEnabled(true)
                     .weakReferencesEnabled(true)
                     .build()
@@ -39,22 +55,22 @@ object AppImageLoaderFactory {
                 try {
                     DiskCache.Builder()
                         .directory(appContext.cacheDir.resolve("image_cache"))
-                        .maxSizeBytes(1024L * 1024L * 1024L) // 1GB disk cache
+                        .maxSizeBytes(diskCacheBytes)
                         .build()
                 } catch (_: Exception) {
                     null
                 }
             }
-            .allowHardware(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+            .allowHardware(allowHardwareBitmaps)
             .respectCacheHeaders(false)
             .okHttpClient {
                 val dispatcher = Dispatcher().apply {
-                    maxRequests = 24
-                    maxRequestsPerHost = 8
+                    maxRequests = if (isLegacyOrLowRamTv) 12 else 24
+                    maxRequestsPerHost = if (isLegacyOrLowRamTv) 4 else 8
                 }
                 val builder = OkHttpClient.Builder()
                     .dispatcher(dispatcher)
-                    .connectionPool(ConnectionPool(10, 2, TimeUnit.MINUTES))
+                    .connectionPool(ConnectionPool(if (isLegacyOrLowRamTv) 6 else 10, 2, TimeUnit.MINUTES))
                     .connectTimeout(15, TimeUnit.SECONDS)
                     .readTimeout(25, TimeUnit.SECONDS)
 

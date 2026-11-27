@@ -561,4 +561,67 @@ class PiGalleryCompatibilityTest {
             assertEquals(listOf("DELETE /pgapi/albums/99"), attempts)
         }
     }
+
+    @Test
+    fun `search parses GPS coordinates across packed and unpacked positionData formats`() {
+        api.client = api.client.newBuilder()
+            .addInterceptor { chain ->
+                val req = chain.request()
+                val json = """
+                    {
+                      "error": null,
+                      "result": {
+                        "searchResult": {
+                          "media": [
+                            {
+                              "id": 1,
+                              "n": "packed_list.jpg",
+                              "d": 0,
+                              "m": { "p": { "g": [48.1351, 11.5820, 519.0] } }
+                            },
+                            {
+                              "id": 2,
+                              "n": "direct_list.jpg",
+                              "d": 0,
+                              "m": { "p": ["47.3769", "8.5417"] }
+                            },
+                            {
+                              "id": 3,
+                              "n": "unpacked_long.jpg",
+                              "d": 0,
+                              "m": { "positionData": { "GPS": { "lat": 52.52, "long": 13.405 } } }
+                            }
+                          ]
+                        },
+                        "map": { "directories": ["./Trips"] }
+                      }
+                    }
+                """.trimIndent()
+                Response.Builder()
+                    .request(req)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body(json.toResponseBody("application/json".toMediaType()))
+                    .build()
+            }
+            .build()
+
+        val dir = api.search("https://example.org", "{\"type\":105,\"value\":\"Alex\"}", "c=1", "/pgapi")
+        val media = dir.media.orEmpty()
+        assertEquals(3, media.size)
+
+        assertNotNull(media[0].metadata?.gps)
+        assertEquals(48.1351, media[0].metadata!!.gps!!.latitude, 0.0001)
+        assertEquals(11.5820, media[0].metadata!!.gps!!.longitude, 0.0001)
+        assertEquals(519.0, media[0].metadata!!.gps!!.altitude!!, 0.01)
+
+        assertNotNull(media[1].metadata?.gps)
+        assertEquals(47.3769, media[1].metadata!!.gps!!.latitude, 0.0001)
+        assertEquals(8.5417, media[1].metadata!!.gps!!.longitude, 0.0001)
+
+        assertNotNull(media[2].metadata?.gps)
+        assertEquals(52.52, media[2].metadata!!.gps!!.latitude, 0.0001)
+        assertEquals(13.405, media[2].metadata!!.gps!!.longitude, 0.0001)
+    }
 }

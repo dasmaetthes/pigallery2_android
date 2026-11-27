@@ -2,17 +2,27 @@ package com.example.ui.theme
 
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalContext
-
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 
-import androidx.compose.material3.ColorScheme
+val AppShapes = Shapes(
+    extraSmall = RoundedCornerShape(4.dp),
+    small = RoundedCornerShape(8.dp),
+    medium = RoundedCornerShape(12.dp),
+    large = RoundedCornerShape(16.dp),
+    extraLarge = RoundedCornerShape(24.dp)
+)
 
 private val DarkColorScheme = darkColorScheme(
     primary = Color(0xFFD0BCFF),
@@ -62,8 +72,42 @@ private val LightColorScheme = lightColorScheme(
     onErrorContainer = Color(0xFF410E0B)
 )
 
+private fun ColorScheme.withSurfaceHierarchy(isDark: Boolean, isOled: Boolean = false): ColorScheme {
+    return when {
+        isOled -> copy(
+            background = Color(0xFF000000),
+            surface = Color(0xFF000000),
+            surfaceVariant = Color(0xFF161616),
+            surfaceContainerLowest = Color(0xFF000000),
+            surfaceContainerLow = Color(0xFF0C0C0C),
+            surfaceContainer = Color(0xFF121212),
+            surfaceContainerHigh = Color(0xFF1A1A1A),
+            surfaceContainerHighest = Color(0xFF232323),
+            outlineVariant = Color(0xFF333333),
+            onBackground = Color(0xFFFFFFFF),
+            onSurface = Color(0xFFFFFFFF)
+        )
+        isDark -> copy(
+            surfaceContainerLowest = lerp(background, Color.Black, 0.25f),
+            surfaceContainerLow = lerp(background, surface, 0.55f),
+            surfaceContainer = surface,
+            surfaceContainerHigh = lerp(surface, surfaceVariant, 0.45f),
+            surfaceContainerHighest = lerp(surface, surfaceVariant, 0.78f),
+            outlineVariant = lerp(surfaceVariant, outline, 0.35f)
+        )
+        else -> copy(
+            surfaceContainerLowest = Color.White,
+            surfaceContainerLow = lerp(surface, surfaceVariant, 0.22f),
+            surfaceContainer = lerp(surface, surfaceVariant, 0.42f),
+            surfaceContainerHigh = lerp(surface, surfaceVariant, 0.62f),
+            surfaceContainerHighest = lerp(surface, surfaceVariant, 0.85f),
+            outlineVariant = lerp(surfaceVariant, outline, 0.42f)
+        )
+    }
+}
+
 fun getLightColorSchemeForOption(option: String): ColorScheme {
-    return when (option) {
+    val baseScheme = when (option) {
         "Blue" -> lightColorScheme(
             primary = Color(0xFF00639B),
             onPrimary = Color(0xFFFFFFFF),
@@ -185,6 +229,7 @@ fun getLightColorSchemeForOption(option: String): ColorScheme {
         )
         else -> LightColorScheme // Purple (default)
     }
+    return baseScheme.withSurfaceHierarchy(isDark = false)
 }
 
 fun getDarkColorSchemeForOption(option: String, isOled: Boolean = false): ColorScheme {
@@ -311,17 +356,7 @@ fun getDarkColorSchemeForOption(option: String, isOled: Boolean = false): ColorS
         else -> DarkColorScheme // Purple (default)
     }
 
-    return if (isOled) {
-        baseScheme.copy(
-            background = Color(0xFF000000),
-            surface = Color(0xFF000000),
-            surfaceVariant = Color(0xFF121212),
-            onBackground = Color(0xFFFFFFFF),
-            onSurface = Color(0xFFFFFFFF)
-        )
-    } else {
-        baseScheme
-    }
+    return baseScheme.withSurfaceHierarchy(isDark = true, isOled = isOled)
 }
 
 @Composable
@@ -337,5 +372,10 @@ fun MyApplicationTheme(
       getLightColorSchemeForOption(themeColorOption)
   }
 
-  MaterialTheme(colorScheme = colorScheme, typography = Typography, content = content)
+  MaterialTheme(
+      colorScheme = colorScheme,
+      typography = Typography,
+      shapes = AppShapes,
+      content = content
+  )
 }

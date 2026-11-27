@@ -1,12 +1,8 @@
 package com.example.ui
 
-import android.content.pm.PackageManager
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -14,13 +10,11 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -30,23 +24,27 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
-import androidx.compose.ui.res.stringResource
 import com.example.R
-import com.example.data.ApiMedia
+import com.example.util.rememberTvCapabilities
 import kotlinx.coroutines.delay
 
 @Composable
-fun RediscoverTabContent(viewModel: GalleryViewModel) {
+fun RediscoverTabContent(
+    viewModel: GalleryViewModel,
+    firstItemFocusRequester: FocusRequester = remember { FocusRequester() }
+) {
     val rediscoverState by viewModel.rediscoverState.collectAsState()
+    val isRefreshing by viewModel.isRediscoverRefreshing.collectAsState()
+    val isSelectMode by viewModel.isSelectMode.collectAsState()
+    val selectedMediaForShare by viewModel.selectedMediaForShare.collectAsState()
+    val cookies = viewModel.getCookiesHeader()
+
     val itemsPerRowPortrait by viewModel.itemsPerRowPortrait.collectAsState()
     val itemsPerRowLandscape by viewModel.itemsPerRowLandscape.collectAsState()
     val isLandscape = LocalConfiguration.current.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
@@ -55,9 +53,11 @@ fun RediscoverTabContent(viewModel: GalleryViewModel) {
     val cornerRadius by viewModel.cornerRadius.collectAsState()
     val aspectRatio by viewModel.aspectRatio.collectAsState()
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
-
+    AdaptivePullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = { viewModel.refreshRediscover() },
+        modifier = Modifier.fillMaxSize()
+    ) {
         when (val state = rediscoverState) {
             is RediscoverUiState.Loading -> {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -65,33 +65,42 @@ fun RediscoverTabContent(viewModel: GalleryViewModel) {
                 }
             }
             is RediscoverUiState.Error -> {
-                ErrorStateView(message = state.message) {
+                ErrorStateView(
+                    message = state.message,
+                    actionFocusRequester = firstItemFocusRequester
+                ) {
                     viewModel.loadRediscover()
                 }
             }
             is RediscoverUiState.Success -> {
                 val grouped = state.groupedMedia
                 if (grouped.isEmpty()) {
-                    EmptyStateView(stringResource(R.string.nothing_to_rediscover), stringResource(R.string.nothing_to_rediscover_subtitle))
+                    EmptyStateView(
+                        title = stringResource(R.string.nothing_to_rediscover),
+                        subtitle = stringResource(R.string.nothing_to_rediscover_subtitle),
+                        icon = Icons.Outlined.History,
+                        illustration = EmptyStateIllustration.MEMORIES,
+                        guidanceText = stringResource(R.string.empty_guidance_rediscover),
+                        actionLabel = stringResource(R.string.empty_action_open_settings),
+                        onAction = {
+                            viewModel.setSelectedSettingsTab(1)
+                            viewModel.setActiveTab(ActiveTab.SETTINGS)
+                        },
+                        actionFocusRequester = firstItemFocusRequester
+                    )
                 } else {
                     val expandedYears by viewModel.rediscoverExpandedYears.collectAsState()
 
-                    val isTv = LocalContext.current.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
-                    val firstItemFocusRequester = remember { FocusRequester() }
+                    val tvCapabilities = rememberTvCapabilities()
+                    val isTv = tvCapabilities.isTvMode
+                    val effectiveIsSelectMode = tvCapabilities.isSelectModeActive(isSelectMode)
                     val scrollKey = "rediscover"
-                    val gridState = remember(scrollKey) {
-                        val saved = viewModel.getScrollPosition(scrollKey)
-                        LazyGridState(saved.index, saved.offset)
-                    }
-                    LaunchedEffect(gridState, scrollKey) {
-                        snapshotFlow { gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset }
-                            .collect { (index, offset) ->
-                                viewModel.saveScrollPosition(scrollKey, index, offset)
-                            }
-                    }
+                    val gridState = rememberPersistedLazyGridState(viewModel, scrollKey)
+                    var hasAutoFocused by remember { mutableStateOf(false) }
 
-                    LaunchedEffect(grouped) {
-                        if (isTv && grouped.isNotEmpty() && gridState.firstVisibleItemIndex == 0) {
+                    LaunchedEffect(grouped.isNotEmpty(), isTv) {
+                        if (isTv && grouped.isNotEmpty() && !hasAutoFocused && gridState.firstVisibleItemIndex == 0) {
+                            hasAutoFocused = true
                             try {
                                 delay(100)
                                 firstItemFocusRequester.requestFocus()
@@ -99,13 +108,18 @@ fun RediscoverTabContent(viewModel: GalleryViewModel) {
                         }
                     }
 
+                    val gridPadding = if (isTv) 20.dp else 16.dp
+                    val effectiveSpacing = if (isTv) spacing.dp.coerceAtLeast(10.dp) else spacing.dp
+
                     LazyVerticalGrid(
                         state = gridState,
                         columns = GridCells.Fixed(itemsPerRow),
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(spacing.dp),
-                        horizontalArrangement = Arrangement.spacedBy(spacing.dp)
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .focusGroup(),
+                        contentPadding = PaddingValues(gridPadding),
+                        verticalArrangement = Arrangement.spacedBy(effectiveSpacing),
+                        horizontalArrangement = Arrangement.spacedBy(effectiveSpacing)
                     ) {
                         grouped.forEach { (year, mediaList) ->
                             val isExpanded = year in expandedYears
@@ -113,24 +127,25 @@ fun RediscoverTabContent(viewModel: GalleryViewModel) {
                             val diff = currentYear - year
                             val isFirstYear = year == grouped.keys.first()
 
-                            item(span = { GridItemSpan(itemsPerRow) }) {
+                            item(key = "rediscover_year_$year", span = { GridItemSpan(itemsPerRow) }) {
                                 var isFocused by remember { mutableStateOf(false) }
-                                Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                                Column(modifier = Modifier.padding(vertical = 6.dp)) {
                                     val hasMore = mediaList.size > itemsPerRow
                                     val focusModifier = if (isFirstYear) Modifier.focusRequester(firstItemFocusRequester) else Modifier
 
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
+                                            .defaultMinSize(minHeight = 48.dp)
                                             .then(focusModifier)
-                                            .onFocusChanged { isFocused = it.isFocused }
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .tvFocus(shape = RoundedCornerShape(8.dp), showBorder = true)
+                                            .onFocusChanged { isFocused = it.hasFocus }
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .tvFocus(shape = RoundedCornerShape(12.dp), showBorder = true)
                                             .then(if (hasMore) Modifier.clickable { viewModel.toggleRediscoverYear(year) } else Modifier.focusable())
                                             .background(
                                                 color = if (isFocused) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
                                             )
-                                            .padding(horizontal = 8.dp, vertical = 12.dp),
+                                            .padding(horizontal = 8.dp, vertical = 10.dp),
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
@@ -138,20 +153,20 @@ fun RediscoverTabContent(viewModel: GalleryViewModel) {
                                             Text(
                                                 text = if (diff == 1) stringResource(R.string.one_year_ago, year) else stringResource(R.string.years_ago, diff, year),
                                                 style = MaterialTheme.typography.titleMedium,
-                                                fontWeight = FontWeight.ExtraBold,
+                                                fontWeight = FontWeight.Bold,
                                                 color = if (isFocused) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary
                                             )
                                             Text(
                                                 text = stringResource(R.string.items_count, mediaList.size),
                                                 fontSize = 12.sp,
-                                                color = if (isFocused) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                                color = if (isFocused) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
                                         if (hasMore) {
                                             Icon(
                                                 imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
                                                 contentDescription = if (isExpanded) stringResource(R.string.collapse) else stringResource(R.string.expand),
-                                                tint = if (isFocused) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                                tint = if (isFocused) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
                                     }
@@ -159,159 +174,28 @@ fun RediscoverTabContent(viewModel: GalleryViewModel) {
                             }
 
                             val displayList = if (isExpanded) mediaList else mediaList.take(itemsPerRow)
-                            items(displayList) { media ->
-                                RediscoverMediaItem(
+                            items(
+                                count = displayList.size,
+                                key = { index ->
+                                    val m = displayList[index]
+                                    "rediscover_${year}_${m.id ?: "none"}_${m.parentPath ?: ""}_${m.name}_$index"
+                                }
+                            ) { index ->
+                                val media = displayList[index]
+                                MediaGridCard(
                                     media = media,
+                                    aspectRatio = aspectRatio,
+                                    cornerRadiusDp = cornerRadius.dp,
+                                    isSelectMode = effectiveIsSelectMode,
+                                    isSelected = tvCapabilities.allowMultiSelect && selectedMediaForShare.contains(media),
+                                    cookies = cookies,
                                     viewModel = viewModel,
-                                    list = mediaList,
-                                    cornerRadius = cornerRadius.dp,
-                                    aspectRatio = aspectRatio
+                                    onMediaClick = { clicked -> viewModel.selectMedia(clicked, mediaList) },
+                                    onToggleSelect = { if (tvCapabilities.allowMultiSelect) viewModel.toggleSelectMedia(media) },
+                                    fallbackSquareAspectRatio = true
                                 )
                             }
                         }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-fun RediscoverMediaItem(
-    media: ApiMedia,
-    viewModel: GalleryViewModel,
-    list: List<ApiMedia> = emptyList(),
-    cornerRadius: Dp,
-    aspectRatio: Float
-) {
-    val context = LocalContext.current
-    val cookies = viewModel.getCookiesHeader()
-    val cardRatio = if (aspectRatio > 0f) aspectRatio else 1f
-
-    val isSelectMode by viewModel.isSelectMode.collectAsState()
-    val selectedMediaForShare by viewModel.selectedMediaForShare.collectAsState()
-    val isSelected = selectedMediaForShare.contains(media)
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(cardRatio)
-            .clip(RoundedCornerShape(cornerRadius))
-            .tvFocus(shape = RoundedCornerShape(cornerRadius))
-            .combinedClickable(
-                onClick = {
-                    if (isSelectMode) {
-                        viewModel.toggleSelectMedia(media)
-                    } else {
-                        viewModel.selectMedia(media, list)
-                    }
-                },
-                onLongClick = {
-                    viewModel.toggleSelectMedia(media)
-                }
-            ),
-        shape = RoundedCornerShape(cornerRadius),
-        border = if (isSelected) BorderStroke(3.dp, MaterialTheme.colorScheme.primary) else null,
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-    ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            val thumbnailUrl = remember(media.id, media.parentPath, media.name) {
-                viewModel.getThumbnailUrl(media)
-            }
-            val imageRequest = remember(thumbnailUrl, cookies) {
-                val cacheKey = "thumb_${media.id}_${media.name}"
-                ImageRequest.Builder(context)
-                    .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
-                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
-                    .networkCachePolicy(coil.request.CachePolicy.ENABLED)
-                    .memoryCacheKey(cacheKey)
-                    .diskCacheKey(cacheKey)
-                    .data(thumbnailUrl)
-                    .apply {
-                        if (cookies.isNotEmpty()) {
-                            setHeader("Cookie", cookies)
-                        }
-                    }
-                    .build()
-            }
-
-            AsyncImage(
-                model = imageRequest,
-                contentDescription = media.name,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-
-            if (media.isLivePhoto && !media.isVideo) {
-                LivePhotoBadge(
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(6.dp)
-                )
-            }
-
-            if (media.isVideo) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.2f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.PlayCircle,
-                        contentDescription = stringResource(R.string.video_cd),
-                        tint = Color.White,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-
-                val durationStr = formatVideoDuration(media.metadata?.duration)
-                if (durationStr.isNotEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(6.dp)
-                            .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                    ) {
-                        Text(
-                            text = durationStr,
-                            color = Color.White,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
-            }
-
-            if (isSelectMode) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(if (isSelected) Color.Black.copy(alpha = 0.2f) else Color.Transparent)
-                )
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(8.dp)
-                ) {
-                    if (isSelected) {
-                        Icon(
-                            imageVector = Icons.Default.CheckCircle,
-                            contentDescription = stringResource(R.string.selected_cd),
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .size(24.dp)
-                                .background(Color.White, CircleShape)
-                        )
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .size(22.dp)
-                                .border(2.dp, Color.White, CircleShape)
-                                .background(Color.Black.copy(alpha = 0.3f), CircleShape)
-                        )
                     }
                 }
             }

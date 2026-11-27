@@ -2,12 +2,14 @@ package com.example.ui
 
 import android.app.Activity
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.core.net.toUri
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.LazyGridState
@@ -19,10 +21,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.BookmarkAdd
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Deselect
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
@@ -35,15 +39,24 @@ import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusDirection
@@ -70,22 +83,26 @@ import androidx.fragment.app.FragmentActivity
 import androidx.compose.ui.res.stringResource
 import com.example.R
 import com.example.data.ApiAlbum
+import com.example.data.ShareTarget
+import com.example.data.ShareTargetKind
 import com.example.data.search.SearchQueryParser
 import com.example.findActivity
 import com.example.util.BiometricHelper
+import com.example.util.rememberTvCapabilities
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 fun GalleryScreen(
     viewModel: GalleryViewModel,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val isTv = context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+    val tvCapabilities = rememberTvCapabilities()
+    val isTv = tvCapabilities.isTvMode
     val isAppLocked by viewModel.isAppLocked.collectAsState()
-    if (isAppLocked) {
+    if (tvCapabilities.allowItemLocking && isAppLocked) {
         AppLockScreen(
             viewModel = viewModel,
             onUnlockSuccess = { viewModel.unlockApp() }
@@ -102,9 +119,18 @@ fun GalleryScreen(
     val isSearchActive by viewModel.isSearchActive.collectAsState()
     val showSearchSuggestions by viewModel.showSearchSuggestions.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
+    val isAlbumsSearchActive by viewModel.isAlbumsSearchActive.collectAsState()
+    val albumsFilterQuery by viewModel.albumsFilterQuery.collectAsState()
+    val isPersonsSearchActive by viewModel.isPersonsSearchActive.collectAsState()
+    val personsFilterQuery by viewModel.personsFilterQuery.collectAsState()
+
     val searchFieldFocusRequester = remember { FocusRequester() }
     val searchSuggestionsFocusRequester = remember { FocusRequester() }
     val galleryGridFirstItemFocusRequester = remember { FocusRequester() }
+    val albumsGridFirstItemFocusRequester = remember { FocusRequester() }
+    val personsGridFirstItemFocusRequester = remember { FocusRequester() }
+    val rediscoverFirstItemFocusRequester = remember { FocusRequester() }
+    val settingsFirstItemFocusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     var textFieldValue by remember { mutableStateOf(TextFieldValue(searchQuery)) }
@@ -124,12 +150,59 @@ fun GalleryScreen(
     var showSaveAlbumDialog by remember { mutableStateOf(false) }
     var queryToSaveAsAlbum by remember { mutableStateOf("") }
     var albumToDelete by remember { mutableStateOf<ApiAlbum?>(null) }
+    var shareDialogTarget by remember { mutableStateOf<ShareTarget?>(null) }
     var showMapDialog by remember { mutableStateOf(false) }
     var mapInitialMediaId by remember { mutableStateOf<String?>(null) }
     var dismissedUpdateVersion by rememberSaveable { mutableStateOf<String?>(null) }
     val canManageAlbums by viewModel.canManageAlbums.collectAsState()
     val saveAlbumState by viewModel.saveAlbumState.collectAsState()
     val deleteAlbumState by viewModel.deleteAlbumState.collectAsState()
+    val userRole by viewModel.userRole.collectAsState()
+    val sharingConfig by viewModel.sharingConfig.collectAsState()
+    val canCreateShareLink by viewModel.canCreateShareLink.collectAsState()
+    val sharingPasswordProtected by viewModel.sharingPasswordProtected.collectAsState()
+    val shareLinkState by viewModel.shareLinkState.collectAsState()
+    val isSharingAvailable = sharingConfig.isAvailableForRole(userRole) && canCreateShareLink
+    val isCreatingShare = shareLinkState is ShareLinkUiState.Creating
+    val effectiveIsSelectMode = tvCapabilities.isSelectModeActive(isSelectMode)
+    val effectiveCanManageAlbums = tvCapabilities.canManageAlbums(canManageAlbums)
+    val effectiveIsSharingAvailable = tvCapabilities.canCreateShareLinks(isSharingAvailable)
+
+    LaunchedEffect(tvCapabilities.allowMultiSelect, isSelectMode) {
+        if (!tvCapabilities.allowMultiSelect && isSelectMode) {
+            viewModel.exitSelectMode()
+        }
+    }
+
+    LaunchedEffect(effectiveIsSharingAvailable) {
+        if (!effectiveIsSharingAvailable && shareDialogTarget != null) {
+            shareDialogTarget = null
+            viewModel.resetShareLinkState()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.shareLinkToastEvents.collect { event ->
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
+                when (event) {
+                    is ShareLinkToastEvent.Created -> {
+                        Toast.makeText(
+                            context,
+                            context.getString(R.string.share_link_created_toast),
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    is ShareLinkToastEvent.Failed -> {
+                        Toast.makeText(
+                            context,
+                            event.message,
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            }
+        }
+    }
 
     LaunchedEffect(saveAlbumState) {
         if (saveAlbumState is SaveAlbumUiState.Success) {
@@ -158,19 +231,24 @@ fun GalleryScreen(
     }
 
     val galleryState by viewModel.galleryState.collectAsState()
+    val albumsState by viewModel.albumsState.collectAsState()
+    val personsState by viewModel.personsState.collectAsState()
+    val rediscoverState by viewModel.rediscoverState.collectAsState()
     val albumContentState by viewModel.albumContentState.collectAsState()
     val personContentState by viewModel.personContentState.collectAsState()
 
     val selectedAlbum by viewModel.selectedAlbum.collectAsState()
     val selectedPerson by viewModel.selectedPerson.collectAsState()
     val protectedFolders by viewModel.protectedFolders.collectAsState()
+    val hideProtectedItems by viewModel.hideProtectedItems.collectAsState()
+    val effectiveHideProtectedItems = tvCapabilities.shouldEnforceItemLocking(hideProtectedItems)
 
-    val mapMediaList = remember(activeTab, galleryState, albumContentState, personContentState, selectedAlbum, selectedPerson, protectedFolders) {
+    val mapMediaList = remember(activeTab, galleryState, albumContentState, personContentState, rediscoverState, selectedAlbum, selectedPerson, protectedFolders, pathHistory, tvCapabilities.allowItemLocking) {
         when (activeTab) {
             ActiveTab.GALLERY -> {
                 if (galleryState is GalleryUiState.Success) {
                     val media = (galleryState as GalleryUiState.Success).directory.media ?: emptyList()
-                    if (viewModel.isFolderProtected(viewModel.currentPath)) {
+                    if (!tvCapabilities.allowItemLocking || viewModel.isFolderProtected(viewModel.currentPath)) {
                         media
                     } else {
                         media.filter { !viewModel.isMediaProtected(it) }
@@ -180,17 +258,40 @@ fun GalleryScreen(
             ActiveTab.ALBUMS -> {
                 if (selectedAlbum != null && albumContentState is GalleryUiState.Success) {
                     val media = (albumContentState as GalleryUiState.Success).directory.media ?: emptyList()
-                    media.filter { !viewModel.isMediaProtected(it) }
+                    if (!tvCapabilities.allowItemLocking) media else media.filter { !viewModel.isMediaProtected(it) }
                 } else emptyList()
             }
             ActiveTab.PERSONS -> {
                 if (selectedPerson != null && personContentState is GalleryUiState.Success) {
                     val media = (personContentState as GalleryUiState.Success).directory.media ?: emptyList()
-                    media.filter { !viewModel.isMediaProtected(it) }
+                    if (!tvCapabilities.allowItemLocking) media else media.filter { !viewModel.isMediaProtected(it) }
+                } else emptyList()
+            }
+            ActiveTab.REDISCOVER -> {
+                if (rediscoverState is RediscoverUiState.Success) {
+                    (rediscoverState as RediscoverUiState.Success).groupedMedia.values.flatten()
                 } else emptyList()
             }
             else -> emptyList()
         }
+    }
+
+    val currentVisibleMediaList = remember(activeTab, mapMediaList, rediscoverState) {
+        when (activeTab) {
+            ActiveTab.REDISCOVER -> {
+                if (rediscoverState is RediscoverUiState.Success) {
+                    (rediscoverState as RediscoverUiState.Success).groupedMedia.values.flatten()
+                } else emptyList()
+            }
+            else -> mapMediaList
+        }
+    }
+
+    val isTopBarSearchExpanded = when (activeTab) {
+        ActiveTab.GALLERY -> isSearchActive
+        ActiveTab.ALBUMS -> selectedAlbum == null && isAlbumsSearchActive
+        ActiveTab.PERSONS -> selectedPerson == null && isPersonsSearchActive
+        else -> false
     }
 
     BackHandler(enabled = true) {
@@ -210,545 +311,345 @@ fun GalleryScreen(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        Scaffold(
-            topBar = {
-                TopAppBar(
-                    title = {
-                        if (isSelectMode) {
-                            Text(
-                                text = stringResource(R.string.selected_count, selectedMediaForShare.size),
-                                fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.titleLarge
-                            )
-                        } else if (activeTab == ActiveTab.GALLERY && isSearchActive) {
-                            LaunchedEffect(isSearchActive) {
-                                if (isSearchActive) {
-                                    try {
-                                        delay(100)
-                                        searchFieldFocusRequester.requestFocus()
-                                    } catch (_: Exception) {}
-                                }
-                            }
-                            TextField(
-                                value = textFieldValue,
-                                onValueChange = { newValue ->
-                                    textFieldValue = newValue
-                                    if (searchQuery != newValue.text) {
-                                        viewModel.updateSearchQueryText(newValue.text)
-                                        viewModel.fetchSearchSuggestions(newValue.text)
-                                        viewModel.showSearchSuggestions.value = true
-                                    }
-                                },
-                                placeholder = { Text(stringResource(R.string.search)) },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                                keyboardActions = KeyboardActions(onSearch = {
-                                    viewModel.executeSearch()
-                                    keyboardController?.hide()
-                                    focusManager.clearFocus()
-                                }),
-                                colors = TextFieldDefaults.colors(
-                                    focusedContainerColor = Color.Transparent,
-                                    unfocusedContainerColor = Color.Transparent,
-                                    focusedIndicatorColor = MaterialTheme.colorScheme.primary,
-                                    unfocusedIndicatorColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .focusRequester(searchFieldFocusRequester)
-                                    .focusProperties {
-                                        down = if (showSearchSuggestions) {
-                                            searchSuggestionsFocusRequester
-                                        } else {
-                                            galleryGridFirstItemFocusRequester
-                                        }
-                                    }
-                                    .onPreviewKeyEvent { event ->
-                                        if (event.type == KeyEventType.KeyDown) {
-                                            when (event.key) {
-                                                Key.DirectionDown -> {
-                                                    keyboardController?.hide()
-                                                    val target = if (showSearchSuggestions) {
-                                                        searchSuggestionsFocusRequester
-                                                    } else {
-                                                        galleryGridFirstItemFocusRequester
-                                                    }
-                                                    try {
-                                                        target.requestFocus()
-                                                        true
-                                                    } catch (_: Exception) {
-                                                        focusManager.moveFocus(FocusDirection.Down)
-                                                    }
-                                                }
-                                                Key.Enter, Key.NumPadEnter -> {
-                                                    viewModel.executeSearch()
-                                                    keyboardController?.hide()
-                                                    focusManager.clearFocus()
-                                                    true
-                                                }
-                                                else -> false
-                                            }
-                                        } else {
-                                            false
-                                        }
-                                    }
-                            )
-                        } else {
-                            val titleText = when (activeTab) {
-                                ActiveTab.GALLERY -> {
-                                    if (galleryViewMode == GalleryViewMode.DATE) {
-                                        val currentPath = pathHistory.lastOrNull() ?: ""
-                                        when {
-                                            currentPath.isEmpty() || currentPath == defaultRootPath -> stringResource(R.string.gallery)
-                                            currentPath.startsWith("year:") && !currentPath.contains("month:") -> currentPath.substringAfter("year:")
-                                            currentPath.contains("month:") -> {
-                                                val year = currentPath.substringAfter("year:").substringBefore("/")
-                                                val monthNum = currentPath.substringAfter("month:").toIntOrNull() ?: 1
-                                                "${viewModel.getMonthName(monthNum)} $year"
-                                            }
-                                            else -> stringResource(R.string.gallery)
-                                        }
-                                    } else {
-                                        val currentFolder = pathHistory.lastOrNull()?.substringAfterLast('/') ?: stringResource(R.string.root)
-                                        if (currentFolder.isEmpty()) stringResource(R.string.gallery) else currentFolder
-                                    }
-                                }
-                                ActiveTab.ALBUMS -> selectedAlbum?.name ?: stringResource(R.string.albums)
-                                ActiveTab.PERSONS -> selectedPerson?.name ?: stringResource(R.string.persons)
-                                ActiveTab.REDISCOVER -> stringResource(R.string.rediscover)
-                                ActiveTab.SETTINGS -> stringResource(R.string.settings)
-                            }
-                            Text(
-                                text = titleText,
-                                fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.titleLarge
-                            )
-                        }
-                    },
-                    navigationIcon = {
-                        if (isSelectMode) {
-                            IconButton(onClick = { viewModel.exitSelectMode() }) {
-                                Icon(
-                                    imageVector = Icons.Default.Close,
-                                    contentDescription = stringResource(R.string.exit_selection)
-                                )
-                            }
-                        } else if (activeTab == ActiveTab.GALLERY && pathHistory.size > 1) {
-                            IconButton(onClick = { viewModel.goBackFolder() }) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = stringResource(R.string.go_back)
-                                )
-                            }
-                        } else if (activeTab == ActiveTab.ALBUMS && selectedAlbum != null) {
-                            IconButton(onClick = { viewModel.selectAlbum(null) }) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = stringResource(R.string.back_to_albums)
-                                )
-                            }
-                        } else if (activeTab == ActiveTab.PERSONS && selectedPerson != null) {
-                            IconButton(onClick = { viewModel.clearSelectedPerson() }) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = stringResource(R.string.back_to_persons)
-                                )
-                            }
-                        }
-                    },
-                    actions = {
-                        if (isSelectMode) {
-                            IconButton(onClick = { viewModel.shareSelectedMedia(context) }) {
-                                Icon(
-                                    imageVector = Icons.Default.Share,
-                                    contentDescription = stringResource(R.string.share_selected)
-                                )
-                            }
-                            IconButton(onClick = { viewModel.downloadSelectedMedia(context) }) {
-                                Icon(
-                                    imageVector = Icons.Default.Download,
-                                    contentDescription = stringResource(R.string.download_selected)
-                                )
-                            }
-                        } else {
-                            if (activeTab == ActiveTab.GALLERY) {
-                                val searchDownTarget = if (showSearchSuggestions) {
-                                    searchSuggestionsFocusRequester
-                                } else {
-                                    galleryGridFirstItemFocusRequester
-                                }
-                                if (isTv && isSearchActive && searchQuery.isNotBlank()) {
-                                    IconButton(
-                                        onClick = {
-                                            viewModel.executeSearch()
-                                            keyboardController?.hide()
-                                            focusManager.clearFocus()
-                                        },
-                                        modifier = Modifier.focusProperties { down = searchDownTarget }
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Search,
-                                            contentDescription = stringResource(R.string.execute_search),
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
-                                    }
-                                }
-                                if (isSearchActive) {
-                                    if (canManageAlbums && searchQuery.isNotBlank()) {
-                                        IconButton(
-                                            onClick = {
-                                                queryToSaveAsAlbum = searchQuery
-                                                viewModel.resetSaveAlbumState()
-                                                showSaveAlbumDialog = true
-                                            },
-                                            modifier = Modifier
-                                                .testTag("save_search_as_album_button")
-                                                .focusProperties { down = searchDownTarget }
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.BookmarkAdd,
-                                                contentDescription = stringResource(R.string.save_search_as_album),
-                                                tint = MaterialTheme.colorScheme.primary
-                                            )
-                                        }
-                                    }
-                                    IconButton(
-                                        onClick = { showQueryBuilder = true },
-                                        modifier = Modifier.focusProperties { down = searchDownTarget }
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Tune,
-                                            contentDescription = stringResource(R.string.advanced_search_builder),
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
-                                    }
-                                }
-                                IconButton(
-                                    onClick = {
-                                        if (isSearchActive && searchQuery.isNotEmpty()) {
-                                            viewModel.updateSearchQueryText("")
-                                        } else {
-                                            viewModel.toggleSearchActive()
-                                        }
-                                    },
-                                    modifier = if (isSearchActive) {
-                                        Modifier.focusProperties { down = searchDownTarget }
-                                    } else {
-                                        Modifier
-                                    }
-                                ) {
-                                    Icon(
-                                        imageVector = if (isSearchActive) Icons.Default.Close else Icons.Default.Search,
-                                        contentDescription = if (isSearchActive) stringResource(R.string.close_search) else stringResource(R.string.search)
-                                    )
-                                }
-                            }
+    val isFullscreenOverlayOpen = selectedMedia != null || showAboutDialog
+    val activeTabFocusRequester = when (activeTab) {
+        ActiveTab.GALLERY -> if (isSearchActive && showSearchSuggestions) {
+            searchSuggestionsFocusRequester
+        } else {
+            galleryGridFirstItemFocusRequester
+        }
+        ActiveTab.ALBUMS -> albumsGridFirstItemFocusRequester
+        ActiveTab.PERSONS -> personsGridFirstItemFocusRequester
+        ActiveTab.REDISCOVER -> rediscoverFirstItemFocusRequester
+        ActiveTab.SETTINGS -> settingsFirstItemFocusRequester
+    }
 
-                            if (activeTab == ActiveTab.PERSONS && selectedPerson != null) {
-                                IconButton(onClick = { selectedPerson?.let { viewModel.togglePersonFavourite(it) } }) {
-                                    val isFav = selectedPerson?.isFavourite == true
-                                    Icon(
-                                        imageVector = Icons.Default.Star,
-                                        contentDescription = stringResource(R.string.toggle_favorite),
-                                        tint = if (isFav) Color(0xFFFFD700) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
-                                    )
-                                }
-                            }
+    var wasOverlayOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(isFullscreenOverlayOpen, isTv) {
+        if (wasOverlayOpen && !isFullscreenOverlayOpen && isTv) {
+            delay(80)
+            runCatching { activeTabFocusRequester.requestFocus() }
+        }
+        wasOverlayOpen = isFullscreenOverlayOpen
+    }
 
-                            val hasGeotagged = remember(mapMediaList) {
-                                mapMediaList.any { it.metadata?.gps != null }
-                            }
-                            val showMapButton = !isTv && when (activeTab) {
-                                ActiveTab.GALLERY -> hasGeotagged
-                                ActiveTab.ALBUMS -> selectedAlbum != null && hasGeotagged
-                                ActiveTab.PERSONS -> selectedPerson != null && hasGeotagged
-                                else -> false
-                            }
-                            if (showMapButton) {
-                                IconButton(onClick = { showMapDialog = true }) {
-                                    Icon(
-                                        imageVector = Icons.Default.Map,
-                                        contentDescription = stringResource(R.string.map_view)
-                                    )
-                                }
-                            }
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val useNavigationRail = isTv || maxWidth >= 600.dp
 
-                            if (activeTab == ActiveTab.GALLERY || activeTab == ActiveTab.ALBUMS || activeTab == ActiveTab.PERSONS) {
-                                var showSortDialog by remember { mutableStateOf(false) }
-                                IconButton(onClick = { showSortDialog = true }) {
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Filled.Sort,
-                                        contentDescription = stringResource(R.string.sort_options)
-                                    )
-                                }
-                                if (showSortDialog) {
-                                    SortDialog(
-                                        viewModel = viewModel,
-                                        onDismiss = { showSortDialog = false }
-                                    )
-                                }
-                            }
-
-                            var showMoreMenu by remember { mutableStateOf(false) }
-                            val menuCoroutineScope = rememberCoroutineScope()
-                            LaunchedEffect(activeTab, isSelectMode) {
-                                showMoreMenu = false
-                            }
-                            val dismissMenuAndRun: (() -> Unit) -> Unit = { action ->
-                                if (showMoreMenu) {
-                                    showMoreMenu = false
-                                    menuCoroutineScope.launch {
-                                        delay(200)
-                                        action()
-                                    }
-                                }
-                            }
-                            Box {
-                                IconButton(onClick = { showMoreMenu = true }) {
-                                    Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.more_options))
-                                }
-                                DropdownMenu(
-                                    expanded = showMoreMenu,
-                                    onDismissRequest = { showMoreMenu = false }
-                                ) {
-                                    if (activeTab == ActiveTab.GALLERY) {
-                                        val nextViewMode = if (galleryViewMode == GalleryViewMode.DATE) GalleryViewMode.FOLDER else GalleryViewMode.DATE
-                                        DropdownMenuItem(
-                                            text = { Text(if (galleryViewMode == GalleryViewMode.DATE) stringResource(R.string.view_by_folder) else stringResource(R.string.view_by_date)) },
-                                            onClick = {
-                                                dismissMenuAndRun {
-                                                    viewModel.setGalleryViewMode(nextViewMode)
-                                                }
-                                            },
-                                            leadingIcon = {
-                                                Icon(
-                                                    imageVector = if (galleryViewMode == GalleryViewMode.DATE) Icons.Default.Folder else Icons.Default.DateRange,
-                                                    contentDescription = null
-                                                )
-                                            }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text(if (isFlattened) stringResource(R.string.unflatten_directory) else stringResource(R.string.flatten_directory)) },
-                                            onClick = {
-                                                dismissMenuAndRun {
-                                                    viewModel.toggleFlattened()
-                                                }
-                                            },
-                                            leadingIcon = {
-                                                Icon(
-                                                    imageVector = if (isFlattened) Icons.Default.GridView else Icons.Default.Layers,
-                                                    contentDescription = null
-                                                )
-                                            }
-                                        )
-                                        if (isSearchActive && searchQuery.isNotBlank() && canManageAlbums) {
-                                            val querySnapshot = searchQuery
-                                            DropdownMenuItem(
-                                                text = { Text(stringResource(R.string.save_search_as_album)) },
-                                                onClick = {
-                                                    dismissMenuAndRun {
-                                                        queryToSaveAsAlbum = querySnapshot
-                                                        viewModel.resetSaveAlbumState()
-                                                        showSaveAlbumDialog = true
-                                                    }
-                                                },
-                                                leadingIcon = {
-                                                    Icon(
-                                                        imageVector = Icons.Default.BookmarkAdd,
-                                                        contentDescription = null
-                                                    )
-                                                },
-                                                modifier = Modifier.testTag("menu_save_search_as_album")
-                                            )
-                                        }
-                                    }
-                                    if (activeTab == ActiveTab.GALLERY && galleryViewMode == GalleryViewMode.FOLDER && (pathHistory.lastOrNull() ?: "").isNotEmpty()) {
-                                        val currentFolder = pathHistory.last()
-                                        val isProtected = viewModel.isFolderProtected(currentFolder)
-                                        val isDirectlyProtected = viewModel.isFolderDirectlyProtected(currentFolder)
-                                        val isInheritedProtected = isProtected && !isDirectlyProtected
-
-                                        if (isInheritedProtected) {
-                                            DropdownMenuItem(
-                                                text = { Text(stringResource(R.string.protected_inherited)) },
-                                                onClick = {
-                                                    dismissMenuAndRun {
-                                                        Toast.makeText(
-                                                            context,
-                                                            context.getString(R.string.protected_inherited_toast),
-                                                            Toast.LENGTH_LONG
-                                                        ).show()
-                                                    }
-                                                },
-                                                leadingIcon = {
-                                                    Icon(
-                                                        imageVector = Icons.Default.Lock,
-                                                        contentDescription = null,
-                                                        tint = MaterialTheme.colorScheme.primary
-                                                    )
-                                                }
-                                            )
-                                        } else {
-                                            DropdownMenuItem(
-                                                text = { Text(if (isDirectlyProtected) stringResource(R.string.unprotect_folder) else stringResource(R.string.protect_folder)) },
-                                                onClick = {
-                                                    dismissMenuAndRun {
-                                                        val activity = context.findActivity() as? FragmentActivity
-                                                        if (activity != null) {
-                                                            BiometricHelper.authenticate(
-                                                                activity = activity,
-                                                                title = context.getString(if (isDirectlyProtected) R.string.unprotect_folder else R.string.protect_folder),
-                                                                subtitle = context.getString(R.string.confirm_folder_protection_subtitle),
-                                                                onSuccess = {
-                                                                    viewModel.toggleProtectedFolder(currentFolder)
-                                                                },
-                                                                onError = { err ->
-                                                                    if (err != BiometricHelper.ERROR_CANCELED) {
-                                                                        Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
-                                                                    }
-                                                                }
-                                                            )
-                                                        } else {
-                                                            viewModel.toggleProtectedFolder(currentFolder)
-                                                        }
-                                                    }
-                                                },
-                                                leadingIcon = {
-                                                    Icon(
-                                                        imageVector = Icons.Default.Lock,
-                                                        contentDescription = null
-                                                    )
-                                                }
-                                            )
-                                        }
-                                    }
-                                    val openedAlbum = selectedAlbum
-                                    if (activeTab == ActiveTab.ALBUMS && openedAlbum != null && canManageAlbums && !openedAlbum.locked) {
-                                        DropdownMenuItem(
-                                            text = { Text(stringResource(R.string.delete_album)) },
-                                            onClick = {
-                                                dismissMenuAndRun {
-                                                    viewModel.resetDeleteAlbumState()
-                                                    albumToDelete = openedAlbum
-                                                }
-                                            },
-                                            leadingIcon = {
-                                                Icon(
-                                                    imageVector = Icons.Default.Delete,
-                                                    contentDescription = null
-                                                )
-                                            },
-                                            modifier = Modifier.testTag("menu_delete_album")
-                                        )
-                                    }
-
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(R.string.settings)) },
-                                        onClick = {
-                                            dismissMenuAndRun {
-                                                viewModel.setActiveTab(ActiveTab.SETTINGS)
-                                            }
-                                        },
-                                        leadingIcon = {
-                                            Icon(
-                                                imageVector = Icons.Default.Settings,
-                                                contentDescription = null
-                                            )
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(R.string.about)) },
-                                        onClick = {
-                                            dismissMenuAndRun {
-                                                showAboutDialog = true
-                                            }
-                                        },
-                                        leadingIcon = {
-                                            Icon(
-                                                imageVector = Icons.Default.Info,
-                                                contentDescription = null
-                                            )
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        titleContentColor = MaterialTheme.colorScheme.onSurface
-                    )
-                )
-            },
-            bottomBar = {
-                if (!isSelectMode) {
-                    NavigationBar(
-                        containerColor = MaterialTheme.colorScheme.background,
-                        tonalElevation = 0.dp
-                    ) {
-                        NavigationBarItem(
-                            selected = activeTab == ActiveTab.GALLERY,
-                            onClick = { viewModel.setActiveTab(ActiveTab.GALLERY) },
-                            icon = { Icon(Icons.Default.Image, contentDescription = stringResource(R.string.gallery)) },
-                            label = { Text(stringResource(R.string.gallery)) }
-                        )
-                        NavigationBarItem(
-                            selected = activeTab == ActiveTab.ALBUMS,
-                            onClick = { viewModel.setActiveTab(ActiveTab.ALBUMS) },
-                            icon = { Icon(Icons.Default.PhotoLibrary, contentDescription = stringResource(R.string.albums)) },
-                            label = { Text(stringResource(R.string.albums)) }
-                        )
-                        NavigationBarItem(
-                            selected = activeTab == ActiveTab.PERSONS,
-                            onClick = { viewModel.setActiveTab(ActiveTab.PERSONS) },
-                            icon = { Icon(Icons.Default.Person, contentDescription = stringResource(R.string.persons)) },
-                            label = { Text(stringResource(R.string.persons)) }
-                        )
-                        NavigationBarItem(
-                            selected = activeTab == ActiveTab.REDISCOVER,
-                            onClick = { viewModel.setActiveTab(ActiveTab.REDISCOVER) },
-                            icon = { Icon(Icons.Default.History, contentDescription = stringResource(R.string.rediscover)) },
-                            label = { Text(stringResource(R.string.rediscover)) }
-                        )
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .focusGroup()
+                .focusProperties {
+                    if (isFullscreenOverlayOpen) {
+                        enter = { FocusRequester.Cancel }
                     }
                 }
-            },
-            modifier = modifier.fillMaxSize()
-        ) { innerPadding ->
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-            ) {
-                val shareProgress by viewModel.shareProgress.collectAsState()
-
-                Column {
-                    if (shareProgress >= 0f) {
-                        LinearProgressIndicator(
-                            progress = { shareProgress },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-
-                    when (activeTab) {
-                        ActiveTab.GALLERY -> {
-                            GalleryTabContent(
-                                viewModel = viewModel,
-                                searchFieldFocusRequester = searchFieldFocusRequester,
-                                searchSuggestionsFocusRequester = searchSuggestionsFocusRequester,
-                                galleryGridFirstItemFocusRequester = galleryGridFirstItemFocusRequester,
-                                onSaveSearchAsAlbum = {
-                                    queryToSaveAsAlbum = searchQuery
-                                    viewModel.resetSaveAlbumState()
-                                    showSaveAlbumDialog = true
+                .then(
+                    if (isTv) Modifier.padding(horizontal = 16.dp, vertical = 10.dp) else Modifier
+                )
+        ) {
+            if (useNavigationRail && !effectiveIsSelectMode) {
+                NavigationRail(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    windowInsets = NavigationRailDefaults.windowInsets,
+                    modifier = Modifier
+                        .focusGroup()
+                        .onPreviewKeyEvent { event ->
+                            if (isTv && event.type == KeyEventType.KeyDown) {
+                                when (event.key) {
+                                    Key.DirectionLeft -> true
+                                    Key.DirectionRight -> {
+                                        if (activeTab == ActiveTab.SETTINGS) {
+                                            runCatching { settingsFirstItemFocusRequester.requestFocus() }.isSuccess ||
+                                                focusManager.moveFocus(FocusDirection.Right)
+                                        } else {
+                                            focusManager.moveFocus(FocusDirection.Right) ||
+                                                runCatching { activeTabFocusRequester.requestFocus() }.isSuccess
+                                        }
+                                    }
+                                    else -> false
                                 }
+                            } else {
+                                false
+                            }
+                        }
+                        .testTag("adaptive_navigation_rail")
+                ) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    NavigationRailItem(
+                        selected = activeTab == ActiveTab.GALLERY,
+                        onClick = { viewModel.setActiveTab(ActiveTab.GALLERY) },
+                        icon = {
+                            Icon(
+                                imageVector = if (activeTab == ActiveTab.GALLERY) Icons.Filled.Image else Icons.Outlined.Image,
+                                contentDescription = stringResource(R.string.gallery)
+                            )
+                        },
+                        label = { Text(stringResource(R.string.gallery)) },
+                        modifier = Modifier
+                            .focusProperties { up = FocusRequester.Cancel }
+                            .tvFocus(shape = RoundedCornerShape(16.dp))
+                            .testTag("nav_tab_gallery")
+                    )
+                    NavigationRailItem(
+                        selected = activeTab == ActiveTab.ALBUMS,
+                        onClick = { viewModel.setActiveTab(ActiveTab.ALBUMS) },
+                        icon = {
+                            Icon(
+                                imageVector = if (activeTab == ActiveTab.ALBUMS) Icons.Filled.PhotoLibrary else Icons.Outlined.PhotoLibrary,
+                                contentDescription = stringResource(R.string.albums)
+                            )
+                        },
+                        label = { Text(stringResource(R.string.albums)) },
+                        modifier = Modifier
+                            .tvFocus(shape = RoundedCornerShape(16.dp))
+                            .testTag("nav_tab_albums")
+                    )
+                    NavigationRailItem(
+                        selected = activeTab == ActiveTab.PERSONS,
+                        onClick = { viewModel.setActiveTab(ActiveTab.PERSONS) },
+                        icon = {
+                            Icon(
+                                imageVector = if (activeTab == ActiveTab.PERSONS) Icons.Filled.Person else Icons.Outlined.Person,
+                                contentDescription = stringResource(R.string.persons)
+                            )
+                        },
+                        label = { Text(stringResource(R.string.persons)) },
+                        modifier = Modifier
+                            .tvFocus(shape = RoundedCornerShape(16.dp))
+                            .testTag("nav_tab_persons")
+                    )
+                    NavigationRailItem(
+                        selected = activeTab == ActiveTab.REDISCOVER,
+                        onClick = { viewModel.setActiveTab(ActiveTab.REDISCOVER) },
+                        icon = {
+                            Icon(
+                                imageVector = if (activeTab == ActiveTab.REDISCOVER) Icons.Filled.History else Icons.Outlined.History,
+                                contentDescription = stringResource(R.string.rediscover)
+                            )
+                        },
+                        label = { Text(stringResource(R.string.rediscover)) },
+                        modifier = Modifier
+                            .focusProperties {
+                                if (!isTv) down = FocusRequester.Cancel
+                            }
+                            .tvFocus(shape = RoundedCornerShape(16.dp))
+                            .testTag("nav_tab_rediscover")
+                    )
+                    if (isTv) {
+                        Spacer(modifier = Modifier.weight(1f))
+                        NavigationRailItem(
+                            selected = activeTab == ActiveTab.SETTINGS,
+                            onClick = { viewModel.setActiveTab(ActiveTab.SETTINGS) },
+                            icon = {
+                                Icon(
+                                    imageVector = if (activeTab == ActiveTab.SETTINGS) Icons.Filled.Settings else Icons.Outlined.Settings,
+                                    contentDescription = stringResource(R.string.settings)
+                                )
+                            },
+                            label = { Text(stringResource(R.string.settings)) },
+                            modifier = Modifier
+                                .focusProperties { down = FocusRequester.Cancel }
+                                .tvFocus(shape = RoundedCornerShape(16.dp))
+                                .testTag("nav_tab_settings")
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
+                }
+                VerticalDivider(
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                )
+            }
+
+            Scaffold(
+                topBar = {
+                    UnifiedGlobalTopAppBar(
+                        viewModel = viewModel,
+                        activeTab = activeTab,
+                        isSelectMode = effectiveIsSelectMode,
+                        selectedMediaForShare = selectedMediaForShare,
+                        currentVisibleMediaList = currentVisibleMediaList,
+                        mapMediaList = mapMediaList,
+                        isTv = isTv,
+                        isTopBarSearchExpanded = isTopBarSearchExpanded,
+                        isSearchActive = isSearchActive,
+                        searchQuery = searchQuery,
+                        textFieldValue = textFieldValue,
+                        onTextFieldValueChange = { textFieldValue = it },
+                        showSearchSuggestions = showSearchSuggestions,
+                        isAlbumsSearchActive = isAlbumsSearchActive,
+                        albumsFilterQuery = albumsFilterQuery,
+                        isPersonsSearchActive = isPersonsSearchActive,
+                        personsFilterQuery = personsFilterQuery,
+                        galleryState = galleryState,
+                        albumsState = albumsState,
+                        personsState = personsState,
+                        albumContentState = albumContentState,
+                        personContentState = personContentState,
+                        rediscoverState = rediscoverState,
+                        pathHistory = pathHistory,
+                        defaultRootPath = defaultRootPath,
+                        galleryViewMode = galleryViewMode,
+                        isFlattened = isFlattened,
+                        hideProtectedItems = effectiveHideProtectedItems,
+                        selectedAlbum = selectedAlbum,
+                        selectedPerson = selectedPerson,
+                        canManageAlbums = effectiveCanManageAlbums,
+                        isSharingAvailable = effectiveIsSharingAvailable,
+                        isCreatingShare = isCreatingShare,
+                        shareDialogTarget = shareDialogTarget,
+                        searchFieldFocusRequester = searchFieldFocusRequester,
+                        searchSuggestionsFocusRequester = searchSuggestionsFocusRequester,
+                        galleryGridFirstItemFocusRequester = galleryGridFirstItemFocusRequester,
+                        albumsGridFirstItemFocusRequester = albumsGridFirstItemFocusRequester,
+                        personsGridFirstItemFocusRequester = personsGridFirstItemFocusRequester,
+                        rediscoverGridFirstItemFocusRequester = rediscoverFirstItemFocusRequester,
+                        settingsFirstItemFocusRequester = settingsFirstItemFocusRequester,
+                        onOpenQueryBuilder = { showQueryBuilder = true },
+                        onOpenMap = { if (tvCapabilities.allowMapView) showMapDialog = true },
+                        onOpenAbout = { showAboutDialog = true },
+                        onOpenSaveAlbum = { query ->
+                            if (effectiveCanManageAlbums) {
+                                queryToSaveAsAlbum = query
+                                viewModel.resetSaveAlbumState()
+                                showSaveAlbumDialog = true
+                            }
+                        },
+                        onOpenDeleteAlbum = { album ->
+                            if (effectiveCanManageAlbums) {
+                                viewModel.resetDeleteAlbumState()
+                                albumToDelete = album
+                            }
+                        },
+                        onOpenShareDialog = { target ->
+                            if (effectiveIsSharingAvailable) {
+                                viewModel.openShareDialog(target)
+                                shareDialogTarget = target
+                            }
+                        }
+                    )
+                },
+                bottomBar = {
+                    if (!useNavigationRail && !effectiveIsSelectMode) {
+                        NavigationBar(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                            tonalElevation = 0.dp,
+                            windowInsets = NavigationBarDefaults.windowInsets,
+                            modifier = Modifier.testTag("adaptive_navigation_bar")
+                        ) {
+                            NavigationBarItem(
+                                selected = activeTab == ActiveTab.GALLERY,
+                                onClick = { viewModel.setActiveTab(ActiveTab.GALLERY) },
+                                icon = {
+                                    Icon(
+                                        imageVector = if (activeTab == ActiveTab.GALLERY) Icons.Filled.Image else Icons.Outlined.Image,
+                                        contentDescription = stringResource(R.string.gallery)
+                                    )
+                                },
+                                label = { Text(stringResource(R.string.gallery)) },
+                                modifier = Modifier.testTag("nav_tab_gallery")
+                            )
+                            NavigationBarItem(
+                                selected = activeTab == ActiveTab.ALBUMS,
+                                onClick = { viewModel.setActiveTab(ActiveTab.ALBUMS) },
+                                icon = {
+                                    Icon(
+                                        imageVector = if (activeTab == ActiveTab.ALBUMS) Icons.Filled.PhotoLibrary else Icons.Outlined.PhotoLibrary,
+                                        contentDescription = stringResource(R.string.albums)
+                                    )
+                                },
+                                label = { Text(stringResource(R.string.albums)) },
+                                modifier = Modifier.testTag("nav_tab_albums")
+                            )
+                            NavigationBarItem(
+                                selected = activeTab == ActiveTab.PERSONS,
+                                onClick = { viewModel.setActiveTab(ActiveTab.PERSONS) },
+                                icon = {
+                                    Icon(
+                                        imageVector = if (activeTab == ActiveTab.PERSONS) Icons.Filled.Person else Icons.Outlined.Person,
+                                        contentDescription = stringResource(R.string.persons)
+                                    )
+                                },
+                                label = { Text(stringResource(R.string.persons)) },
+                                modifier = Modifier.testTag("nav_tab_persons")
+                            )
+                            NavigationBarItem(
+                                selected = activeTab == ActiveTab.REDISCOVER,
+                                onClick = { viewModel.setActiveTab(ActiveTab.REDISCOVER) },
+                                icon = {
+                                    Icon(
+                                        imageVector = if (activeTab == ActiveTab.REDISCOVER) Icons.Filled.History else Icons.Outlined.History,
+                                        contentDescription = stringResource(R.string.rediscover)
+                                    )
+                                },
+                                label = { Text(stringResource(R.string.rediscover)) },
+                                modifier = Modifier.testTag("nav_tab_rediscover")
                             )
                         }
-                        ActiveTab.ALBUMS -> AlbumsTabContent(viewModel = viewModel)
-                        ActiveTab.PERSONS -> PersonsTabContent(viewModel = viewModel)
-                        ActiveTab.REDISCOVER -> RediscoverTabContent(viewModel = viewModel)
-                        ActiveTab.SETTINGS -> SettingsTabContent(viewModel = viewModel)
+                    }
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+            ) { innerPadding ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                ) {
+                    val shareProgress by viewModel.shareProgress.collectAsState()
+
+                    Column {
+                        if (shareProgress >= 0f) {
+                            LinearProgressIndicator(
+                                progress = { shareProgress },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+
+                        Crossfade(
+                            targetState = activeTab,
+                            animationSpec = tween(durationMillis = 180),
+                            label = "tab_content_crossfade"
+                        ) { tab ->
+                            when (tab) {
+                                ActiveTab.GALLERY -> {
+                                    GalleryTabContent(
+                                        viewModel = viewModel,
+                                        searchFieldFocusRequester = searchFieldFocusRequester,
+                                        searchSuggestionsFocusRequester = searchSuggestionsFocusRequester,
+                                        galleryGridFirstItemFocusRequester = galleryGridFirstItemFocusRequester,
+                                        onSaveSearchAsAlbum = {
+                                            queryToSaveAsAlbum = searchQuery
+                                            viewModel.resetSaveAlbumState()
+                                            showSaveAlbumDialog = true
+                                        },
+                                        onOpenQueryBuilder = {
+                                            showQueryBuilder = true
+                                        }
+                                    )
+                                }
+                                ActiveTab.ALBUMS -> AlbumsTabContent(
+                                    viewModel = viewModel,
+                                    firstItemFocusRequester = albumsGridFirstItemFocusRequester
+                                )
+                                ActiveTab.PERSONS -> PersonsTabContent(
+                                    viewModel = viewModel,
+                                    firstItemFocusRequester = personsGridFirstItemFocusRequester
+                                )
+                                ActiveTab.REDISCOVER -> RediscoverTabContent(
+                                    viewModel = viewModel,
+                                    firstItemFocusRequester = rediscoverFirstItemFocusRequester
+                                )
+                                ActiveTab.SETTINGS -> SettingsTabContent(
+                                    viewModel = viewModel,
+                                    onOpenAbout = { showAboutDialog = true },
+                                    firstItemFocusRequester = settingsFirstItemFocusRequester
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -775,7 +676,7 @@ fun GalleryScreen(
         if (showQueryBuilder) {
             AdvancedQueryBuilderDialog(
                 viewModel = viewModel,
-                canManageAlbums = canManageAlbums,
+                canManageAlbums = effectiveCanManageAlbums,
                 onDismissRequest = { showQueryBuilder = false },
                 onSearchApplied = { query ->
                     viewModel.updateSearchQueryText(query)
@@ -783,14 +684,16 @@ fun GalleryScreen(
                     showQueryBuilder = false
                 },
                 onSaveAsAlbum = { query ->
-                    showQueryBuilder = false
-                    queryToSaveAsAlbum = query
-                    viewModel.resetSaveAlbumState()
-                    showSaveAlbumDialog = true
+                    if (effectiveCanManageAlbums) {
+                        showQueryBuilder = false
+                        queryToSaveAsAlbum = query
+                        viewModel.resetSaveAlbumState()
+                        showSaveAlbumDialog = true
+                    }
                 }
             )
         }
-        if (showSaveAlbumDialog && canManageAlbums) {
+        if (showSaveAlbumDialog && effectiveCanManageAlbums) {
             SaveSearchAsAlbumDialog(
                 searchQuery = queryToSaveAsAlbum,
                 saveAlbumState = saveAlbumState,
@@ -804,7 +707,7 @@ fun GalleryScreen(
             )
         }
         albumToDelete?.let { targetAlbum ->
-            if (canManageAlbums) {
+            if (effectiveCanManageAlbums) {
                 DeleteAlbumDialog(
                     album = targetAlbum,
                     deleteAlbumState = deleteAlbumState,
@@ -818,7 +721,31 @@ fun GalleryScreen(
                 )
             }
         }
-        if (showMapDialog && !isTv) {
+        shareDialogTarget?.let { target ->
+            if (effectiveIsSharingAvailable) {
+                ShareLinkDialog(
+                    target = target,
+                    passwordProtected = sharingPasswordProtected,
+                    shareLinkState = shareLinkState,
+                    onCreateShare = { includeSubfolders, preventDownload, validity, password ->
+                        viewModel.createShareLink(
+                            target = target,
+                            includeSubfolders = includeSubfolders,
+                            validity = validity,
+                            password = password,
+                            preventDownload = preventDownload
+                        )
+                    },
+                    onDismiss = {
+                        shareDialogTarget = null
+                        if (shareLinkState !is ShareLinkUiState.Creating) {
+                            viewModel.resetShareLinkState()
+                        }
+                    }
+                )
+            }
+        }
+        if (showMapDialog && tvCapabilities.allowMapView) {
             MapBrowserDialog(
                 mediaList = mapMediaList,
                 viewModel = viewModel,
@@ -835,12 +762,16 @@ fun GalleryScreen(
                 media = media,
                 viewModel = viewModel,
                 onDismiss = { viewModel.selectMedia(null) },
-                onOpenMap = { clickedMedia ->
-                    mapInitialMediaId = clickedMedia.id?.toString()
-                    showMapDialog = true
-                    viewModel.selectMedia(null)
+                onOpenMap = if (!tvCapabilities.allowMapView) {
+                    null
+                } else {
+                    { clickedMedia ->
+                        mapInitialMediaId = clickedMedia.id?.toString()
+                        showMapDialog = true
+                        viewModel.selectMedia(null)
+                    }
                 },
-                isMapOpen = showMapDialog
+                isMapOpen = tvCapabilities.allowMapView && showMapDialog
             )
         }
     }
@@ -853,7 +784,8 @@ fun GalleryTabContent(
     searchFieldFocusRequester: FocusRequester = remember { FocusRequester() },
     searchSuggestionsFocusRequester: FocusRequester = remember { FocusRequester() },
     galleryGridFirstItemFocusRequester: FocusRequester = remember { FocusRequester() },
-    onSaveSearchAsAlbum: () -> Unit = {}
+    onSaveSearchAsAlbum: () -> Unit = {},
+    onOpenQueryBuilder: () -> Unit = {}
 ) {
     val galleryState by viewModel.galleryState.collectAsState()
     val pathHistory by viewModel.pathHistory.collectAsState()
@@ -863,7 +795,10 @@ fun GalleryTabContent(
     val searchSuggestions by viewModel.searchSuggestions.collectAsState()
     val showSearchSuggestions by viewModel.showSearchSuggestions.collectAsState()
     val localSearchHistory by viewModel.localSearchHistory.collectAsState(initial = emptyList())
+    val tvCapabilities = rememberTvCapabilities()
     val canManageAlbums by viewModel.canManageAlbums.collectAsState()
+    val availableDateYears by viewModel.availableDateYears.collectAsState()
+    val isDateIndexLoading by viewModel.isDateIndexLoading.collectAsState()
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (isSearchActive && showSearchSuggestions) {
@@ -871,7 +806,7 @@ fun GalleryTabContent(
                 searchQuery = searchQuery,
                 searchSuggestions = searchSuggestions,
                 localSearchHistory = localSearchHistory,
-                canManageAlbums = canManageAlbums,
+                canManageAlbums = tvCapabilities.canManageAlbums(canManageAlbums),
                 firstItemFocusRequester = searchSuggestionsFocusRequester,
                 onSuggestionClick = { clickedSuggestion ->
                     viewModel.setSearchQueryFromSuggestion(clickedSuggestion)
@@ -903,7 +838,29 @@ fun GalleryTabContent(
                         onBreadcrumbClick = { index -> viewModel.navigateToBreadcrumb(index) }
                     )
 
-                    HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                    if (galleryViewMode == GalleryViewMode.DATE) {
+                        DateQuickJumpBar(
+                            currentPath = pathHistory.lastOrNull() ?: "",
+                            availableYears = availableDateYears,
+                            getMonthName = { month -> viewModel.getMonthName(month) },
+                            onJumpToDate = { year, month -> viewModel.jumpToDate(year, month) },
+                            onSearchInPeriod = { viewModel.searchInCurrentDateScope() }
+                        )
+                    }
+
+                    HorizontalDivider(
+                        thickness = 0.5.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)
+                    )
+
+                    if (galleryViewMode == GalleryViewMode.DATE && isDateIndexLoading) {
+                        LinearProgressIndicator(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(2.dp)
+                                .testTag("date_index_progress")
+                        )
+                    }
                 }
 
                 val isRefreshing by viewModel.isRefreshing.collectAsState()
@@ -919,7 +876,10 @@ fun GalleryTabContent(
                             }
                         }
                         is GalleryUiState.Error -> {
-                            ErrorStateView(message = state.message) {
+                            ErrorStateView(
+                                message = state.message,
+                                actionFocusRequester = galleryGridFirstItemFocusRequester
+                            ) {
                                 viewModel.refreshCurrentDirectory()
                             }
                         }
@@ -928,9 +888,10 @@ fun GalleryTabContent(
                             val rawSubfolders = directory.directories ?: emptyList()
                             val hideProtectedItems by viewModel.hideProtectedItems.collectAsState()
                             val protectedFolders by viewModel.protectedFolders.collectAsState()
-                            val subfolders = remember(rawSubfolders, galleryViewMode, hideProtectedItems, protectedFolders) {
+                            val effectiveHideProtected = tvCapabilities.shouldEnforceItemLocking(hideProtectedItems)
+                            val subfolders = remember(rawSubfolders, galleryViewMode, effectiveHideProtected, protectedFolders) {
                                 rawSubfolders.filter {
-                                    if (hideProtectedItems && viewModel.isFolderProtected(it.path)) {
+                                    if (effectiveHideProtected && viewModel.isFolderProtected(it.path)) {
                                         false
                                     } else if (galleryViewMode == GalleryViewMode.DATE) {
                                         (it.mediaCount ?: 0) > 0
@@ -942,28 +903,57 @@ fun GalleryTabContent(
                             val mediaList = directory.media ?: emptyList()
 
                             if (subfolders.isEmpty() && mediaList.isEmpty()) {
-                                EmptyStateView(
-                                    if (isSearchActive) stringResource(R.string.no_search_results) else stringResource(R.string.folder_empty),
-                                    if (isSearchActive) stringResource(R.string.no_search_results_subtitle) else stringResource(R.string.folder_empty_subtitle)
-                                )
+                                if (isSearchActive) {
+                                    EmptyStateView(
+                                        title = stringResource(R.string.no_search_results),
+                                        subtitle = stringResource(R.string.no_search_results_subtitle),
+                                        illustration = EmptyStateIllustration.SEARCH,
+                                        guidanceText = stringResource(R.string.empty_guidance_search),
+                                        actionLabel = stringResource(R.string.empty_action_clear_search),
+                                        onAction = { viewModel.toggleSearchActive() },
+                                        secondaryActionLabel = stringResource(R.string.empty_action_advanced_search),
+                                        onSecondaryAction = onOpenQueryBuilder,
+                                        actionFocusRequester = galleryGridFirstItemFocusRequester
+                                    )
+                                } else if (galleryViewMode == GalleryViewMode.DATE) {
+                                    EmptyStateView(
+                                        title = stringResource(R.string.empty_date_period_title),
+                                        subtitle = stringResource(R.string.empty_date_period_subtitle),
+                                        illustration = EmptyStateIllustration.MEMORIES,
+                                        guidanceText = stringResource(R.string.empty_guidance_date),
+                                        actionLabel = stringResource(R.string.refresh),
+                                        onAction = { viewModel.refreshCurrentDirectory() },
+                                        actionFocusRequester = galleryGridFirstItemFocusRequester
+                                    )
+                                } else {
+                                    EmptyStateView(
+                                        title = stringResource(R.string.folder_empty),
+                                        subtitle = stringResource(R.string.folder_empty_subtitle),
+                                        illustration = EmptyStateIllustration.MEMORIES,
+                                        guidanceText = stringResource(R.string.empty_guidance_folder),
+                                        actionLabel = stringResource(R.string.refresh),
+                                        onAction = { viewModel.refreshCurrentDirectory() },
+                                        actionFocusRequester = galleryGridFirstItemFocusRequester
+                                    )
+                                }
                             } else {
                                 val scrollKey = state.contextKey.ifEmpty { viewModel.buildGalleryContextKey() }
                                 key(scrollKey) {
-                                    val gridState = remember(scrollKey) {
-                                        val saved = viewModel.getScrollPosition(scrollKey)
-                                        LazyGridState(saved.index, saved.offset)
-                                    }
-                                    LaunchedEffect(gridState, scrollKey) {
-                                        snapshotFlow { gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset }
-                                            .collect { (index, offset) ->
-                                                viewModel.saveScrollPosition(scrollKey, index, offset)
-                                            }
-                                    }
+                                    val gridState = rememberPersistedLazyGridState(viewModel, scrollKey)
                                     GalleryContentGrid(
                                         subfolders = subfolders,
                                         mediaList = mediaList,
                                         viewModel = viewModel,
-                                        onFolderClick = { folder -> viewModel.enterFolder(folder.path) },
+                                        onFolderClick = { folder ->
+                                            if (gridState.layoutInfo.totalItemsCount > 0) {
+                                                viewModel.saveScrollPosition(
+                                                    scrollKey,
+                                                    gridState.firstVisibleItemIndex,
+                                                    gridState.firstVisibleItemScrollOffset
+                                                )
+                                            }
+                                            viewModel.enterFolder(folder.path)
+                                        },
                                         onMediaClick = { media -> viewModel.selectMedia(media, mediaList) },
                                         state = gridState,
                                         firstItemFocusRequester = galleryGridFirstItemFocusRequester
@@ -997,6 +987,8 @@ fun SearchSuggestionsOverlay(
 ) {
     val tokens = SearchQueryParser.tokenize(searchQuery)
     val hasListItems = searchSuggestions.isNotEmpty() || localSearchHistory.isNotEmpty()
+    val tvCapabilities = rememberTvCapabilities()
+    val effectiveCanManageAlbums = tvCapabilities.canManageAlbums(canManageAlbums)
     val showQuickSearchButton = searchQuery.isNotBlank()
 
     Column(
@@ -1032,7 +1024,7 @@ fun SearchSuggestionsOverlay(
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(stringResource(R.string.search))
                     }
-                    if (canManageAlbums) {
+                    if (effectiveCanManageAlbums) {
                         FilledTonalButton(
                             onClick = onSaveAsAlbum,
                             modifier = Modifier
@@ -1168,17 +1160,16 @@ fun SearchSuggestionsOverlay(
                             }
                         ) {
                             Card(
+                                onClick = { onHistoryClick(historyItem) },
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
                                     .then(focusMod)
                                     .tvFocus(shape = RoundedCornerShape(12.dp))
-                                    .clickable { onHistoryClick(historyItem) }
                                     .testTag("search_history_item_$index"),
                                 shape = RoundedCornerShape(12.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
-                                )
+                                colors = GalleryCardDefaults.sectionCardColors(),
+                                elevation = GalleryCardDefaults.sectionCardElevation(),
+                                border = GalleryCardDefaults.sectionCardBorder()
                             ) {
                                 Row(
                                     modifier = Modifier
@@ -1226,16 +1217,15 @@ fun SearchSuggestionsOverlay(
                             Modifier
                         }
                         Card(
+                            onClick = { onSuggestionClick(suggestion) },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
                                 .then(focusMod)
-                                .tvFocus(shape = RoundedCornerShape(12.dp))
-                                .clickable { onSuggestionClick(suggestion) },
+                                .tvFocus(shape = RoundedCornerShape(12.dp)),
                             shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-                            )
+                            colors = GalleryCardDefaults.sectionCardColors(),
+                            elevation = GalleryCardDefaults.sectionCardElevation(),
+                            border = GalleryCardDefaults.sectionCardBorder()
                         ) {
                             Row(
                                 modifier = Modifier

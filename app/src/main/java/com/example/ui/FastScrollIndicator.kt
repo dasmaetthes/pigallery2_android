@@ -3,6 +3,8 @@ package com.example.ui
 import androidx.compose.animation.*
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitVerticalTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.verticalDrag
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -16,9 +18,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
@@ -27,7 +32,9 @@ import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.ApiMedia
 import com.example.data.ApiSubFolder
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlin.math.roundToInt
 
 @Composable
@@ -40,10 +47,12 @@ fun FastScrollIndicator(
     hasHeaders: Boolean = true,
     mediaList: List<ApiMedia> = emptyList()
 ) {
+    val isTv = com.example.util.rememberIsAndroidTv()
+    if (isTv) return
+
     val context = LocalContext.current
     val unknownLabel = stringResource(R.string.unknown)
     val foldersLabel = stringResource(R.string.folders_label)
-    val coroutineScope = rememberCoroutineScope()
     val density = LocalDensity.current
 
     // Calculate total grid items count (subfolders + headers + media items)
@@ -62,25 +71,49 @@ fun FastScrollIndicator(
     if (totalGridItemsCount <= 0) return
 
     val totalItems = totalGridItemsCount.coerceAtLeast(1)
-    val hasScrollableOverflow by remember(totalItems) {
+    var isDragging by remember { mutableStateOf(false) }
+
+    // Only activate fast-scroll on lists with substantial scroll overflow (>= 2 full viewports)
+    // so short/medium album lists never spawn an edge handle that could interfere with normal scrolling.
+    val hasSubstantialOverflow by remember(state, totalItems) {
         derivedStateOf {
+            val layoutTotal = state.layoutInfo.totalItemsCount.takeIf { it > 0 } ?: totalItems
             val visibleItems = state.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
-            totalItems > visibleItems
+            isDragging || (layoutTotal > visibleItems * 2 && (state.canScrollForward || state.canScrollBackward))
         }
     }
-    val computedScrollFraction by remember(totalItems) {
+
+    val maxScrollableFirstIndex by remember(state, totalItems) {
         derivedStateOf {
+            val layoutTotal = state.layoutInfo.totalItemsCount.takeIf { it > 0 } ?: totalItems
             val visibleItems = state.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
-            val firstVisibleIndex = state.firstVisibleItemIndex
-            if (totalItems <= visibleItems) 0f else {
-                (firstVisibleIndex.toFloat() / (totalItems - visibleItems).coerceAtLeast(1).toFloat()).coerceIn(0f, 1f)
+            (layoutTotal - visibleItems).coerceAtLeast(1)
+        }
+    }
+
+    val computedScrollFraction by remember(state, totalItems) {
+        derivedStateOf {
+            when {
+                !state.canScrollBackward -> 0f
+                !state.canScrollForward -> 1f
+                else -> (state.firstVisibleItemIndex.toFloat() / maxScrollableFirstIndex.toFloat()).coerceIn(0f, 1f)
             }
         }
     }
 
-    var isDragging by remember { mutableStateOf(false) }
     var dragFraction by remember { mutableStateOf<Float?>(null) }
-    var trackHeightPx by remember { mutableFloatStateOf(1f) }
+    var trackHeightPx by remember { mutableFloatStateOf(0f) }
+    var trackTopInRoot by remember { mutableFloatStateOf(0f) }
+    var thumbCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+
+    // Serialize fast-scroll jumps via a CONFLATED channel + collectLatest so rapid upward
+    // drags always execute the latest target (including repeated 0,0) and never race backward.
+    val dragTargetChannel = remember(state) { Channel<Int>(Channel.CONFLATED) }
+    LaunchedEffect(state, dragTargetChannel) {
+        dragTargetChannel.receiveAsFlow().collectLatest { target ->
+            state.scrollToItem(index = target, scrollOffset = 0)
+        }
+    }
 
     val activeFraction = if (isDragging) (dragFraction ?: computedScrollFraction) else computedScrollFraction
 
@@ -122,83 +155,61 @@ fun FastScrollIndicator(
             } else {
                 val mediaIndex = activeIndex - subfoldersCount
                 val media = mediaList.getOrNull(mediaIndex)
-                if (media != null) {
-                    media.name
-                } else ""
+                media?.name ?: ""
             }
         }
     }
 
-    // Auto-hide visibility
+    // Auto-hide visibility promptly once scrolling settles
     var isVisible by remember { mutableStateOf(false) }
     LaunchedEffect(state.isScrollInProgress, isDragging) {
         if (state.isScrollInProgress || isDragging) {
             isVisible = true
         } else {
-            kotlinx.coroutines.delay(1500)
+            kotlinx.coroutines.delay(900)
             isVisible = false
         }
     }
 
     val thumbHeightDp = 48.dp
-    val thumbHeightPx = with(density) { thumbHeightDp.toPx() }
-    val maxThumbOffsetPx = (trackHeightPx - thumbHeightPx).coerceAtLeast(0f)
+    val thumbTouchHeightDp = 56.dp
+    val thumbTouchHeightPx = with(density) { thumbTouchHeightDp.toPx() }
+    val maxThumbOffsetPx = (trackHeightPx - thumbTouchHeightPx).coerceAtLeast(0f)
     val currentThumbOffsetY = activeFraction * maxThumbOffsetPx
 
-    fun updateDragPosition(touchY: Float) {
-        val thumbHalf = thumbHeightPx / 2f
-        val maxOffset = (trackHeightPx - thumbHeightPx).coerceAtLeast(1f)
-        val fraction = ((touchY - thumbHalf) / maxOffset).coerceIn(0f, 1f)
-        dragFraction = fraction
-        val targetItem = (fraction * (totalItems - 1)).roundToInt().coerceIn(0, totalItems - 1)
-        coroutineScope.launch {
-            state.scrollToItem(targetItem)
-        }
-    }
+    // Keep always-fresh references inside pointerInput without restarting mid-drag
+    val latestMaxThumbOffsetPx = rememberUpdatedState(maxThumbOffsetPx)
+    val latestTrackTopInRoot = rememberUpdatedState(trackTopInRoot)
+    val latestMaxScrollableFirstIndex = rememberUpdatedState(maxScrollableFirstIndex)
+    val latestTotalItems = rememberUpdatedState(
+        state.layoutInfo.totalItemsCount.takeIf { it > 0 } ?: totalItems
+    )
 
-    AnimatedVisibility(
-        visible = isVisible && hasScrollableOverflow,
-        enter = fadeIn() + slideInHorizontally(initialOffsetX = { it }),
-        exit = fadeOut() + slideOutHorizontally(targetOffsetX = { it }),
+    // Always-mounted non-intercepting track container so track bounds are accurate before fade-in.
+    // Normal touch scrolling anywhere outside the edge-docked thumb passes straight to LazyVerticalGrid.
+    Box(
         modifier = modifier
+            .fillMaxHeight()
+            .wrapContentWidth(Alignment.End)
+            .onGloballyPositioned { coordinates ->
+                if (coordinates.size.height > 0) {
+                    trackHeightPx = coordinates.size.height.toFloat()
+                    trackTopInRoot = coordinates.positionInRoot().y
+                }
+            }
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxHeight()
-                .wrapContentWidth(Alignment.End)
-                .onGloballyPositioned { coordinates ->
-                    if (coordinates.size.height > 0) {
-                        trackHeightPx = coordinates.size.height.toFloat()
-                    }
-                }
-                .pointerInput(Unit) {
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        down.consume()
-                        isDragging = true
-                        updateDragPosition(down.position.y)
-
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val pointerChange = event.changes.firstOrNull { it.id == down.id } ?: break
-                            if (!pointerChange.pressed) break
-                            pointerChange.consume()
-                            updateDragPosition(pointerChange.position.y)
-                        }
-
-                        isDragging = false
-                        dragFraction = null
-                    }
-                }
+        AnimatedVisibility(
+            visible = isVisible && hasSubstantialOverflow && trackHeightPx > 0f,
+            enter = fadeIn() + slideInHorizontally(initialOffsetX = { it }),
+            exit = fadeOut() + slideOutHorizontally(targetOffsetX = { it }),
+            modifier = Modifier.align(Alignment.TopEnd)
         ) {
-            // Popup Date/Section Bubble & Thumb Handle
+            // Popup Date/Section Bubble & Edge-Docked Draggable Thumb Handle
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.End,
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
                     .offset { IntOffset(0, currentThumbOffsetY.roundToInt()) }
-                    .padding(end = 6.dp)
             ) {
                 // Floating Date/Section Bubble (only shown when actively dragging handle)
                 if (isDragging && currentDateLabel.isNotEmpty()) {
@@ -220,27 +231,83 @@ fun FastScrollIndicator(
                     }
                 }
 
-                // Draggable Thumb Handle
-                Surface(
-                    shape = RoundedCornerShape(20.dp),
-                    color = if (isDragging) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
-                    contentColor = if (isDragging) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer,
-                    shadowElevation = if (isDragging) 8.dp else 4.dp,
+                // Compact edge-docked drag handle flush against the right screen edge so normal
+                // right-thumb scrolling across the rightmost grid column never hits the scrollbar.
+                Box(
+                    contentAlignment = Alignment.CenterEnd,
                     modifier = Modifier
                         .width(32.dp)
-                        .height(thumbHeightDp)
+                        .height(thumbTouchHeightDp)
+                        .testTag("fast_scroll_thumb")
+                        .onGloballyPositioned { coords ->
+                            thumbCoords = coords
+                        }
+                        .pointerInput(state) {
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                // Capture grab offset BEFORE touchSlop so upward drags have zero downward bias
+                                val grabOffsetInThumbPx = down.position.y
+                                val slopChange = awaitVerticalTouchSlopOrCancellation(down.id) { change, _ ->
+                                    change.consume()
+                                } ?: return@awaitEachGesture
+
+                                isDragging = true
+                                try {
+                                    fun updateDragPosition(localY: Float) {
+                                        val coords = thumbCoords ?: return
+                                        if (!coords.isAttached) return
+                                        val maxOffset = latestMaxThumbOffsetPx.value
+                                        if (maxOffset <= 0f) return
+
+                                        val fingerRootY = coords.localToRoot(
+                                            androidx.compose.ui.geometry.Offset(0f, localY)
+                                        ).y
+                                        val targetThumbTopPx = (fingerRootY - latestTrackTopInRoot.value - grabOffsetInThumbPx)
+                                            .coerceIn(0f, maxOffset)
+                                        val fraction = (targetThumbTopPx / maxOffset).coerceIn(0f, 1f)
+                                        dragFraction = fraction
+
+                                        val maxIndex = latestMaxScrollableFirstIndex.value
+                                        val lastIndex = (latestTotalItems.value - 1).coerceAtLeast(0)
+                                        val targetItem = when {
+                                            fraction <= 0.03f -> 0
+                                            fraction >= 0.97f -> lastIndex
+                                            else -> (fraction * maxIndex).roundToInt().coerceIn(0, maxIndex)
+                                        }
+                                        dragTargetChannel.trySend(targetItem)
+                                    }
+
+                                    updateDragPosition(slopChange.position.y)
+                                    verticalDrag(slopChange.id) { change ->
+                                        change.consume()
+                                        updateDragPosition(change.position.y)
+                                    }
+                                } finally {
+                                    isDragging = false
+                                    dragFraction = null
+                                }
+                            }
+                        }
                 ) {
-                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                        Icon(
-                            imageVector = Icons.Default.UnfoldMore,
-                            contentDescription = stringResource(R.string.fast_scroll_thumb),
-                            modifier = Modifier.size(18.dp)
-                        )
+                    Surface(
+                        shape = RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp),
+                        color = if (isDragging) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = if (isDragging) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer,
+                        shadowElevation = if (isDragging) 8.dp else 4.dp,
+                        modifier = Modifier
+                            .width(if (isDragging) 32.dp else 26.dp)
+                            .height(thumbHeightDp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                            Icon(
+                                imageVector = Icons.Default.UnfoldMore,
+                                contentDescription = stringResource(R.string.fast_scroll_thumb),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
                 }
             }
         }
     }
 }
-
-
